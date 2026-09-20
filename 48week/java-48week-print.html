@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Java 48 周进阶打卡表 · 打印版 A4</title>
+<style>
+:root{
+  --ink:#111110; --ink2:#4E4E4B; --ink3:#8A8983;
+  --line:#D5D4CF; --line2:#E9E8E4; --soft:#F6F6F3;
+  --s1:#2A6099; --s1b:#EDF3FA;
+  --s2:#0F6E56; --s2b:#EAF5F0;
+  --s3:#9C6410; --s3b:#FBF3E6;
+  --s4:#4C43A8; --s4b:#F0EFFB;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:#E8E8E5;color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  font-size:9pt;line-height:1.5;-webkit-font-smoothing:antialiased;padding:20px 0 40px;
+}
+
+/* ============ 打印控制 ============ */
+@page{ size:A4; margin:12mm; }
+@media print{
+  body{background:#fff;padding:0;font-size:8.6pt}
+  .page{
+    width:auto;min-height:0;padding:0;margin:0;box-shadow:none;border-radius:0;
+    page-break-after:always;break-after:page;
+  }
+  .page:last-of-type{page-break-after:auto;break-after:auto}
+  .no-print{display:none !important}
+  .write{break-inside:avoid}
+  .blk{break-inside:avoid}
+  .hd{break-after:avoid}
+  table{break-inside:auto}
+  tr{break-inside:avoid}
+}
+
+.page{
+  width:210mm;min-height:297mm;padding:12mm;margin:0 auto 18px;
+  background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.13);border-radius:3px;
+  display:flex;flex-direction:column;
+}
+
+/* ============ 通用 ============ */
+.hd{border-bottom:0.6mm solid var(--ink);padding-bottom:2.5mm;margin-bottom:4mm}
+.hd .eyebrow{font-size:7pt;letter-spacing:.14em;color:var(--ink3);margin-bottom:1.5mm}
+.hd h1{font-size:17pt;font-weight:700;letter-spacing:-.01em;line-height:1.2}
+.hd .sub{font-size:8.4pt;color:var(--ink2);margin-top:1.8mm;max-width:165mm;line-height:1.6}
+
+h2{font-size:10.5pt;font-weight:700;margin-bottom:2.2mm;display:flex;align-items:center;gap:2mm}
+h2::before{content:"";width:2.4mm;height:2.4mm;background:var(--ink);flex-shrink:0}
+h2 .tag{font-size:7pt;font-weight:400;color:var(--ink3);letter-spacing:0}
+.blk{margin-bottom:5mm}
+.blk:last-child{margin-bottom:0}
+.note{font-size:7.4pt;color:var(--ink3);line-height:1.55;margin-bottom:2mm}
+
+table{width:100%;border-collapse:collapse;table-layout:fixed}
+th{background:var(--soft);font-size:7.2pt;font-weight:600;color:var(--ink2);text-align:left;padding:1.4mm 2mm;border:0.28mm solid var(--line)}
+td{padding:1.4mm 2mm;border:0.28mm solid var(--line);font-size:8.4pt;vertical-align:top;line-height:1.42}
+tr.alt td{background:#FAFAF8}
+
+.pill{display:inline-block;font-size:6.8pt;font-weight:600;padding:0.3mm 1.6mm;border-radius:0.8mm;line-height:1.5;white-space:nowrap}
+.p1{background:var(--s1b);color:var(--s1)}
+.p2{background:var(--s2b);color:var(--s2)}
+.p3{background:var(--s3b);color:var(--s3)}
+.p4{background:var(--s4b);color:var(--s4)}
+
+.cb{display:inline-block;width:3.5mm;height:3.5mm;border:0.32mm solid #A3A29C;border-radius:0.7mm;vertical-align:middle;background:#fff}
+.center{text-align:center}
+
+/* ============ 打卡表 ============ */
+.ct td{padding:1.1mm 2mm}
+.ct .w{font-weight:700;font-size:8.6pt}
+.ct .ttl{font-weight:600;font-size:8.5pt}
+.ct .pt{font-size:6.9pt;color:var(--ink3);line-height:1.4;margin-top:0.3mm}
+.ct .day{text-align:center;padding:1.1mm 0.5mm}
+.ct tbody tr{height:9.2mm}
+.ct.tight tbody tr{height:8.1mm}
+.ct.tight .ttl{font-size:8.2pt}
+.ct.tight .pt{font-size:6.6pt;line-height:1.3}
+.ct.tight td{padding:0.9mm 2mm}
+
+/* ============ 书写区 ============ */
+.write{border:0.3mm solid var(--line);border-radius:1.2mm;padding:2.5mm 3mm;background:#FCFCFB;margin-top:3mm}
+.write .lbl{font-size:7.2pt;font-weight:600;color:var(--ink2);margin-bottom:1.2mm}
+.write .lbl span{font-weight:400;color:var(--ink3)}
+.rl{border-bottom:0.22mm dotted #C5C4BF;height:6.2mm}
+.rl:last-child{border-bottom:none}
+
+.verdict{display:flex;gap:3mm;margin-top:3mm}
+.vbox{flex:1;border:0.3mm solid var(--line);border-radius:1.2mm;padding:2.2mm 2.6mm;background:var(--soft)}
+.vbox .k{font-size:6.8pt;color:var(--ink3);margin-bottom:0.8mm;letter-spacing:.03em}
+.vbox .v{font-size:8.6pt;font-weight:600}
+
+.fillbtn{
+  position:fixed;right:20px;bottom:20px;z-index:99;
+  background:#111110;color:#fff;border:none;border-radius:8px;
+  padding:11px 20px;font-size:13px;font-family:inherit;cursor:pointer;
+  box-shadow:0 2px 10px rgba(0,0,0,.22)
+}
+.fillbtn:hover{background:#2E2E2B}
+
+.pgfoot{margin-top:auto;padding-top:3mm;border-top:0.25mm solid var(--line2);display:flex;justify-content:space-between;font-size:6.8pt;color:var(--ink3)}
+</style>
+</head>
+<body>
+
+<!-- ==================== 第 1 页：总览 ==================== -->
+<div class="page">
+  <div class="hd">
+    <div class="eyebrow">JAVA BACKEND · 48 WEEKS · 1 HOUR A DAY</div>
+    <h1>Java 48 周进阶打卡表</h1>
+    <div class="sub">目标不是把技术名词背成一串火车，而是：能独立做模块 → 能解释原理 → 能解决复杂问题 → 能做技术方案 → 能通过中高级 Java 面试。素材直接从工作里的 <b>@Transactional</b>、<b>@Async</b>、MyBatis、慢 SQL 取，不从 Hello World 重来。</div>
+  </div>
+
+  <div class="blk">
+    <h2>每天 1 小时固定节奏 <span class="tag">不用每天纠结看什么</span></h2>
+    <table>
+      <colgroup><col style="width:18mm"><col style="width:50mm"><col style="width:118mm"></colgroup>
+      <thead><tr><th>星期</th><th>三段分配</th><th>做什么</th></tr></thead>
+      <tbody>
+        <tr><td class="center"><b>周一</b></td><td>复习 10 · 学新 35 · 总结 15</td><td>理论输入 + 当天关掉资料自己写一遍</td></tr>
+        <tr class="alt"><td class="center"><b>周二</b></td><td>复习 10 · 写代码 40 · 记录 10</td><td>纯动手，记录踩坑</td></tr>
+        <tr><td class="center"><b>周三</b></td><td>复习 10 · 源码原理 35 · 画图 15</td><td>看源码，画调用链路图</td></tr>
+        <tr class="alt"><td class="center"><b>周四</b></td><td>复习 10 · 做项目 45 · 记录 5</td><td>把本周知识塞进自己的项目</td></tr>
+        <tr><td class="center"><b>周五</b></td><td>复习 15 · 面试题 30 · 口述 15</td><td>口头讲出来，不背答案</td></tr>
+        <tr class="alt"><td class="center"><b>周六</b></td><td>连续做项目 60</td><td>不看视频，只写代码</td></tr>
+        <tr><td class="center"><b>周日</b></td><td>回顾 20 · 重做错题 20 · 整理卡片 20</td><td>全部交给输出</td></tr>
+      </tbody>
+    </table>
+    <div class="note" style="margin-top:2mm">一周合计 420 分钟：输入约 215 分钟、动手 145 分钟、输出沉淀约 60 分钟。<b>输出那段最容易被砍，也最不能砍。</b></div>
+  </div>
+
+  <div class="blk">
+    <h2>四个阶段与薪资节点</h2>
+    <table>
+      <colgroup><col style="width:16mm"><col style="width:20mm"><col style="width:52mm"><col style="width:16mm"><col style="width:82mm"></colgroup>
+      <thead><tr><th>阶段</th><th>周次</th><th>核心主题</th><th>目标</th><th>这一阶段结束时必须具备</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="pill p1">① 打基础</span></td><td>1–12 周</td>
+          <td>Java · Spring · MySQL · Redis</td><td><b>15K</b></td>
+          <td>能解释 HashMap 扩容、代理与事务拦截链路；能读懂 EXPLAIN 并动手建索引验证</td>
+        </tr>
+        <tr class="alt">
+          <td><span class="pill p2">② 进阶</span></td><td>13–24 周</td>
+          <td>JVM · MQ · 并发 · Linux · Docker</td><td><b>20K</b></td>
+          <td>能自己登服务器用 jstack/jstat 定位 CPU 与内存问题；能把整套系统 Docker 化跑起来</td>
+        </tr>
+        <tr>
+          <td><span class="pill p3">③ 设计</span></td><td>25–40 周</td>
+          <td>微服务 · 高并发 · 性能优化 · 系统设计</td><td><b>25K</b></td>
+          <td>能针对 1000 万数据量做查询/分页/导出方案；能画完整架构图并解释每层为何存在</td>
+        </tr>
+        <tr class="alt">
+          <td><span class="pill p4">④ 冲刺</span></td><td>41–48 周</td>
+          <td>项目包装 · 面试 · 查漏补缺</td><td><b>Offer</b></td>
+          <td>5 个能讲透的项目难题、完整技术文档、简历、模拟面试全部到位</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="blk">
+    <h2>四条执行铁律</h2>
+    <table>
+      <colgroup><col style="width:8mm"><col style="width:52mm"><col style="width:126mm"></colgroup>
+      <thead><tr><th>#</th><th>规则</th><th>具体怎么做</th></tr></thead>
+      <tbody>
+        <tr><td class="center">1</td><td><b>输入必留 15 分钟输出</b></td><td>学完 Spring 事务，关掉资料自己写：事务是什么 / Spring 怎么实现 / @Transactional 为什么失效 / REQUIRES_NEW 做什么 / this.xxx() 为什么失效。能自己答出来才算学会。</td></tr>
+        <tr class="alt"><td class="center">2</td><td><b>Bug 修完别关 IDE</b></td><td>修完 @Async 事务失效，再花 20–30 分钟问：为什么 / 底层原理 / 还有哪些情况会失效 / 面试怎么问 / 能不能写 Demo 复现。</td></tr>
+        <tr><td class="center">3</td><td><b>项目从第 8 周开始长</b></td><td>异步任务管理平台：创建 / 执行 / 进度 / 失败 / 重试 / 取消 / 日志 / 恢复。后 40 周持续往里加 Redis、MQ、Docker、微服务。</td></tr>
+        <tr class="alt"><td class="center">4</td><td><b>追求 300 天后还在学</b></td><td>不追求每天学很多。哪怕当天只搞懂「为什么 this.xxx() 会导致事务失效」，这一天也成立。持续性压倒强度。</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="pgfoot"><span>Java 48 周进阶打卡表</span><span>第 1 / 6 页 · 总览</span></div>
+</div>
+
+<!-- ==================== 第 2 页：能力矩阵与月度产出 ==================== -->
+<div class="page">
+  <div class="hd">
+    <div class="eyebrow">SELF-ASSESSMENT</div>
+    <h1>能力水位与月度产出</h1>
+    <div class="sub">这是整份计划里最该拿出来对照的数据。每到一个节点，给自己打一次分，低于目标就补，不要指望时间会自动填平差距。</div>
+  </div>
+
+  <div class="blk">
+    <h2>能力成长矩阵 <span class="tag">满分 5 · 每阶段结束自评</span></h2>
+    <table>
+      <colgroup><col style="width:44mm"><col style="width:26mm"><col style="width:26mm"><col style="width:26mm"><col style="width:26mm"><col style="width:38mm"></colgroup>
+      <thead><tr><th>能力项</th><th class="center">第 12 周</th><th class="center">第 24 周</th><th class="center">第 40 周</th><th class="center">第 48 周</th><th>自评 / 实际</th></tr></thead>
+      <tbody>
+        <tr><td>Java 基础</td><td class="center">4</td><td class="center">4</td><td class="center">5</td><td class="center">5</td><td></td></tr>
+        <tr class="alt"><td>Spring</td><td class="center">4</td><td class="center">4</td><td class="center">5</td><td class="center">5</td><td></td></tr>
+        <tr><td>MyBatis</td><td class="center">4</td><td class="center">4</td><td class="center">4</td><td class="center">5</td><td></td></tr>
+        <tr class="alt"><td>MySQL</td><td class="center">4</td><td class="center">4</td><td class="center">5</td><td class="center">5</td><td></td></tr>
+        <tr><td>Redis</td><td class="center">3</td><td class="center">4</td><td class="center">5</td><td class="center">5</td><td></td></tr>
+        <tr class="alt"><td>Java 并发</td><td class="center">3</td><td class="center">4</td><td class="center">5</td><td class="center">5</td><td></td></tr>
+        <tr><td>JVM</td><td class="center">1</td><td class="center">3</td><td class="center">4</td><td class="center">4</td><td></td></tr>
+        <tr class="alt"><td>MQ</td><td class="center">1</td><td class="center">3</td><td class="center">4</td><td class="center">4</td><td></td></tr>
+        <tr><td>Linux / Docker</td><td class="center">1</td><td class="center">3</td><td class="center">4</td><td class="center">4</td><td></td></tr>
+        <tr class="alt"><td>微服务</td><td class="center">1</td><td class="center">1</td><td class="center">4</td><td class="center">4</td><td></td></tr>
+        <tr><td>高并发</td><td class="center">1</td><td class="center">1</td><td class="center">4</td><td class="center">4</td><td></td></tr>
+        <tr class="alt"><td>系统设计</td><td class="center">1</td><td class="center">1</td><td class="center">3</td><td class="center">5</td><td></td></tr>
+      </tbody>
+    </table>
+    <div class="note" style="margin-top:2mm"><b>提醒：</b>第 12 周有 5 项还在 1 分（JVM / MQ / Linux / 微服务 / 高并发），这是正常的。但意味着<b>第一次正式跳槽的窗口在第 24 周，不是第 12 周</b>。<br>第 12 周适合用内推或平级跳的方式试水，不要拿这份简历去冲高级岗。</div>
+  </div>
+
+  <div class="blk">
+    <h2>每月必须交出的东西 <span class="tag">「今天学了一小时」不算成果</span></h2>
+    <table>
+      <colgroup><col style="width:22mm"><col style="width:96mm"><col style="width:68mm"></colgroup>
+      <thead><tr><th>月份</th><th>必须产出的东西</th><th>完成日期</th></tr></thead>
+      <tbody>
+        <tr><td><b>第 1 个月</b></td><td>Java 基础梳理 + 10 道自己的代码练习</td><td></td></tr>
+        <tr class="alt"><td><b>第 2 个月</b></td><td>Spring 事务 / AOP Demo（可运行，含失效场景复现）</td><td></td></tr>
+        <tr><td><b>第 3 个月</b></td><td>MySQL 索引实验 + 10 条 EXPLAIN 前后对比案例</td><td></td></tr>
+        <tr class="alt"><td><b>第 4 个月</b></td><td>Redis 缓存 Demo（含穿透/击穿/雪崩处理）</td><td></td></tr>
+        <tr><td><b>第 5 个月</b></td><td>JVM 排查实验（CPU 高 / 内存高各一次完整记录）</td><td></td></tr>
+        <tr class="alt"><td><b>第 6 个月</b></td><td>RabbitMQ 版任务系统（含重试与死信）</td><td></td></tr>
+        <tr><td><b>第 7–9 个月</b></td><td>微服务版任务系统（含网关、限流、熔断）</td><td></td></tr>
+        <tr class="alt"><td><b>第 10–12 个月</b></td><td>完整项目 + 技术文档 + 面试题库 + 简历</td><td></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="blk">
+    <h2>每月复盘</h2>
+    <div class="write">
+      <div class="lbl">本月最大的 3 个收获 <span>（写具体知识点，不要写「学习了 XX 一周」）</span></div>
+      <div class="rl"></div><div class="rl"></div><div class="rl"></div>
+    </div>
+    <div class="write">
+      <div class="lbl">本月最没搞懂的 3 个点 <span>（下月第一周优先补）</span></div>
+      <div class="rl"></div><div class="rl"></div><div class="rl"></div>
+    </div>
+    <div class="write">
+      <div class="lbl">本月投入统计</div>
+      <div class="verdict" style="margin-top:0">
+        <div class="vbox"><div class="k">实际学习天数</div><div class="v">____ / 30 天</div></div>
+        <div class="vbox"><div class="k">本月产出物</div><div class="v">____________</div></div>
+        <div class="vbox"><div class="k">状态自评</div><div class="v">很好 / 一般 / 掉队</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pgfoot"><span>Java 48 周进阶打卡表</span><span>第 2 / 6 页 · 能力与产出</span></div>
+</div>
+
+<!-- ==================== 阶段打卡表（JS 生成） ==================== -->
+<div class="page" id="pageS1"></div>
+<div class="page" id="pageS2"></div>
+<div class="page" id="pageS3"></div>
+<div class="page" id="pageS4"></div>
+
+<button class="fillbtn no-print" onclick="window.print()">打印 / 另存为 PDF</button>
+
+<script>
+var STAGES=[
+ {n:1,cls:"p1",name:"第一阶段 · 打基础",range:"第 1 – 12 周",target:"15K",page:"pageS1",
+  goal:"Java / Spring / MySQL / Redis 四件套打透。重点周：W7 事务、W8 异步——这两周直接对应你工作里踩过的 @Transactional 与 @Async 失效问题。",
+  sum:"本阶段产出的 Demo",wk:"1-12",
+  weeks:[
+   ["Java 集合","ArrayList / LinkedList · HashMap 源码与扩容 · 手写简易 HashMap"],
+   ["泛型 · 异常 · Stream","泛型 · 异常 · Optional · Lambda · Stream · 过滤/排序/分组/统计"],
+   ["Java 并发基础","Thread · Runnable · synchronized · volatile · Lock · 为什么有线程安全问题"],
+   ["线程池与 CompletableFuture","Executor · ThreadPoolExecutor 参数 · 异步结果返回小程序"],
+   ["Spring IOC / DI","Bean · IOC · DI · Bean 生命周期 · Bean 作用域"],
+   ["Spring AOP ★","JDK 动态代理 · CGLIB · 切面 · 代理对象 · this.xxx() 为什么失效"],
+   ["Spring 事务 ★★","@Transactional · 事务传播 · 隔离 · rollbackFor · REQUIRED / REQUIRES_NEW"],
+   ["Spring 异步 ★★","@Async · 线程池 · 代理 · 异步事务 · 事务边界 · 为何不跨线程继承"],
+   ["MySQL 索引","B+Tree · 聚簇索引 · 二级索引 · 联合索引 · 最左匹配 · 覆盖索引 · 回表"],
+   ["EXPLAIN","type · key · rows · possible_keys · Extra · 自己造慢 SQL 并对比建索引前后"],
+   ["MySQL 事务与锁","ACID · 隔离级别 · MVCC · 脏读/不可重复读/幻读 · 行锁 · 间隙锁"],
+   ["Redis 基础","String/Hash/List/Set/ZSet · TTL · 缓存 · 穿透 / 击穿 / 雪崩"]
+  ]},
+ {n:2,cls:"p2",name:"第二阶段 · 进阶提升",range:"第 13 – 24 周",target:"20K",page:"pageS2",
+  goal:"补上线上能力。重点周：W15 JVM 排查、W24 全链路 Docker 部署——这两周会第一次让你经历「代码 → 构建 → 部署 → 日志 → 排错」的完整链路。",
+  sum:"本阶段产出的 Demo",wk:"13-24",
+  weeks:[
+   ["JVM 内存","堆 · 栈 · 方法区 · 对象 · 类加载"],
+   ["GC","Young GC / Old GC / Full GC · G1 · 为什么 GC 会导致系统卡顿"],
+   ["JVM 排查 ★","jps · jstack · jmap · jstat · CPU 高 / 内存高 / 线程异常怎么定位"],
+   ["Redis 进阶","RDB · AOF · 过期策略 · 淘汰策略"],
+   ["Redis 分布式锁","SET NX · 过期时间 · Lua · Redisson · 普通 Redis 锁为什么可能出问题"],
+   ["RabbitMQ 基础","Producer · Consumer · Exchange · Queue · RoutingKey · ACK"],
+   ["消息可靠性","消息丢失 · 重复消费 · 消费失败 · 重试 · 死信队列"],
+   ["幂等","支付 / 下单 / 任务执行 / MQ 消费 都可能重复，怎么保证一次"],
+   ["Java 线程池深入","核心线程数 · 最大线程数 · 队列 · 拒绝策略 · 线程工厂 · 1000 个任务突袭"],
+   ["Linux","top · ps · free · df · du · grep · find · tail · kill · ss · curl"],
+   ["Docker","image · container · Dockerfile · volume · network · compose"],
+   ["项目部署 ★★","Spring Boot + MySQL + Redis + RabbitMQ 全部放进 Docker 跑起来"]
+  ]},
+ {n:3,cls:"p3",name:"第三阶段 · 系统设计",range:"第 25 – 40 周",target:"25K",page:"pageS3",
+  goal:"从「会用技术」变成「会设计系统」。这一阶段结束时，你应该能拿一张纸画出完整架构并解释每一层为什么存在。",
+  sum:"本阶段沉淀的优化案例",wk:"25-40",
+  weeks:[
+   ["微服务思想","单体 → 服务拆分 → 微服务 · 重点是搞明白为什么要拆"],
+   ["服务间调用","HTTP · RPC · Feign · 负载均衡"],
+   ["网关","Gateway · 鉴权 · 限流 · 路由"],
+   ["配置与服务发现","注册 · 发现 · 配置"],
+   ["分布式事务","本地事务 · 最终一致性 · 消息事务 · 为什么一个 @Transactional 不够用了"],
+   ["高并发","100 / 1000 / 10000 请求进来之后分别怎么处理"],
+   ["限流","固定窗口 · 滑动窗口 · 令牌桶 · 漏桶"],
+   ["熔断与降级","一个服务挂了，为什么不能把整个系统拖死"],
+   ["缓存架构","MySQL + Redis + MQ 连起来想"],
+   ["大数据量","假设 1000 万数据：查询 / 分页 / 排序 / 统计 / 导出"],
+   ["深分页","LIMIT OFFSET · 游标分页 · ID 分页"],
+   ["接口性能优化","SQL 优化 · 缓存 · 批量查询 · 批量写入 · 异步 · 线程池"],
+   ["日志与监控","日志 · 指标 · 报警 · 链路追踪"],
+   ["线上故障排查 ★","CPU 100% · 内存暴涨 · 数据库慢 · Redis 挂了 · MQ 积压 — 写自己的排查流程"],
+   ["系统设计","用户系统 · 订单系统 · 任务系统 · 文件系统"],
+   ["系统设计面试","客户端 → Nginx → Gateway → Service → Redis → MySQL → MQ，解释每一层"]
+  ]},
+ {n:4,cls:"p4",name:"第四阶段 · 面试冲刺",range:"第 41 – 48 周",target:"Offer",page:"pageS4",
+  goal:"最后 8 周不疯狂学新东西。整理能力 + 面试 + 项目包装 + 查漏补缺。每天的口头表达训练比看新的技术点更重要。",
+  sum:"面试准备的完成情况",wk:"41-48",
+  weeks:[
+   ["整理项目","项目背景 · 技术架构 · 数据库设计 · 核心流程"],
+   ["整理 5 个项目难题","事务 / SQL / 并发 / 异步 / 线上：问题→原因→排查→解决→为什么这么解决"],
+   ["Java 面试","每天 5 道题，但不要背答案 — 必须用自己的语言讲出来"],
+   ["Spring 面试","IOC · AOP · 事务 · 代理 · 循环依赖 · Bean 生命周期"],
+   ["MySQL / Redis 面试","索引 · 事务 · 锁 · MVCC · Redis 缓存 · 分布式锁"],
+   ["MQ / JVM 面试","消息可靠性 · 重复消费 · 消息积压 · GC · JVM 排查 · 线程问题"],
+   ["系统设计刷题","秒杀 · 聊天 · 文件 · 任务 · 订单 · 消息系统，每天一道"],
+   ["模拟面试","20 分钟八股 + 20 分钟项目 + 20 分钟系统设计，然后开始正式投递"]
+  ]}
+];
+
+var DAYS=["一","二","三","四","五","六","日"];
+
+function buildStage(s){
+  var rows="";
+  for(var i=0;i<s.weeks.length;i++){
+    var w=s.wk.split("-")[0]*1+i;
+    var alt=(i%2===1)?' class="alt"':'';
+    var boxes="";
+    for(var d=0;d<7;d++){boxes+='<td class="day"><span class="cb"></span></td>';}
+    rows+='<tr'+alt+'>'+
+      '<td class="w center">'+w+'</td>'+
+      '<td><div class="ttl">'+s.weeks[i][0]+'</div><div class="pt">'+s.weeks[i][1]+'</div></td>'+
+      boxes+
+      '<td class="center"><span class="cb"></span></td>'+
+    '</tr>';
+  }
+  var head='<tr><th class="center" style="width:11mm">周</th><th style="width:60mm">本周主题与关键点</th>';
+  for(var d=0;d<7;d++){head+='<th class="center" style="width:8.5mm">'+DAYS[d]+'</th>';}
+  head+='<th class="center" style="width:14mm">目标</th></tr>';
+
+  /* 周数多（16 周）的阶段用紧凑复盘区，保证整页不溢出 */
+  var compact=s.weeks.length>=14;
+  var review=compact
+    ? '<div class="blk">'+
+        '<h2>阶段复盘 <span class="tag">'+s.name+' 结束时填写</span></h2>'+
+        '<div class="write" style="margin-top:0"><div class="lbl">'+s.sum+' · 最没搞懂的 3 个点</div><div class="rl"></div><div class="rl"></div><div class="rl"></div></div>'+
+      '</div>'
+    : '<div class="blk">'+
+        '<h2>阶段复盘 <span class="tag">'+s.name+' 结束时填写</span></h2>'+
+        '<div class="write" style="margin-top:0"><div class="lbl">'+s.sum+'</div><div class="rl"></div><div class="rl"></div></div>'+
+        '<div class="write"><div class="lbl">本阶段最没搞懂的 3 个点 <span>（进入下一阶段前必须补完）</span></div><div class="rl"></div><div class="rl"></div><div class="rl"></div></div>'+
+      '</div>';
+
+  return ''+
+  '<div class="hd">'+
+    '<div class="eyebrow">STAGE '+s.n+' / 4 · WEEK '+s.range.replace(/[^0-9–-]/g,"")+'</div>'+
+    '<h1><span class="pill '+s.cls+'">阶段 '+s.n+'</span> '+s.name.replace(/^第.{1,4}阶段 · /,"")+'</h1>'+
+    '<div class="sub">'+s.goal+'</div>'+
+  '</div>'+
+  '<div class="blk">'+
+    '<h2>'+s.name+' 打卡表 <span class="tag">完成一天涂一格 · 每周七格全满才算过关</span></h2>'+
+    '<table class="ct'+(compact?" tight":"")+'"><colgroup><col style="width:11mm"><col style="width:60mm">'+
+      '<col style="width:8.5mm"><col style="width:8.5mm"><col style="width:8.5mm"><col style="width:8.5mm">'+
+      '<col style="width:8.5mm"><col style="width:8.5mm"><col style="width:8.5mm"><col style="width:14mm"></colgroup>'+
+    '<thead>'+head+'</thead><tbody>'+rows+'</tbody></table>'+
+    '<div class="note" style="margin-top:2mm">阶段目标薪资：<b>'+s.target+'</b> · 本阶段共 '+s.weeks.length+' 周 · 累计 '+s.weeks.length*7+' 天</div>'+
+  '</div>'+
+  review+
+  '<div class="verdict" style="margin-top:2.5mm">'+
+    '<div class="vbox"><div class="k">阶段完成度</div><div class="v">____ / '+s.weeks.length+' 周</div></div>'+
+    '<div class="vbox"><div class="k">能脱稿讲清楚的知识点</div><div class="v">______ 个</div></div>'+
+    '<div class="vbox"><div class="k">是否可以进入下一阶段</div><div class="v">可以 / 需要补课</div></div>'+
+  '</div>'+
+  '<div class="pgfoot"><span>Java 48 周进阶打卡表</span><span>第 '+(s.n+2)+' / 6 页 · 阶段 '+s.n+' / 4 · '+s.range+'</span></div>';
+}
+
+for(var i=0;i<STAGES.length;i++){
+  document.getElementById(STAGES[i].page).innerHTML=buildStage(STAGES[i]);
+}
+</script>
+</body>
+</html>
