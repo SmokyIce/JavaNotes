@@ -1,0 +1,20 @@
+# ---- 系统 / 编辑器垃圾文件 ----
+Thumbs.db
+desktop.ini
+.DS_Store
+*.tmp
+*.temp
+~$*
+*.swp
+*.swo
+*~
+
+# ---- Typora / 备份 ----
+*.md.bak
+.typora/
+
+# ---- Obsidian 若使用可保留 .obsidian，但下面这些是缓存 ----
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/cache
+.trash/
