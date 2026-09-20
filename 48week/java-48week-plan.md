@@ -1,4 +1,4 @@
-﻿---
+---
 title: Java 48 周进阶计划
 subtitle: 每天 1 小时 · 8K → 25K
 tags:
