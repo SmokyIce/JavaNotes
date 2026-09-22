@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Java 48 周进阶路线看板 · 8K → 25K</title>
+<style>
+:root{
+  --bg:#F6F6F4; --card:#FFFFFF; --line:#E5E4DF; --line2:#D3D1C7;
+  --t1:#1F1F1E; --t2:#5F5E5A; --t3:#8A8983;
+  --blue:#378ADD; --blue-d:#185FA5; --blue-l:#E6F1FB; --blue-100:#B5D4F4;
+  --teal:#1D9E75; --teal-d:#0F6E56; --teal-l:#E1F5EE;
+  --amber:#EF9F27; --amber-d:#BA7517; --amber-l:#FAEEDA;
+  --purple:#7F77DD; --purple-d:#534AB7; --purple-l:#EEEDFE;
+  --coral:#D85A30; --coral-d:#993C1D; --coral-l:#FAECE7;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--t1);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  font-size:14px; line-height:1.65; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1120px;margin:0 auto;padding:40px 28px 80px}
+
+/* ---------- header ---------- */
+.hero{margin-bottom:36px}
+.eyebrow{font-size:12px;letter-spacing:.08em;color:var(--t3);margin-bottom:10px}
+.hero h1{font-size:28px;font-weight:600;letter-spacing:-.01em;line-height:1.3}
+.hero p{font-size:14px;color:var(--t2);margin-top:10px;max-width:720px}
+
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:24px}
+.metric{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.metric .k{font-size:12px;color:var(--t3);margin-bottom:6px}
+.metric .v{font-size:24px;font-weight:600;letter-spacing:-.02em}
+.metric .v small{font-size:13px;font-weight:400;color:var(--t2);margin-left:2px}
+
+/* ---------- progress ---------- */
+.progress-band{
+  background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:18px 20px;margin-top:12px;display:flex;align-items:center;gap:20px;flex-wrap:wrap
+}
+.pb-track{flex:1;min-width:220px;height:8px;background:#EDECE8;border-radius:4px;overflow:hidden}
+.pb-fill{height:100%;width:0;background:var(--blue-d);border-radius:4px;transition:width .3s ease}
+.pb-num{font-size:13px;color:var(--t2);white-space:nowrap}
+.pb-num b{color:var(--t1);font-weight:600;font-size:16px}
+
+/* ---------- section ---------- */
+section{margin-top:52px}
+.sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.sec-head h2{font-size:19px;font-weight:600;letter-spacing:-.01em}
+.sec-head .note{font-size:12.5px;color:var(--t3)}
+.sec-desc{font-size:13.5px;color:var(--t2);margin-bottom:22px;max-width:760px}
+
+/* ---------- daily ---------- */
+.day-row{display:flex;align-items:center;gap:12px;margin-bottom:7px}
+.day-name{width:48px;font-size:13px;color:var(--t1);flex-shrink:0}
+.day-bar{flex:1;display:flex;height:26px;border-radius:6px;overflow:hidden;border:1px solid var(--line)}
+.seg{display:flex;align-items:center;justify-content:center;font-size:11.5px;white-space:nowrap;overflow:hidden}
+.s-rev{background:var(--blue-100);color:#0C447C}
+.s-core{background:var(--blue);color:#fff}
+.s-out{background:var(--amber);color:#412402}
+.legend{display:flex;flex-wrap:wrap;gap:18px;font-size:12.5px;color:var(--t2);margin-bottom:16px}
+.legend span{display:flex;align-items:center;gap:6px}
+.sw{width:11px;height:11px;border-radius:3px;flex-shrink:0}
+
+/* ---------- stage tabs ---------- */
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:22px}
+.tab{
+  padding:8px 16px;border:1px solid var(--line);background:var(--card);
+  border-radius:20px;font-size:13px;color:var(--t2);cursor:pointer;
+  font-family:inherit;transition:all .15s
+}
+.tab:hover{border-color:var(--line2);color:var(--t1)}
+.tab.on{background:var(--t1);border-color:var(--t1);color:#fff}
+
+/* ---------- week grid ---------- */
+.weeks{display:grid;grid-template-columns:repeat(auto-fill,minmax(255px,1fr));gap:12px}
+.week{
+  background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:14px 16px;position:relative;transition:border-color .15s
+}
+.week:hover{border-color:var(--line2)}
+.week.done{background:#FBFBF9;border-color:var(--line)}
+.week.done .w-title{color:var(--t3);text-decoration:line-through;text-decoration-color:var(--line2)}
+.w-top{display:flex;align-items:center;gap:9px;margin-bottom:9px}
+.w-num{
+  font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:5px;
+  background:#F1EFE8;color:var(--t2);flex-shrink:0
+}
+.week[data-stage="1"] .w-num{background:var(--blue-l);color:var(--blue-d)}
+.week[data-stage="2"] .w-num{background:var(--teal-l);color:var(--teal-d)}
+.week[data-stage="3"] .w-num{background:var(--amber-l);color:var(--amber-d)}
+.week[data-stage="4"] .w-num{background:var(--purple-l);color:var(--purple-d)}
+.w-title{font-size:14px;font-weight:500;flex:1}
+.w-check{
+  width:20px;height:20px;border-radius:6px;border:1.5px solid var(--line2);
+  cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  background:#fff;transition:all .15s
+}
+.w-check:hover{border-color:var(--blue-d)}
+.w-check svg{opacity:0;transition:opacity .15s}
+.week.done .w-check{background:var(--blue-d);border-color:var(--blue-d)}
+.week.done .w-check svg{opacity:1}
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chip{
+  font-size:11.5px;padding:3px 8px;border-radius:5px;
+  background:#F5F4F1;color:var(--t2);line-height:1.5
+}
+
+/* ---------- ability matrix ---------- */
+.matrix{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.mrow{display:grid;grid-template-columns:120px repeat(4,1fr);align-items:center;border-top:1px solid var(--line)}
+.mrow:first-child{border-top:none;background:#FAFAF8}
+.mrow>div{padding:9px 12px}
+.mhead{font-size:11.5px;color:var(--t3);text-align:center}
+.mname{font-size:13px;color:var(--t1)}
+.mcell{display:flex;align-items:center;gap:8px}
+.mbar{flex:1;height:6px;background:#EDECE8;border-radius:3px;overflow:hidden;min-width:24px}
+.mbar i{display:block;height:100%;border-radius:3px}
+.mval{font-size:11.5px;color:var(--t3);width:26px;text-align:right;flex-shrink:0}
+.st1{background:var(--blue)} .st2{background:var(--teal)} .st3{background:var(--amber)} .st4{background:var(--purple)}
+
+/* ---------- milestones ---------- */
+.miles{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:12px}
+.mile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.mile .m-k{font-size:11.5px;color:var(--t3);margin-bottom:7px;display:flex;align-items:center;gap:7px}
+.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.mile .m-v{font-size:13.5px;color:var(--t1);line-height:1.6}
+
+/* ---------- ladder ---------- */
+.ladder{display:flex;flex-direction:column;gap:10px}
+.rung{
+  display:flex;align-items:center;gap:16px;background:var(--card);
+  border:1px solid var(--line);border-radius:12px;padding:15px 18px
+}
+.rung .lv{font-size:19px;font-weight:600;width:66px;flex-shrink:0;letter-spacing:-.02em}
+.rung .body{flex:1}
+.rung .body .t{font-size:13.5px;font-weight:500;margin-bottom:3px}
+.rung .body .d{font-size:12.5px;color:var(--t2)}
+.rung .wk{font-size:12px;color:var(--t3);white-space:nowrap;flex-shrink:0}
+
+/* ---------- rules ---------- */
+.rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.rule{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.rule h3{font-size:13.5px;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.rule h3 .n{
+  width:20px;height:20px;border-radius:6px;background:var(--t1);color:#fff;
+  font-size:11.5px;display:flex;align-items:center;justify-content:center;flex-shrink:0
+}
+.rule p{font-size:13px;color:var(--t2);line-height:1.7}
+
+.callout{
+  margin-top:28px;background:var(--blue-l);border:1px solid #C9DFF6;
+  border-radius:12px;padding:18px 20px
+}
+.callout .q{font-size:14px;font-weight:600;color:var(--blue-d);margin-bottom:8px}
+.callout p{font-size:13.5px;color:#0C447C;line-height:1.7}
+
+footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--line);font-size:12px;color:var(--t3)}
+
+@media (max-width:640px){
+  .wrap{padding:28px 16px 60px}
+  .hero h1{font-size:22px}
+  .mrow{grid-template-columns:92px repeat(4,1fr)}
+  .mval{display:none}
+  .rung{flex-wrap:wrap;gap:8px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hero">
+    <div class="eyebrow">学习路线看板 · 2026</div>
+    <h1>每天 1 小时，48 周从 8K 走到 25K</h1>
+    <p>目标不是把技术名词背成一串火车，而是：能独立做模块 → 能解释原理 → 能解决复杂问题 → 能做技术方案 → 能通过中高级 Java 面试。起点直接用你工作里的 <code>@Transactional</code>、<code>@Async</code>、MyBatis、慢 SQL 当实战素材，不从 Hello World 重来。</p>
+
+    <div class="metrics">
+      <div class="metric"><div class="k">总周期</div><div class="v">48 <small>周</small></div></div>
+      <div class="metric"><div class="k">日均投入</div><div class="v">60 <small>分钟</small></div></div>
+      <div class="metric"><div class="k">累计时长</div><div class="v">288 <small>小时</small></div></div>
+      <div class="metric"><div class="k">阶段数</div><div class="v">4 <small>个</small></div></div>
+      <div class="metric"><div class="k">最低交付</div><div class="v">1 <small>项目</small></div></div>
+    </div>
+
+    <div class="progress-band">
+      <div class="pb-num">已完成 <b id="doneNum">0</b> / 48 周</div>
+      <div class="pb-track"><div class="pb-fill" id="pbFill"></div></div>
+      <div class="pb-num" id="pbPct">0%</div>
+    </div>
+  </div>
+
+  <!-- 每日结构 -->
+  <section>
+    <div class="sec-head"><h2>每天 1 小时怎么切</h2><span class="note">固定节奏，不用每天纠结看什么</span></div>
+    <p class="sec-desc">一周 420 分钟里，输入约 215 分钟、动手 145 分钟、输出沉淀约 60 分钟。周二、周四、周六全部交给键盘，周日全部交给输出。</p>
+
+    <div class="legend">
+      <span><span class="sw s-rev" style="background:#B5D4F4"></span>复习旧内容</span>
+      <span><span class="sw s-core" style="background:#378ADD"></span>核心任务</span>
+      <span><span class="sw s-out" style="background:#EF9F27"></span>输出沉淀</span>
+    </div>
+
+    <div id="days"></div>
+  </section>
+
+  <!-- 48周 -->
+  <section>
+    <div class="sec-head"><h2>48 周任务分解</h2><span class="note">点右上角方格标记完成，进度会保存在本地</span></div>
+    <p class="sec-desc">按阶段筛选查看。每一周都是一个可独立验证的交付单元，而不是"看完一节课"。</p>
+
+    <div class="tabs" id="tabs">
+      <button class="tab on" data-f="all">全部 48 周</button>
+      <button class="tab" data-f="1">① 打基础 1–12</button>
+      <button class="tab" data-f="2">② 进阶提升 13–24</button>
+      <button class="tab" data-f="3">③ 系统设计 25–40</button>
+      <button class="tab" data-f="4">④ 面试冲刺 41–48</button>
+    </div>
+
+    <div class="weeks" id="weeks"></div>
+  </section>
+
+  <!-- 能力矩阵 -->
+  <section>
+    <div class="sec-head"><h2>能力成长矩阵</h2><span class="note">每阶段结束时的自评水位 · 满分 5</span></div>
+    <p class="sec-desc">这是整份计划里最该拿出来对照的数据。注意第 12 周时 JVM、MQ、Linux 全部接近空白——那是正常的，它们属于第二阶段。</p>
+    <div class="matrix" id="matrix"></div>
+  </section>
+
+  <!-- 里程碑 -->
+  <section>
+    <div class="sec-head"><h2>按月产出，而不是按天打卡</h2><span class="note">"今天学了一小时"不算成果</span></div>
+    <p class="sec-desc">每个月必须留下一个能给别人看的东西。没有产出物的月份，等于没学。</p>
+    <div class="miles" id="miles"></div>
+  </section>
+
+  <!-- 薪资阶梯 -->
+  <section>
+    <div class="sec-head"><h2>薪资与阶段对应关系</h2><span class="note">能力先到，钱才到</span></div>
+    <div class="ladder" id="ladder"></div>
+  </section>
+
+  <!-- 执行规则 -->
+  <section>
+    <div class="sec-head"><h2>四条执行铁律</h2></div>
+    <div class="rules">
+      <div class="rule">
+        <h3><span class="n">1</span>输入必须留 15 分钟</h3>
+        <p>学完 Spring 事务，关掉资料自己写：事务是什么 / Spring 怎么实现 / <code>@Transactional</code> 为什么失效 / <code>REQUIRES_NEW</code> 做什么 / <code>this.xxx()</code> 为什么失效。能自己答出来，才算学会。</p>
+      </div>
+      <div class="rule">
+        <h3><span class="n">2</span>Bug 修完别关 IDE</h3>
+        <p>修完 <code>@Async</code> 事务失效后，再花 20–30 分钟问自己：为什么？底层原理是什么？还有哪些情况会失效？面试怎么问？能不能写个 Demo 复现？</p>
+      </div>
+      <div class="rule">
+        <h3><span class="n">3</span>项目从第 8 周开始长</h3>
+        <p>异步任务管理平台：创建 / 执行 / 进度 / 失败 / 重试 / 取消 / 日志 / 恢复。后面 40 周不断往里加 Redis、MQ、Docker、微服务，避免"学了一堆技术但没有一个完整项目"。</p>
+      </div>
+      <div class="rule">
+        <h3><span class="n">4</span>追求 300 天后还在学</h3>
+        <p>不要追求每天学很多。哪怕当天只搞懂"为什么 <code>this.xxx()</code> 会导致 Spring 事务失效"，也算完成。持续性压倒强度。</p>
+      </div>
+    </div>
+
+    <div class="callout">
+      <div class="q">今天的最小完成标准</div>
+      <p>① 学一个知识点 ② 写一点代码 ③ 留下一份自己的笔记。三件事做完，这一天就成立了。</p>
+    </div>
+  </section>
+
+  <footer>Java 48 周进阶路线看板 · 数据来源于个人学习计划 · 进度保存在浏览器本地</footer>
+</div>
+
+<script>
+const DAYS=[
+ {d:"周一",seg:[[16.7,"rev","10 复习"],[58.3,"core","35 学新知识"],[25,"out","15 写总结"]]},
+ {d:"周二",seg:[[16.7,"rev","10 复习"],[66.7,"core","40 写代码"],[16.7,"out","10 记踩坑"]]},
+ {d:"周三",seg:[[16.7,"rev","10 复习"],[58.3,"core","35 源码原理"],[25,"out","15 画图总结"]]},
+ {d:"周四",seg:[[16.7,"rev","10 复习"],[75,"core","45 做项目"],[8.3,"out","5"]]},
+ {d:"周五",seg:[[25,"rev","15 复习"],[50,"core","30 做面试题"],[25,"out","15 口头回答"]]},
+ {d:"周六",seg:[[100,"core","60 连续做项目，不看视频"]]},
+ {d:"周日",seg:[[33.3,"out","20 回顾本周"],[33.3,"out","20 重做错题"],[33.3,"out","20 整理卡片"]]}
+];
+
+const WEEKS=[
+ [1,1,"Java 集合",["ArrayList / LinkedList","HashMap 源码与扩容","HashSet / LinkedHashMap","手写简易 HashMap"]],
+ [2,1,"泛型 · 异常 · Stream",["泛型 · 异常 · Optional","Lambda · Stream","过滤 / 排序 / 分组 / 统计"]],
+ [3,1,"Java 并发基础",["Thread · Runnable","synchronized · volatile","Lock","为什么会有线程安全问题"]],
+ [4,1,"线程池与 CompletableFuture",["Executor · ThreadPoolExecutor","线程池参数","CompletableFuture","异步结果返回练习"]],
+ [5,1,"Spring IOC / DI",["Bean · IOC · DI","Bean 生命周期","Bean 作用域","Spring 到底在管什么"]],
+ [6,1,"Spring AOP",["AOP · 切面 · 代理对象","JDK 动态代理","CGLIB","this.xxx() 与 self.xxx()"]],
+ [7,1,"Spring 事务 ★重点",["@Transactional","事务传播 · 隔离","rollbackFor","REQUIRED / REQUIRES_NEW","代理拦截链路"]],
+ [8,1,"Spring 异步 ★重点",["@Async · 线程池","异步事务 · 事务边界","为什么事务不跨线程继承","接入自己的项目"]],
+ [9,1,"MySQL 索引",["B+Tree · 聚簇索引","二级索引 · 联合索引","最左匹配 · 覆盖索引","回表"]],
+ [10,1,"EXPLAIN",["type · key · rows","possible_keys · Extra","自己制造慢 SQL","建索引前后对比"]],
+ [11,1,"MySQL 事务与锁",["ACID · 隔离级别","MVCC","脏读 / 不可重复读 / 幻读","行锁 · 间隙锁"]],
+ [12,1,"Redis 基础",["String / Hash / List / Set / ZSet","TTL · 缓存","穿透 · 击穿 · 雪崩"]],
+
+ [13,2,"JVM 内存",["堆 · 栈 · 方法区","对象 · 类加载"]],
+ [14,2,"GC",["Young GC · Old GC","Full GC · G1","为什么 GC 会导致卡顿"]],
+ [15,2,"JVM 排查",["jps · jstack · jmap · jstat","CPU 高 · 内存高 · 线程异常"]],
+ [16,2,"Redis 进阶",["RDB · AOF","过期策略 · 淘汰策略"]],
+ [17,2,"Redis 分布式锁",["SET NX · 过期时间","Lua · Redisson","普通 Redis 锁为什么会出问题"]],
+ [18,2,"RabbitMQ 基础",["Producer · Consumer","Exchange · Queue · RoutingKey","ACK","接入项目"]],
+ [19,2,"消息可靠性",["消息丢失 · 重复消费","消费失败 · 重试","死信队列"]],
+ [20,2,"幂等",["同一请求执行两次怎么办","支付 / 下单 / 任务执行 / MQ 消费"]],
+ [21,2,"线程池深入",["核心线程数 · 最大线程数","队列 · 拒绝策略 · 线程工厂","1000 个任务突然过来会怎样"]],
+ [22,2,"Linux",["top · ps · free · df · du","grep · find · tail","kill · ss · curl","能自己登服务器查问题"]],
+ [23,2,"Docker",["image · container","Dockerfile","volume · network · compose"]],
+ [24,2,"项目部署 ★重点",["Spring Boot + MySQL + Redis + RabbitMQ","全部放进 Docker 运行","构建 → 部署 → 运行 → 日志 → 排错"]],
+
+ [25,3,"微服务思想",["单体 → 服务拆分 → 微服务","为什么要拆"]],
+ [26,3,"服务间调用",["HTTP · RPC","Feign · 负载均衡"]],
+ [27,3,"网关",["Gateway","鉴权 · 限流 · 路由"]],
+ [28,3,"配置与服务发现",["注册 · 发现 · 配置"]],
+ [29,3,"分布式事务",["本地事务 · 最终一致性","消息事务","为什么一个 @Transactional 不够用"]],
+ [30,3,"高并发",["100 / 1000 / 10000 请求","请求进来之后怎么处理"]],
+ [31,3,"限流",["固定窗口 · 滑动窗口","令牌桶 · 漏桶"]],
+ [32,3,"熔断与降级",["一个服务挂了为什么不能拖死全局"]],
+ [33,3,"缓存架构",["MySQL + Redis + MQ 连起来"]],
+ [34,3,"大数据量",["1000 万数据的查询 / 分页","排序 / 统计 / 导出"]],
+ [35,3,"深分页",["LIMIT OFFSET","游标分页 · ID 分页"]],
+ [36,3,"接口性能优化",["SQL 优化 · 缓存","批量查询 / 批量写入","异步 · 线程池"]],
+ [37,3,"日志与监控",["日志 · 指标 · 报警 · 链路"]],
+ [38,3,"线上故障排查",["CPU 100% · 内存暴涨","数据库慢 · Redis 挂了 · MQ 积压","写自己的排查流程"]],
+ [39,3,"系统设计",["用户 / 订单 / 任务 / 文件系统"]],
+ [40,3,"系统设计面试",["客户端 → Nginx → Gateway → Service","Redis · MySQL · MQ","解释每一层为什么存在"]],
+
+ [41,4,"整理项目",["项目背景 · 技术架构","数据库 · 核心流程"]],
+ [42,4,"整理 5 个项目难题",["事务 / SQL / 并发 / 异步 / 线上","问题→原因→排查→解决→为什么"]],
+ [43,4,"Java 面试",["每天 5 道题","用自己的语言讲出来"]],
+ [44,4,"Spring 面试",["IOC · AOP · 事务 · 代理","循环依赖 · Bean 生命周期"]],
+ [45,4,"MySQL / Redis 面试",["索引 · 事务 · 锁 · MVCC","Redis 缓存 · 分布式锁"]],
+ [46,4,"MQ / JVM 面试",["消息可靠性 · 重复消费 · 积压","GC · JVM 排查 · 线程问题"]],
+ [47,4,"系统设计刷题",["秒杀 / 聊天 / 文件","任务 / 订单 / 消息系统"]],
+ [48,4,"模拟面试",["20 分钟八股","20 分钟项目","20 分钟系统设计","开始正式投递"]]
+];
+
+const ABILITY=[
+ ["Java 基础",[4,4,5,5]],
+ ["Spring",[4,4,5,5]],
+ ["MyBatis",[4,4,4,5]],
+ ["MySQL",[4,4,5,5]],
+ ["Redis",[3,4,5,5]],
+ ["Java 并发",[3,4,5,5]],
+ ["JVM",[1,3,4,4]],
+ ["MQ",[1,3,4,4]],
+ ["Linux / Docker",[1,3,4,4]],
+ ["微服务",[1,1,4,4]],
+ ["高并发",[1,1,4,4]],
+ ["系统设计",[1,1,3,5]]
+];
+
+const MILES=[
+ ["第 1 个月","Java 基础 + 10 道自己的代码练习","s1"],
+ ["第 2 个月","Spring 事务 / AOP Demo","s1"],
+ ["第 3 个月","MySQL 索引实验 + 10 条 EXPLAIN 案例","s1"],
+ ["第 4 个月","Redis 缓存 Demo","s2"],
+ ["第 5 个月","JVM 排查实验","s2"],
+ ["第 6 个月","RabbitMQ 任务系统","s2"],
+ ["第 7–9 个月","微服务版任务系统","s3"],
+ ["第 10–12 个月","完整项目 + 技术文档 + 面试题库 + 简历","s4"]
+];
+
+const LADDER=[
+ ["8K","起点 · 会用技术","现有工作里的 @Transactional、@Async、MyBatis、慢 SQL 就是素材","第 0 周","--blue"],
+ ["15K","能解释原理，能独立做模块","Java / Spring / MySQL / Redis 四件套打透，开始有完整项目雏形","第 12 周","--blue"],
+ ["20K","能解决线上复杂问题","JVM、MQ、并发、Linux、Docker 补齐，能自己登服务器排障","第 24 周","--teal"],
+ ["25K","能做技术方案，能设计系统","微服务、高并发、性能优化、系统设计全部打通","第 40 周","--amber"],
+ ["Offer","能力转化为结果","项目包装 + 五大难题复盘 + 模拟面试","第 48 周","--purple"]
+];
+
+const LS_KEY="java48_weeks_done";
+let done=JSON.parse(localStorage.getItem(LS_KEY)||"[]");
+
+function renderDays(){
+  document.getElementById("days").innerHTML=DAYS.map(function(row){
+    return '<div class="day-row"><div class="day-name">'+row.d+'</div><div class="day-bar">'+
+      row.seg.map(function(s){
+        var cls=s[1]==="rev"?"s-rev":(s[1]==="core"?"s-core":"s-out");
+        return '<div class="seg '+cls+'" style="width:'+s[0]+'%">'+s[2]+'</div>';
+      }).join("")+'</div></div>';
+  }).join("");
+}
+
+function renderWeeks(filter){
+  var list=WEEKS.filter(function(w){return filter==="all"||String(w[1])===filter;});
+  document.getElementById("weeks").innerHTML=list.map(function(w){
+    var isDone=done.indexOf(w[0])>-1;
+    return '<div class="week'+(isDone?" done":"")+'" data-stage="'+w[1]+'">'+
+      '<div class="w-top">'+
+        '<span class="w-num">W'+w[0]+'</span>'+
+        '<span class="w-title">'+w[2]+'</span>'+
+        '<span class="w-check" data-w="'+w[0]+'"><svg width="11" height="11" viewBox="0 0 12 12"><path d="M2 6.2L4.6 8.8L10 3.4" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>'+
+      '</div>'+
+      '<div class="chips">'+w[3].map(function(c){return '<span class="chip">'+c+'</span>';}).join("")+'</div>'+
+    '</div>';
+  }).join("");
+  bindChecks();
+}
+
+function bindChecks(){
+  document.querySelectorAll(".w-check").forEach(function(el){
+    el.onclick=function(){
+      var n=parseInt(el.getAttribute("data-w"),10);
+      var i=done.indexOf(n);
+      if(i>-1){done.splice(i,1);}else{done.push(n);}
+      localStorage.setItem(LS_KEY,JSON.stringify(done));
+      el.closest(".week").classList.toggle("done",i===-1);
+      updateProgress();
+    };
+  });
+}
+
+function updateProgress(){
+  var pct=Math.round(done.length/48*100);
+  document.getElementById("doneNum").textContent=done.length;
+  document.getElementById("pbFill").style.width=pct+"%";
+  document.getElementById("pbPct").textContent=pct+"%";
+}
+
+function renderMatrix(){
+  var head='<div class="mrow"><div class="mhead" style="text-align:left">能力项</div>'+
+    '<div class="mhead">第 12 周</div><div class="mhead">第 24 周</div><div class="mhead">第 40 周</div><div class="mhead">第 48 周</div></div>';
+  var rows=ABILITY.map(function(r){
+    return '<div class="mrow"><div class="mname">'+r[0]+'</div>'+
+      r[1].map(function(v,i){
+        return '<div class="mcell"><div class="mbar"><i class="st'+(i+1)+'" style="width:'+(v/5*100)+'%"></i></div><span class="mval">'+v+'/5</span></div>';
+      }).join("")+'</div>';
+  }).join("");
+  document.getElementById("matrix").innerHTML=head+rows;
+}
+
+function renderMiles(){
+  document.getElementById("miles").innerHTML=MILES.map(function(m){
+    return '<div class="mile"><div class="m-k"><span class="dot '+m[2]+'" style="background:var(--'+(m[2]==="s1"?"blue":m[2]==="s2"?"teal":m[2]==="s3"?"amber":"purple")+')"></span>'+m[0]+'</div><div class="m-v">'+m[1]+'</div></div>';
+  }).join("");
+}
+
+function renderLadder(){
+  document.getElementById("ladder").innerHTML=LADDER.map(function(l){
+    return '<div class="rung"><div class="lv" style="color:var('+l[4]+')">'+l[0]+'</div>'+
+      '<div class="body"><div class="t">'+l[1]+'</div><div class="d">'+l[2]+'</div></div>'+
+      '<div class="wk">'+l[3]+'</div></div>';
+  }).join("");
+}
+
+document.getElementById("tabs").addEventListener("click",function(e){
+  var t=e.target.closest(".tab");
+  if(!t)return;
+  document.querySelectorAll(".tab").forEach(function(x){x.classList.remove("on");});
+  t.classList.add("on");
+  renderWeeks(t.getAttribute("data-f"));
+});
+
+renderDays(); renderWeeks("all"); renderMatrix(); renderMiles(); renderLadder(); updateProgress();
+</script>
+</body>
+</html>
