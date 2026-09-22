@@ -1,0 +1,23 @@
+=== Day 1 Lab : ArrayList vs LinkedList ===
+java.version = 17.0.12   maxHeap = 4030 MB
+N_SEQ = 1000000   N_SHIFT = 20000   N_GET = 20000
+
+operation                     scale (AL/LL)    ArrayList   LinkedList     LL/AL
+                                                   ns/op        ns/op         x
+--------------------------------------------------------------------------------
+add(E)   append                     1M / 1M        44.02       161.24     3.66x
+get(i)   random access             1M / 20k        42.87      6990.08   163.04x
+for-i    indexed walk              1M / 20k         2.97      6710.78  2262.57x
+iterator walk + sum                 1M / 1M        10.60         9.83     0.93x
+add(0,E) insert head              20k / 20k       995.54        56.28     0.06x
+add(mid,E) insert middle          20k / 20k       487.29      7634.38    15.67x
+remove(0) remove head             20k / 20k       894.96        24.89     0.03x
+
+--- memory footprint (1,000,000 same Integer objects, approx) ---
+ArrayList   extra heap:    4.00 MB   (1 x Object[] with 1M slots)
+LinkedList  extra heap:   22.91 MB   (1M x Node objects, each {prev,item,next})
+LinkedList costs about 5.7x more memory
+(keep alive to avoid dead-code elimination: 2000000)
+
+读一遍上面的数字，然后回答：为什么 LinkedList 连 append 都赢不了？
+hint: new Node() 的成本 + 内存不连续 + CPU cache line (64B) 的命中率

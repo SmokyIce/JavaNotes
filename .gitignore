@@ -13,6 +13,16 @@ desktop.ini
 *.md.bak
 .typora/
 
+# ---- Java 构建产物（02-code 下的练习工程）----
+*.class
+*.jar
+out/
+target/
+build/
+sources.txt
+.idea/
+*.iml
+
 # ---- Obsidian 若使用可保留 .obsidian，但下面这些是缓存 ----
 .obsidian/workspace.json
 .obsidian/workspace-mobile.json
