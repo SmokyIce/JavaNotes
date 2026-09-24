@@ -5,32 +5,23 @@ import java.util.LinkedList;
 import java.util.List;
 
 /**
- * Day 1 Lab — ArrayList vs LinkedList：用数字说话，不靠背结论。
+ * Day 1：比较动态数组和双向链表的操作耗时、近似内存占用。
  *
- * 运行方式见 ../../../README.md
+ * 阅读顺序：main → compare 开头的实验 → 被测操作 → 计时与内存工具。
+ * 运行方式见本实验工程根目录的 README.md。
  *
- * 提前把结论写在这里，跑完你会亲眼看到：
- *   1. get(i) 随机访问：ArrayList 快几百倍 —— 数组是一次算地址，链表是一个个节点跳。
- *   2. for-i 按下标遍历链表：慢上千倍 —— 这才是 LinkedList 真正的"性能事故"来源。
- *   3. add(E) 尾部追加：ArrayList 通常不输甚至更快 —— 因为链表每次 add 都要 new Node，
- *      而且节点散落在堆里，CPU 缓存基本命中不了（指针追逐 pointer chasing）。
- *   4. add(0, E) 头部插入：这一项 LinkedList 才真正赢。这是它少数不可替代的场景。
- *   5. 内存：装同样 100 万个元素，LinkedList 要多花一大截，全花在 Node 对象头 + 两个指针上。
- *
- * 结论：生产代码里默认用 ArrayList；需要双端队列用 ArrayDeque；
- *        LinkedList 只在你"已经持有节点位置"且"确实要 O(1) 改结构"时才考虑。
+ * 这是观察数量级的教学实验。两种集合的部分测试规模不同，
+ * 单次计时会受 JIT、GC 和运行环境影响，不能把倍率当成固定结论。
  */
 public class ArrayListVsLinkedList {
 
-    /** 顺序类操作的规模 */
-    static final int N_SEQ = 1_000_000;
-    /** 头部 / 中间插入删除的规模（O(n^2)，故意开小，否则要跑几分钟） */
-    static final int N_SHIFT = 20_000;
-    /** 链表按下标 get 的规模（O(n^2)） */
-    static final int N_GET = 20_000;
+    // 顺序操作用较大规模；涉及反复移动或查找的操作缩小规模，避免等待太久。
+    static final int SEQUENTIAL_ELEMENT_COUNT = 1_000_000;
+    static final int INSERT_REMOVE_COUNT = 20_000;
+    static final int INDEXED_ELEMENT_COUNT = 20_000;
 
-    /** 用来吃掉计算结果，防止 JIT 把整个循环当成 dead code 优化掉 */
-    static volatile long sink = 0;
+    // 保存求和结果，降低被 JIT 当作无用计算消除的风险。
+    static volatile long consumedSum = 0;
 
     public static void main(String[] args) {
         warmUp();
@@ -38,170 +29,198 @@ public class ArrayListVsLinkedList {
         System.out.println("=== Day 1 Lab : ArrayList vs LinkedList ===");
         System.out.println("java.version = " + System.getProperty("java.version")
                 + "   maxHeap = " + (Runtime.getRuntime().maxMemory() >> 20) + " MB");
-        System.out.println("N_SEQ = " + N_SEQ + "   N_SHIFT = " + N_SHIFT + "   N_GET = " + N_GET);
+        System.out.println("N_SEQ = " + SEQUENTIAL_ELEMENT_COUNT
+                + "   N_SHIFT = " + INSERT_REMOVE_COUNT + "   N_GET = " + INDEXED_ELEMENT_COUNT);
         System.out.println();
         System.out.printf("%-28s %14s %12s %12s %9s%n",
                 "operation", "scale (AL/LL)", "ArrayList", "LinkedList", "LL/AL");
         System.out.printf("%-28s %14s %12s %12s %9s%n", "", "", "ns/op", "ns/op", "x");
-        line();
-        List<Integer> a1 = new ArrayList<>();
-        List<Integer> l1 = new LinkedList<>();
-        bench("add(E)   append", scale(N_SEQ, N_SEQ),
-                () -> append(a1, N_SEQ), N_SEQ,
-                () -> append(l1, N_SEQ), N_SEQ);
-
-        List<Integer> a2 = new ArrayList<>(withSeq(N_SEQ));
-        List<Integer> l2 = new LinkedList<>(withSeq(N_GET));
-        bench("get(i)   random access", scale(N_SEQ, N_GET),
-                () -> randomGet(a2, N_SEQ), N_SEQ,
-                () -> randomGet(l2, N_GET), N_GET);
-
-        List<Integer> a3 = new ArrayList<>(withSeq(N_SEQ));
-        List<Integer> l3 = new LinkedList<>(withSeq(N_GET));
-        bench("for-i    indexed walk", scale(N_SEQ, N_GET),
-                () -> indexedWalk(a3, N_SEQ), N_SEQ,
-                () -> indexedWalk(l3, N_GET), N_GET);
-
-        List<Integer> a4 = new ArrayList<>(withSeq(N_SEQ));
-        List<Integer> l4 = new LinkedList<>(withSeq(N_SEQ));
-        bench("iterator walk + sum", scale(N_SEQ, N_SEQ),
-                () -> iterate(a4, N_SEQ), N_SEQ,
-                () -> iterate(l4, N_SEQ), N_SEQ);
-
-        List<Integer> a5 = new ArrayList<>();
-        List<Integer> l5 = new LinkedList<>();
-        bench("add(0,E) insert head", scale(N_SHIFT, N_SHIFT),
-                () -> insertHead(a5, N_SHIFT), N_SHIFT,
-                () -> insertHead(l5, N_SHIFT), N_SHIFT);
-
-        List<Integer> a6 = new ArrayList<>();
-        List<Integer> l6 = new LinkedList<>();
-        bench("add(mid,E) insert middle", scale(N_SHIFT, N_SHIFT),
-                () -> insertMiddle(a6, N_SHIFT), N_SHIFT,
-                () -> insertMiddle(l6, N_SHIFT), N_SHIFT);
-
-        List<Integer> a7 = new ArrayList<>(withSeq(N_SHIFT));
-        List<Integer> l7 = new LinkedList<>(withSeq(N_SHIFT));
-        bench("remove(0) remove head", scale(N_SHIFT, N_SHIFT),
-                () -> removeHead(a7, N_SHIFT), N_SHIFT,
-                () -> removeHead(l7, N_SHIFT), N_SHIFT);
+        printSeparator();
+        compareAppend();
+        compareScatteredAccess();
+        compareIndexedTraversal();
+        compareIteratorTraversal();
+        compareHeadInsertion();
+        compareMiddleInsertion();
+        compareHeadRemoval();
 
         System.out.println();
-        memoryFootprint();
+        compareMemoryUsage();
         System.out.println();
         System.out.println("读一遍上面的数字，然后回答：为什么 LinkedList 连 append 都赢不了？");
         System.out.println("hint: new Node() 的成本 + 内存不连续 + CPU cache line (64B) 的命中率");
     }
 
+    private static void compareAppend() {
+        List<Integer> arrayList = new ArrayList<>();
+        List<Integer> linkedList = new LinkedList<>();
+        compareOperations("add(E)   append", formatScale(SEQUENTIAL_ELEMENT_COUNT, SEQUENTIAL_ELEMENT_COUNT),
+                () -> append(arrayList, SEQUENTIAL_ELEMENT_COUNT), SEQUENTIAL_ELEMENT_COUNT,
+                () -> append(linkedList, SEQUENTIAL_ELEMENT_COUNT), SEQUENTIAL_ELEMENT_COUNT);
+    }
+
+    private static void compareScatteredAccess() {
+        List<Integer> arrayList = new ArrayList<>(createSequentialValues(SEQUENTIAL_ELEMENT_COUNT));
+        List<Integer> linkedList = new LinkedList<>(createSequentialValues(INDEXED_ELEMENT_COUNT));
+        compareOperations("get(i)   random access", formatScale(SEQUENTIAL_ELEMENT_COUNT, INDEXED_ELEMENT_COUNT),
+                () -> sumByScatteredIndex(arrayList, SEQUENTIAL_ELEMENT_COUNT), SEQUENTIAL_ELEMENT_COUNT,
+                () -> sumByScatteredIndex(linkedList, INDEXED_ELEMENT_COUNT), INDEXED_ELEMENT_COUNT);
+    }
+
+    private static void compareIndexedTraversal() {
+        List<Integer> arrayList = new ArrayList<>(createSequentialValues(SEQUENTIAL_ELEMENT_COUNT));
+        List<Integer> linkedList = new LinkedList<>(createSequentialValues(INDEXED_ELEMENT_COUNT));
+        compareOperations("for-i    indexed walk", formatScale(SEQUENTIAL_ELEMENT_COUNT, INDEXED_ELEMENT_COUNT),
+                () -> sumByIndex(arrayList, SEQUENTIAL_ELEMENT_COUNT), SEQUENTIAL_ELEMENT_COUNT,
+                () -> sumByIndex(linkedList, INDEXED_ELEMENT_COUNT), INDEXED_ELEMENT_COUNT);
+    }
+
+    private static void compareIteratorTraversal() {
+        List<Integer> arrayList = new ArrayList<>(createSequentialValues(SEQUENTIAL_ELEMENT_COUNT));
+        List<Integer> linkedList = new LinkedList<>(createSequentialValues(SEQUENTIAL_ELEMENT_COUNT));
+        compareOperations("iterator walk + sum", formatScale(SEQUENTIAL_ELEMENT_COUNT, SEQUENTIAL_ELEMENT_COUNT),
+                () -> sumByIterator(arrayList), SEQUENTIAL_ELEMENT_COUNT,
+                () -> sumByIterator(linkedList), SEQUENTIAL_ELEMENT_COUNT);
+    }
+
+    private static void compareHeadInsertion() {
+        List<Integer> arrayList = new ArrayList<>();
+        List<Integer> linkedList = new LinkedList<>();
+        compareOperations("add(0,E) insert head", formatScale(INSERT_REMOVE_COUNT, INSERT_REMOVE_COUNT),
+                () -> insertHead(arrayList, INSERT_REMOVE_COUNT), INSERT_REMOVE_COUNT,
+                () -> insertHead(linkedList, INSERT_REMOVE_COUNT), INSERT_REMOVE_COUNT);
+    }
+
+    private static void compareMiddleInsertion() {
+        List<Integer> arrayList = new ArrayList<>();
+        List<Integer> linkedList = new LinkedList<>();
+        compareOperations("add(mid,E) insert middle", formatScale(INSERT_REMOVE_COUNT, INSERT_REMOVE_COUNT),
+                () -> insertMiddle(arrayList, INSERT_REMOVE_COUNT), INSERT_REMOVE_COUNT,
+                () -> insertMiddle(linkedList, INSERT_REMOVE_COUNT), INSERT_REMOVE_COUNT);
+    }
+
+    private static void compareHeadRemoval() {
+        List<Integer> arrayList = new ArrayList<>(createSequentialValues(INSERT_REMOVE_COUNT));
+        List<Integer> linkedList = new LinkedList<>(createSequentialValues(INSERT_REMOVE_COUNT));
+        compareOperations("remove(0) remove head", formatScale(INSERT_REMOVE_COUNT, INSERT_REMOVE_COUNT),
+                () -> removeHead(arrayList, INSERT_REMOVE_COUNT), INSERT_REMOVE_COUNT,
+                () -> removeHead(linkedList, INSERT_REMOVE_COUNT), INSERT_REMOVE_COUNT);
+    }
+
     // ================= 被测操作 =================
 
-    static void append(List<Integer> list, int n) {
-        for (int i = 0; i < n; i++) {
+    static void append(List<Integer> list, int elementCount) {
+        for (int i = 0; i < elementCount; i++) {
             list.add(i);
         }
     }
 
-    static void randomGet(List<Integer> list, int n) {
-        long s = 0;
-        for (int i = 0; i < n; i++) {
-            int idx = (int) (((i * 2654435761L) >>> 3) % n);
-            s += list.get(idx);
+    static void sumByScatteredIndex(List<Integer> list, int elementCount) {
+        long sum = 0;
+        for (int i = 0; i < elementCount; i++) {
+            // 固定公式生成分散的下标，让每次运行的访问顺序一致。
+            int index = (int) (((i * 2654435761L) >>> 3) % elementCount);
+            sum += list.get(index);
         }
-        sink = s;
+        consumedSum = sum;
     }
 
-    static void indexedWalk(List<Integer> list, int n) {
-        long s = 0;
-        for (int i = 0; i < n; i++) {
-            s += list.get(i);
+    static void sumByIndex(List<Integer> list, int elementCount) {
+        long sum = 0;
+        for (int i = 0; i < elementCount; i++) {
+            sum += list.get(i);
         }
-        sink = s;
+        consumedSum = sum;
     }
 
-    static void iterate(List<Integer> list, int n) {
-        long s = 0;
-        for (Integer v : list) {
-            s += v;
+    static void sumByIterator(List<Integer> list) {
+        long sum = 0;
+        for (Integer value : list) {
+            sum += value;
         }
-        sink = s;
+        consumedSum = sum;
     }
 
-    static void insertHead(List<Integer> list, int n) {
-        for (int i = 0; i < n; i++) {
+    static void insertHead(List<Integer> list, int elementCount) {
+        for (int i = 0; i < elementCount; i++) {
             list.add(0, i);
         }
     }
 
-    static void insertMiddle(List<Integer> list, int n) {
-        for (int i = 0; i < n; i++) {
-            list.add(list.size() >> 1, i);
+    static void insertMiddle(List<Integer> list, int elementCount) {
+        for (int i = 0; i < elementCount; i++) {
+            list.add(list.size() / 2, i);
         }
     }
 
-    static void removeHead(List<Integer> list, int n) {
-        for (int i = 0; i < n; i++) {
+    static void removeHead(List<Integer> list, int elementCount) {
+        for (int i = 0; i < elementCount; i++) {
             list.remove(0);
         }
     }
 
     // ================= 工具 =================
 
-    static void bench(String name, String scale, Runnable a, long opsA, Runnable b, long opsB) {
-        long ta = time(a);
-        long tb = time(b);
-        double nsa = (double) ta / opsA;
-        double nsb = (double) tb / opsB;
-        System.out.printf("%-28s %14s %12.2f %12.2f %8.2fx%n", name, scale, nsa, nsb, nsb / nsa);
+    static void compareOperations(String name, String scaleLabel,
+                                  Runnable arrayListTask, long arrayListOperationCount,
+                                  Runnable linkedListTask, long linkedListOperationCount) {
+        long arrayListNanos = measureNanos(arrayListTask);
+        long linkedListNanos = measureNanos(linkedListTask);
+        double arrayListNanosPerOperation = (double) arrayListNanos / arrayListOperationCount;
+        double linkedListNanosPerOperation = (double) linkedListNanos / linkedListOperationCount;
+        System.out.printf("%-28s %14s %12.2f %12.2f %8.2fx%n", name, scaleLabel,
+                arrayListNanosPerOperation, linkedListNanosPerOperation,
+                linkedListNanosPerOperation / arrayListNanosPerOperation);
     }
 
-    static long time(Runnable task) {
-        long t0 = System.nanoTime();
+    static long measureNanos(Runnable task) {
+        long startNanos = System.nanoTime();
         task.run();
-        return System.nanoTime() - t0;
+        return System.nanoTime() - startNanos;
     }
 
     static void warmUp() {
-        List<Integer> a = new ArrayList<>();
-        List<Integer> l = new LinkedList<>();
-        for (int r = 0; r < 3; r++) {
-            append(a, 20_000);
-            append(l, 20_000);
-            randomGet(a, 20_000);
-            randomGet(l, 2_000);
-            indexedWalk(a, 20_000);
-            iterate(l, 20_000);
-            insertHead(a, 2_000);
-            insertHead(l, 2_000);
-            removeHead(a, 2_000);
-            removeHead(l, 2_000);
-            a.clear();
-            l.clear();
+        List<Integer> arrayList = new ArrayList<>();
+        List<Integer> linkedList = new LinkedList<>();
+        for (int round = 0; round < 3; round++) {
+            append(arrayList, 20_000);
+            append(linkedList, 20_000);
+            sumByScatteredIndex(arrayList, 20_000);
+            sumByScatteredIndex(linkedList, 2_000);
+            sumByIndex(arrayList, 20_000);
+            sumByIterator(linkedList);
+            insertHead(arrayList, 2_000);
+            insertHead(linkedList, 2_000);
+            removeHead(arrayList, 2_000);
+            removeHead(linkedList, 2_000);
+            arrayList.clear();
+            linkedList.clear();
         }
     }
 
-    static List<Integer> withSeq(int n) {
-        List<Integer> list = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) {
+    static List<Integer> createSequentialValues(int elementCount) {
+        List<Integer> list = new ArrayList<>(elementCount);
+        for (int i = 0; i < elementCount; i++) {
             list.add(i);
         }
         return list;
     }
 
-    static String scale(int a, int b) {
-        return n(a) + " / " + n(b);
+    static String formatScale(int arrayListCount, int linkedListCount) {
+        return formatCount(arrayListCount) + " / " + formatCount(linkedListCount);
     }
 
-    static String n(int v) {
-        if (v >= 1_000_000) {
-            return (v / 1_000_000) + "M";
+    static String formatCount(int value) {
+        if (value >= 1_000_000) {
+            return (value / 1_000_000) + "M";
         }
-        if (v >= 1_000) {
-            return (v / 1_000) + "k";
+        if (value >= 1_000) {
+            return (value / 1_000) + "k";
         }
-        return String.valueOf(v);
+        return String.valueOf(value);
     }
 
-    static void line() {
+    static void printSeparator() {
         for (int i = 0; i < 80; i++) {
             System.out.print('-');
         }
@@ -210,51 +229,48 @@ public class ArrayListVsLinkedList {
 
     // ================= 内存占用 =================
 
-    /**
-     * 用同一批 Integer 对象喂给两个 List，这样测出来的差值就纯粹是
-     * "数组槽位" 和 "Node 对象" 的差别，不掺杂装箱开销。
-     */
-    static void memoryFootprint() {
-        int n = 1_000_000;
-        Integer[] boxed = new Integer[n];
-        for (int i = 0; i < n; i++) {
-            boxed[i] = i;
+    // 两种集合共享同一批 Integer，尽量排除元素本身占用的内存。
+    static void compareMemoryUsage() {
+        int elementCount = 1_000_000;
+        Integer[] sharedValues = new Integer[elementCount];
+        for (int i = 0; i < elementCount; i++) {
+            sharedValues[i] = i;
         }
 
-        gc();
-        long base1 = used();
-        List<Integer> al = new ArrayList<>(n);
-        for (Integer v : boxed) {
-            al.add(v);
+        requestGarbageCollection();
+        long heapBeforeArrayList = usedHeapBytes();
+        List<Integer> arrayList = new ArrayList<>(elementCount);
+        for (Integer value : sharedValues) {
+            arrayList.add(value);
         }
-        gc();
-        long alExtra = used() - base1;
+        requestGarbageCollection();
+        long arrayListExtraBytes = usedHeapBytes() - heapBeforeArrayList;
 
-        gc();
-        long base2 = used();
-        List<Integer> ll = new LinkedList<>();
-        for (Integer v : boxed) {
-            ll.add(v);
+        requestGarbageCollection();
+        long heapBeforeLinkedList = usedHeapBytes();
+        List<Integer> linkedList = new LinkedList<>();
+        for (Integer value : sharedValues) {
+            linkedList.add(value);
         }
-        gc();
-        long llExtra = used() - base2;
+        requestGarbageCollection();
+        long linkedListExtraBytes = usedHeapBytes() - heapBeforeLinkedList;
 
         System.out.println("--- memory footprint (1,000,000 same Integer objects, approx) ---");
         System.out.printf("ArrayList   extra heap: %7.2f MB   (1 x Object[] with 1M slots)%n",
-                alExtra / 1024.0 / 1024.0);
+                arrayListExtraBytes / 1024.0 / 1024.0);
         System.out.printf("LinkedList  extra heap: %7.2f MB   (1M x Node objects, each {prev,item,next})%n",
-                llExtra / 1024.0 / 1024.0);
+                linkedListExtraBytes / 1024.0 / 1024.0);
         System.out.printf("LinkedList costs about %.1fx more memory%n",
-                llExtra == 0 ? 0.0 : (double) llExtra / Math.max(alExtra, 1));
-        System.out.println("(keep alive to avoid dead-code elimination: " + (al.size() + ll.size()) + ")");
+                linkedListExtraBytes == 0 ? 0.0 : (double) linkedListExtraBytes / Math.max(arrayListExtraBytes, 1));
+        System.out.println("(keep alive to avoid dead-code elimination: " + (arrayList.size() + linkedList.size()) + ")");
     }
 
-    static long used() {
-        Runtime rt = Runtime.getRuntime();
-        return rt.totalMemory() - rt.freeMemory();
+    static long usedHeapBytes() {
+        Runtime runtime = Runtime.getRuntime();
+        return runtime.totalMemory() - runtime.freeMemory();
     }
 
-    static void gc() {
+    static void requestGarbageCollection() {
         for (int i = 0; i < 2; i++) {
             System.gc();
             try {

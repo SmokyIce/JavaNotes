@@ -62,9 +62,21 @@ w01-collections/
 
 1. 先跑 `run.bat MyArrayList`，看扩容现场，读 `MyArrayList.grow()` —— 只有十来行，把这十行看懂，
    JDK `ArrayList` 的扩容你就懂了 80%。
-2. 再跑 `run.bat`，对着结果表读 `ArrayListVsLinkedList.java` 里每个被测方法。
-   注意 `warmUp()` 和 `sink`：一个是为了让 JIT 先编译好，一个是为了防止 JIT 把循环优化掉。
-   **不写这两样，测出来的数字没有意义。**
+2. 再读 `MyArrayList.add()` 和 `remove()`：存入元素、更新个数、搬移元素分开写，
+   跟着每一步观察 `size` 和数组内容如何变化。扩容计数由每个实例单独保存。
+3. 再跑 `run.bat`，从 `ArrayListVsLinkedList.main()` 选择一个 `compare...()` 实验。
+   每个实验依次准备两种集合、传入被测操作、打印每次操作的平均耗时。
+4. 重点对照 `sumByIndex()`（反复 `get(i)`）和 `sumByIterator()`（增强 for）。
+   最后再读 `compareOperations()`、`measureNanos()` 等计时工具。
+
+`warmUp()` 用于预热，`consumedSum` 用于保存计算结果、降低无用计算被消除的风险。
+这些处理不能保证测量精确；部分实验的两种集合规模不同，表中倍率仅供本次观察。
+
+## Day 2（HashMap）任务入口
+
+第二天目前是待做计划，还没有对应 Java 实验。具体的 60 分钟安排和验收问题见
+[本周笔记的 Day 2 任务](../../../01-notes/stage1-basics/W01-Java集合.md#day-2-任务待做60-分钟)。
+先掌握存取、覆盖、冲突与扩容流程，完整手写 `MyHashMap` 留到 Day 6。
 
 ---
 

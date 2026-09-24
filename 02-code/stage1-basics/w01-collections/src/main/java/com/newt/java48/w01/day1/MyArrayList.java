@@ -8,7 +8,7 @@ import java.util.Arrays;
  * 跑一次你会亲眼看到 JDK 里的三件事：
  *   1. 构造时不分配数组（懒加载）。JDK 里 elementData 先指向
  *      DEFAULTCAPACITY_EMPTY_ELEMENTDATA，第一次 add 才真正分配 10 个槽位。
- *   2. 扩容公式：newCapacity = oldCapacity + (oldCapacity >> 1)，也就是 1.5 倍。
+ *   2. 扩容公式：newCapacity = oldCapacity + oldCapacity / 2，也就是 1.5 倍。
  *      所以 10 -> 15 -> 22 -> 33 -> 49 -> 73 -> 109 ...
  *   3. 扩容 = 申请新数组 + Arrays.copyOf 全量拷贝，是 O(n)。
  *      所以如果你能预知元素个数，new ArrayList<>(n) 直接省掉几次拷贝。
@@ -25,7 +25,7 @@ public class MyArrayList<E> {
     private int size;
 
     /** 只用来统计"一共扩容了几次" */
-    static int growCount = 0;
+    private int growCount = 0;
 
     public MyArrayList() {
         // 故意不立刻分配 10 个位置 —— JDK 也是这么干的，叫"懒加载"
@@ -37,12 +37,13 @@ public class MyArrayList<E> {
     public MyArrayList(int initialCapacity) {
         this.elementData = new Object[Math.max(initialCapacity, 0)];
         System.out.println("[new MyArrayList(" + initialCapacity + ")]  elementData.length = "
-                + elementData.length + "   <-- 一步到位，后面不用扩容");
+                + elementData.length + "   <-- 元素个数不超过初始容量时，无需扩容");
     }
 
-    public boolean add(E e) {
+    public boolean add(E element) {
         ensureCapacity(size + 1);
-        elementData[size++] = e;
+        elementData[size] = element;
+        size++;
         return true;
     }
 
@@ -56,13 +57,14 @@ public class MyArrayList<E> {
     @SuppressWarnings("unchecked")
     public E remove(int index) {
         checkIndex(index);
-        E old = (E) elementData[index];
-        int moved = size - index - 1;
-        if (moved > 0) {
-            System.arraycopy(elementData, index + 1, elementData, index, moved);
+        E removedElement = (E) elementData[index];
+        int elementsToMove = size - index - 1;
+        if (elementsToMove > 0) {
+            System.arraycopy(elementData, index + 1, elementData, index, elementsToMove);
         }
-        elementData[--size] = null;   // 置 null，别让数组一直引用着已经被删的元素（否则 GC 回收不掉）
-        return old;
+        size--;
+        elementData[size] = null;   // 置 null，别让数组一直引用着已经被删的元素（否则 GC 回收不掉）
+        return removedElement;
     }
 
     public int size() {
@@ -94,7 +96,7 @@ public class MyArrayList<E> {
             newCapacity = Math.max(DEFAULT_CAPACITY, minCapacity);
         } else {
             // 关键一行：1.5 倍，不是 2 倍
-            newCapacity = oldCapacity + (oldCapacity >> 1);
+            newCapacity = oldCapacity + oldCapacity / 2;
             if (newCapacity < minCapacity) {
                 newCapacity = minCapacity;
             }
@@ -113,30 +115,29 @@ public class MyArrayList<E> {
         }
         System.out.println();
         System.out.printf("add 100 个之后:  size=%d, capacity=%d, 扩容次数=%d%n",
-                list.size(), list.capacity(), growCount);
+                list.size(), list.capacity(), list.growCount);
         System.out.println("对照 JDK: Arrays.copyOf 后容量是 109，扩容 7 次");
         System.out.println("(10 -> 15 -> 22 -> 33 -> 49 -> 73 -> 109)");
         System.out.println("结论：100 个元素，多申请了 9 个空位，累计多拷了 202 次引用");
 
         System.out.println();
         System.out.println("========== 实验 B：删除后不缩容 ==========");
-        int before = list.capacity();
+        int capacityBeforeRemoval = list.capacity();
         for (int i = 0; i < 95; i++) {
             list.remove(0);
         }
         System.out.printf("remove 95 个之后:  size=%d, capacity=%d (删前 %d)   <-- 不缩容%n",
-                list.size(), list.capacity(), before);
+                list.size(), list.capacity(), capacityBeforeRemoval);
         System.out.println("为什么不缩容？因为缩容又是一次 O(n) 拷贝，而删完元素往往会接着加回来。");
 
         System.out.println();
         System.out.println("========== 实验 C：预设容量，同样 add 100 个 ==========");
-        growCount = 0;
         MyArrayList<Integer> preset = new MyArrayList<>(100);
         for (int i = 1; i <= 100; i++) {
             preset.add(i);
         }
         System.out.printf("size=%d, capacity=%d, 扩容次数=%d   <-- 一次都没扩%n",
-                preset.size(), preset.capacity(), growCount);
+                preset.size(), preset.capacity(), preset.growCount);
         System.out.println("这就是「知道大概多少个元素，就顺手写下初始容量」的价值。");
 
         System.out.println();
