@@ -57,3 +57,30 @@
 **项目里的实际案例：**
 
 ---
+
+### 5. HashMap 为什么线程不安全？具体丢在哪几个点？
+
+**我的回答（自己的话）：**
+
+**追问预判：**
+- 具体丢在哪？（① `++size` 读-改-写非原子 ② 并发 `resize` 互相覆盖 ③ 同桶覆盖，两个线程都读到 `null` 各建一个节点）
+- JDK 7 和 JDK 8 的问题一样吗？（JDK 7 头插法并发扩容会**成环** → `get()` 死循环 CPU 打满；JDK 8 改尾插 + lo/hi 拆链，规避成环，但**数据丢失依然存在**）
+- 怎么解决？（并发一律 `ConcurrentHashMap`；`Collections.synchronizedMap` 只能保证单次操作原子，遍历仍要自己加锁）
+- `ConcurrentHashMap` 凭什么安全？（`addCount` 用 CAS/LongAdder；桶头用 `synchronized` 锁单个节点，锁粒度细到桶；扩容支持多线程协作搬运，`sizeCtl` 防重复扩容）
+
+**项目里的实际案例：**
+
+---
+
+### 6. 既然会丢数据，为什么 JDK 不把 HashMap 直接做成线程安全的？
+
+**我的回答（自己的话）：**
+
+**追问预判：**
+- 取舍是什么？（单线程场景占绝大多数，加锁会带来无谓的同步开销；把"要不要安全"交给使用者选择）
+- 那有哪些替代？（`ConcurrentHashMap` / `Collections.synchronizedMap` / `Hashtable`）
+- `Hashtable` 为什么被淘汰了？（方法级 `synchronized`，锁整个表，并发度太低；且不允许 null key/value）
+
+**项目里的实际案例：**
+
+---

@@ -48,12 +48,14 @@ w01-collections/
 ├── run.bat / run.sh                                一键编译 + 运行（支持跨 day 按类名跑）
 ├── day1-result.txt                                 Day 1 实测输出（本机快照）
 ├── day2-result.txt                                 Day 2 实测输出（本机快照）
+├── day2-buanquan-result.txt                        Day 2 线程不安全复现的实测输出
 └── src/main/java/com/newt/java48/w01/
     ├── day1/
     │   ├── ArrayListVsLinkedList.java              7 项操作的真实耗时对比 + 内存占用
     │   └── MyArrayList.java                        手写动态数组，打印扩容现场
     └── day2/
-        └── HashMapProbe.java                       HashMap put 全流程：扰动 / 桶定位 / 冲突 / 扩容
+        ├── HashMapProbe.java                       HashMap put 全流程：扰动 / 桶定位 / 冲突 / 扩容
+        └── HashMapBuAnQuan.java                    多线程 put 丢数据的最小复现
 ```
 
 ---
@@ -98,6 +100,33 @@ w01-collections/
 
 > 实验 D 的扩容点是 `size > threshold`（严格大于），
 > 所以容量 16、阈值 12 时，第 12 个元素不触发，**第 13 个**才触发。这个边界值面试常问。
+
+## Day 2 补充实验：HashMap 线程不安全复现
+
+| # | 要验证的结论 | 命令 | 预期 |
+| :-- | :--- | :--- | :--- |
+| 1 | 多线程 put，数据会丢 | `run.bat day2.HashMapBuAnQuan` | 应放入 40000，实际**总会少一两万** |
+| 2 | 换成 `ConcurrentHashMap` 就不丢 | 改一行 `new HashMap<>()` → `new ConcurrentHashMap<>()` | 实际 = 40000，丢 **0** |
+
+做法：8 个线程，每个负责**一段互不重叠的 key 区间**，各 put 5000 个。
+互不重叠意味着"理论上一个都不该丢"—— 但只要丢了，就一定是 HashMap 自己的问题。
+
+**实测三次（JDK 17.0.12）**
+
+```text
+第 1 次   应放入 40000   实际 24979   丢了 15021
+第 2 次   应放入 40000   实际 27817   丢了 12183
+第 3 次   应放入 40000   实际 19641   丢了 20359
+对照组 ConcurrentHashMap  实际 40000   丢了 0
+```
+
+> 注意：**丢多少每次都不一样**（30%~50% 之间波动），但一定会丢。
+> 这种"结果不稳定"本身就是竞态的指纹 —— 如果它是线程安全的，无论跑多少次都该是 40000。
+
+**为什么只改了 Map 的实现类型就安全了？**
+因为 `ConcurrentHashMap` 用 CAS + synchronized 把每一处临界区都保护起来了
+（`++size` 走 `addCount` 的 CAS、桶头用 `synchronized` 锁一个节点、扩容允许多线程协作搬运）。
+而 `HashMap` 完全没有这些保护，它从头到尾都是为**单线程**设计的。
 
 ## 读代码的顺序
 
