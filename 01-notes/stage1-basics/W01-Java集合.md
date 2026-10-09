@@ -10,8 +10,8 @@
 ## 一、本周知识点
 
 - [x] ArrayList / LinkedList ← **Day 1（2026-09-22）**
-- [ ] HashMap 基本结构
-- [ ] HashMap 源码与扩容
+- [x] HashMap 基本结构 ← **Day 2（2026-10-09）**
+- [x] HashMap 源码与扩容 ← **Day 2（2026-10-09）**
 - [ ] HashSet / LinkedHashMap
 - [ ] 集合面试题
 - [ ] 手写简易 HashMap
@@ -118,6 +118,132 @@ LinkedList  extra heap:   22.91 MB   (1M x Node objects, each {prev,item,next})
 
 ---
 
+## Day 2 · 2026-10-09（周五）HashMap 结构与 put 全流程
+
+> 断档 17 天后重启。按里程碑制的规则，**不补课**，直接接 Day 2。
+
+### 0. 顺带解决的一个疑问：`size` 的初始值在哪？
+
+翻 `MyArrayList` 时发现 `private int size;` 找不到赋值的地方 —— 因为**根本不用赋值**：
+
+- Java 的**成员变量**由编译器补默认值：`int` → `0`，引用类型 → `null`，`boolean` → `false`。
+- JVM 分配对象内存时会把整块内存**归零**，这一步在构造函数第一行**之前**。
+  所以构造函数里的 `this.elementData = new Object[0];` 是**覆盖** `null`，不是第一次赋值。
+- 对照：**局部变量**必须手动初始化，否则编译报错（`variable a might not have been initialized`）。
+
+> 连带记一条：`new int[10]` 是 `[0,0,...]`，`new Integer[10]` 是 `[null,...]`。
+> 基本类型数组归零成 `0`，引用数组归零成 `null` —— 隐蔽 Bug 的常见来源。
+
+### 1. 知识点
+
+**put 的完整链路（JDK 8）**
+
+```text
+put(key, value)
+   ↓
+① hash(key)          = (h = key.hashCode()) ^ (h >>> 16)     ← 扰动
+   ↓
+② 定位桶             = (n - 1) & hash                        ← 等价于 hash % n，但前提 n 是 2 的幂
+   ↓
+③ 桶为空             → 直接放新 Node
+   桶不为空           → 比较 hash 和 equals
+                        相同 key → 覆盖 value，返回旧值
+                        不同 key → 挂到链表尾（尾插，JDK 8；JDK 7 是头插）
+   ↓
+④ 链表长度 ≥ 8 且容量 ≥ 64 → 树化成红黑树（< 6 退化为链表）
+   ↓
+⑤ ++size > threshold → resize()，容量翻倍，threshold = capacity * 0.75
+```
+
+**三个必须能解释的点**
+
+1. **为什么要扰动 `h ^ (h >>> 16)`？**
+   `(n-1) & hash` 只取 hash 的**低位**（容量 16 时只看低 4 位）。
+   如果一批 key 的 hashCode 高位不同、低位相同，不扰动就会全挤进一个桶，链表退化 O(n)。
+   异或 `h >>> 16` 把高 16 位掺进低 16 位，让低位也带上高位的随机性。成本只有一次移位 + 一次异或。
+
+2. **为什么容量必须是 2 的幂？**
+   因为 `(n-1) & hash` 只有在 n 是 2 的幂时才等价于 `hash % n`。
+   取模指令慢，位运算快 —— 这是"用空间形态换计算速度"。
+   也解释了 `new HashMap<>(17)` 会被 `tableSizeFor` 向上取整成 32。
+
+   3. **扩容后元素的新位置为什么只有两种可能？**
+      容量从 16 变 32，`n-1` 从 `0b1111` 变成 `0b11111`，**只多了一位**。
+      所以 `(新n-1) & hash` 相比旧值，要么不变，要么加上 16（旧容量）。
+      JDK 8 因此不重算 hash，只看"新增的那一位"是 0 还是 1，把一条链拆成 lo / hi 两条 —— 这是相对 JDK 7 的主要性能优化之一。
+
+      **补：JDK 7 为什么不行？**
+      JDK 7 扩容要对每个元素**重新计算下标**，而且插入用**头插法**。
+      头插在并发扩容时会让链表**成环** → `get()` 死循环 → CPU 打满，
+      这就是著名的「HashMap 并发死循环」问题。JDK 8 改成尾插 + 拆链，规避了它。
+      但根本结论不变：**HashMap 天生不支持并发，要并发用 `ConcurrentHashMap`。**
+
+   4. **put 返回值有个隐蔽的坑**
+      `put` 返回被覆盖的旧值，首次插入返回 `null`；
+      但如果**插入的 value 本身就是 `null`**，返回值也是 `null` —— 两种情况无法区分。
+      要"仅当不存在才写入"，应该用 `putIfAbsent` / `computeIfAbsent`：
+
+      ```java
+      map.putIfAbsent("a", 99);              // 存在则不动，返回旧值
+      map.computeIfAbsent("b", k -> 100);    // 不存在才计算并放入
+      ```
+
+### 2. 代码 / 实验
+
+- 新增：`src/main/java/com/newt/java48/w01/day2/HashMapProbe.java`
+- 运行：`run.bat day2.HashMapProbe`（脚本已改成支持带包名）
+- 实测原件：`day2-result.txt`
+
+**六个实验的关键读数**
+
+```text
+实验 A  "hello" → hashCode 99162322 → 扰动后 99163451 → 桶下标 11（容量 16）
+
+实验 B  4 个低位全为 1 的 hash：
+          不扰动 → 全部落在下标 1（全撞一起）
+          扰动后 → 分别落到 0 / 3 / 2 / 5
+
+实验 C  "Aa" 和 "BB" 的 hashCode 都是 2112 → 同桶，但 equals 为 false → 是两个 key
+
+实验 D  容量 16 → 第 13 个元素扩容到 32（阈值 12）
+        容量 32 → 第 25 个元素扩容到 64（阈值 24）
+        容量 64 → 第 49 个元素扩容到 128（阈值 48）
+
+实验 E  旧容量 16 → 新容量 32，8 个 key 里：5 个 "+16"，3 个"不动"
+
+实验 F  put("k",100) → null      size 1
+        put("k",200) → 100       size 1（覆盖不算新增）
+        put("k",null) → 200      get("k") = null
+```
+
+### 3. 踩坑：JDK 9+ 反射读 HashMap 内部字段会被模块系统拦住
+
+第一次运行直接抛：
+
+```text
+java.lang.reflect.InaccessibleObjectException: Unable to make field
+transient java.util.HashMap$Node[] java.util.HashMap.table accessible:
+module java.base does not "opens java.util" to unnamed module @85ede7b
+```
+
+**原因**：JDK 9 引入模块系统（JPMS）后，`java.base` 模块默认不对外 `opens` 内部包，
+`setAccessible(true)` 会被拒绝 —— 这是**故意设计的封装保护**，不是 Bug。
+
+**解决**（两条路都留了）：
+
+1. 启动参数显式开一个口子（已写进 `run.bat` / `run.sh`）：
+   ```bash
+   java --add-opens java.base/java.util=ALL-UNNAMED -cp out ...
+   ```
+2. 代码里先做一次性探测（`probeReflect()`），拿不到内部状态就退回**用 size 推算容量**
+   （容量 16 装到 12、32 装到 24……），保证没加参数时程序也不崩。
+
+> 顺带理解 `--add-opens` / `--add-exports` 的区别：
+> `--add-opens` 允许**反射读写**（含 `setAccessible`），`--add-exports` 只允许**编译期/运行期直接访问**。
+> 要反射内部字段，必须用 `--add-opens`。
+
+---
+
 ## 二、核心问题（能用自己的话脱稿讲出来，才算学会）
 
 > 先自己写。写不出来的先空着，回头翻上面的知识点，**不要直接抄**。
@@ -144,6 +270,32 @@ LinkedList  extra heap:   22.91 MB   (1M x Node objects, each {prev,item,next})
    >
 
 6. 什么场景下你真的该用 LinkedList？举一个业务里可能出现的例子。
+
+   >
+
+### Day 2 · HashMap 核心问题
+
+7. `HashMap` 的 `hash()` 为什么要写成 `h ^ (h >>> 16)`？不做扰动会怎样？
+
+   >
+
+8. 为什么 HashMap 的容量必须是 2 的幂？`new HashMap<>(17)` 实际容量是多少？
+
+   >
+
+9. 同一个 key 连续 `put` 三次，`size` 分别是多少？返回值分别是什么？
+
+   >
+
+10. 扩容时为什么不用重新计算每个元素的 hash？新下标为什么只有两种可能？
+
+   >
+
+11. JDK 8 把链表头插改成了尾插，为什么？（提示：想想并发扩容时头插会出什么事）
+
+   >
+
+12. `new int[10]` 和 `new Integer[10]` 里的元素分别是什么？为什么？
 
    >
 
@@ -228,6 +380,7 @@ Day 6（待做）    手写 MyHashMap：put / get / resize 三段
 | :--- | :--- | :--- | ---: | :--- | :--: |
 | 2026-09-22 | 一 | ArrayList / LinkedList 底层结构（与周二合并执行） | 35 | 本笔记「知识点」 | [x] |
 | 2026-09-22 | 二 | 实测 7 项操作耗时 + 内存占用 + 手写扩容现场 | 40 | `w01-collections/day1-result.txt` | [x] |
+| 2026-10-09 | 五 | HashMap put 全流程：扰动 / 桶定位 / 冲突 / 扩容（断档 17 天后重启） | 55 | `day2/HashMapProbe.java` + `day2-result.txt` | [x] |
 |  | 三 |  |  |  |  |
 |  | 四 |  |  |  |  |
 |  | 五 |  |  |  |  |

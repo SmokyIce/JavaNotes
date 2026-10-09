@@ -1,0 +1,101 @@
+=== Day 2 Lab : HashMap put 全流程 ===
+java.version = 17.0.12
+
+========== 实验 A：key → hashCode → 扰动 → 下标 ==========
+  put 第一个元素后             size=1   capacity=16   threshold=12  
+  key            = "hello"
+  hashCode()     = 99162322   (0x5e918d2)
+  hash()扰动后   = 99163451   (0x5e91d3b)
+  capacity       = 16
+  (n-1) & hash   = 11   <-- 最终落在哪个桶
+
+  注意：(n-1) & hash 能代替 % 的唯一前提是 n 是 2 的幂。
+        16-1 = 0b1111，与运算只取 hash 的低 4 位 —— 这就是为什么容量必须是 2 的幂。
+
+========== 实验 B：不扰动会怎样 ==========
+  假设 capacity = 16，即 n-1 = 0b1111，只看 hash 的低 4 位。
+
+  key    rawHash(hex)   raw低4位            不扰动下标      扰动后下标
+  key1   0x11110001     0x1               1          0
+  key2   0x22220001     0x1               1          3
+  key3   0x33330001     0x1               1          2
+  key4   0x44440001     0x1               1          5
+
+  看出问题了：这 4 个 key 的低 4 位全是 1，
+  如果不做扰动，它们会全部挤进同一个桶，链表退化成 O(n)。
+  h ^ (h >>> 16) 把高 16 位掺进低 16 位，让低位也带上高位的随机性。
+
+========== 实验 C：哈希冲突长什么样 ==========
+  经典冲突对："Aa" 和 "BB"
+  "Aa".hashCode() = 2112
+  "BB".hashCode() = 2112
+  两者 hashCode 相同 → 落在同一个桶 → 桶内挂链表区分
+  "Aa" 下标 = 0   "BB" 下标 = 0   → 确实同桶（桶内是链表）
+  两者 equals 为 false → 所以是两个不同的 key，都能存进去
+
+  记住三句话：
+    ① hashCode 相同，equals 不一定相同  → 允许，叫哈希冲突
+    ② equals 相同，hashCode 必须相同    → 这是契约，违反会导致 get 不到
+    ③ 所以自己写 key 类时，这两个方法要么都重写，要么都不重写
+
+========== 实验 D：什么时候扩容 ==========
+  规则：size > threshold 时扩容，threshold = capacity * loadFactor(0.75)
+
+  put 第 1 个后             size=1   capacity=16   threshold=12  
+  put 第 12 个后            size=12  capacity=16   threshold=12  
+  put 第 13 个后            size=13  capacity=32   threshold=24  
+  put 第 24 个后            size=24  capacity=32   threshold=24  
+  put 第 25 个后            size=25  capacity=64   threshold=48  
+  put 第 48 个后            size=48  capacity=64   threshold=48  
+  put 第 49 个后            size=49  capacity=128  threshold=96  
+
+  规律：
+    容量 16 → 阈值 12 → 第 13 个元素触发扩容到 32
+    容量 32 → 阈值 24 → 第 25 个元素触发扩容到 64
+    容量 64 → 阈值 48 → 第 49 个元素触发扩容到 128
+  扩容是翻倍，所以容量永远是 2 的幂，这又保证了 (n-1)&hash 成立。
+
+========== 实验 E：扩容后，元素的新下标只有两种可能 ==========
+  旧容量 = 16，新容量 = 32。对每个元素：
+    新下标 = (32-1) & hash
+    而 (32-1) 比 (16-1) 只多了最高那一位（第 5 位）。
+    所以结果要么不动，要么加上 16（旧容量）。
+
+  key               hash(hex)        旧下标        新下标         变化
+  "Aa"           0x00000840          0          0         不动
+  "BB"           0x00000840          0          0         不动
+  "hello"        0x05E91D3B         11         27       + 16
+  "world"        0x06C11D53          3         19       + 16
+  "java"         0x0031AA13          3         19       + 16
+  "map"          0x0001A55D         13         29       + 16
+  "put"          0x0001B30E         14         14         不动
+  "get"          0x00018F57          7         23       + 16
+
+  JDK 8 的优化：不重新算 hash，只看 hash 里新增的那一位是 0 还是 1。
+    是 0 → 留在原下标（lo 链）
+    是 1 → 移到 原下标 + oldCap（hi 链）
+  所以扩容时只是把一条链拆成两条，不用重新计算每个元素的 hash。
+
+  【对比 JDK 7】JDK 7 扩容时要对每个元素重新计算下标，而且用的是**头插法**。
+  头插在并发扩容时会让链表成环，进而导致 get() 死循环、CPU 打满 ——
+  这就是著名的 HashMap 并发死循环问题。JDK 8 改成尾插 + 拆链，规避了这个问题。
+  （但要记住：HashMap 本来就不支持并发，要并发请用 ConcurrentHashMap。）
+
+========== 实验 F：put 到底返回什么 ==========
+  第一次 put("k", 100) → 返回 null   (返回被覆盖的旧值；首次插入没有旧值所以是 null)
+      size = 1
+  第二次 put("k", 200) → 返回 100   (旧值 100，被覆盖)
+      size = 1   (没有变！覆盖不算新增)
+  第三次 put("k", null)  → 返回 200   (旧值 200)
+      get("k") = null   (value 可以是 null)
+
+  三个结论：
+    ① put 返回被覆盖的旧值，首次插入返回 null
+    ② 覆盖已有 key，size 不变 —— 所以 map.size() 不等于 put 过的次数
+    ③ 单看返回值无法区分首次插入和插入 null —— 面试常问的坑
+       要区分得用 containsKey，或者 computeIfAbsent
+
+  【正确写法】如果业务要求「仅当不存在时才写入」，用 putIfAbsent 或 computeIfAbsent：
+    putIfAbsent("a", 99) 返回 1，结果 a = 1（没被覆盖）
+    computeIfAbsent("b", k -> 100) 返回 100，结果 b = 100
+

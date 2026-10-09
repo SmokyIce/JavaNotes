@@ -1,54 +1,35 @@
-\---  
-title: 今天做什么  
-date: 2026-10-09  
-weekday: 周五  
-milestone: M0 · 收尾  
-task: W01 任务 #1 — HashMap 结构与 put 全流程  
-\---
+---
+title: 今天做什么
+date: 2026-10-09
+weekday: 周五
+milestone: M0 · 收尾
+task: W01 任务 #1 — HashMap 结构与 put 全流程
+status: 已完成
+---
 
-# 今天 · 2026-10-09（周五）
+# 今天 · 2026-10-09（周五）· 已完成
 
-> 断档 17 天后重启。今天**不补课**，直接从 W01 的下一个小步走。  
-> 目标只有一件事：**把 HashMap 的 put 流程搞明白，并留下一份笔记。**
+> 断档 17 天后重启成功。60 分钟时间盒跑完，产出了可运行代码 + 笔记。
+
+## 完成情况
+
+| 产出 | 位置 |
+| :--- | :--- |
+| 代码 | `02-code/stage1-basics/w01-collections/.../day2/HashMapProbe.java`（6 个实验） |
+| 实测快照 | `.../w01-collections/day2-result.txt` |
+| 笔记 | `01-notes/stage1-basics/W01-Java集合.md` Day 2 小节 + 6 个核心问题（留空自测） |
+| 工程改动 | `run.bat` / `run.sh` 支持带包名跑；README 补 Day 2 清单 |
+
+**额外解决的两个问题**（都进了笔记）
+
+1. `MyArrayList.size` 找不到初始化 —— 成员变量由编译器补默认值，JVM 分配对象时内存归零。
+2. JDK 9+ 反射读 `HashMap.table` 被模块系统拦截 —— 用 `--add-opens` + 代码内降级探测解决。
 
 ---
 
-## 时间盒（60 分钟）
+# 明天排期（2026-10-10 周六）
 
-| 段   | 时长 | 做什么                                                     | 完成标志                    |
-| :-- | -: | :------------------------------------------------------ | :---------------------- |
-| 复习  | 10 | 翻 Day 1 笔记的「一句话总结」，口头复述一遍 ArrayList vs LinkedList       | 能用 3 句话讲完               |
-| 学新  | 20 | 理解 key → 桶的全过程：`hash()` 扰动、`(n-1) & hash` 定位、冲突用链表/红黑树  | 能画出两个 key 落同一桶的草图       |
-| 写代码 | 20 | 跑 3 个小实验：新增两个键 / 覆盖一个键 / 查不存在的键                         | 打印出返回值与 size，**先预测再运行** |
-| 输出  | 10 | 把上面写进 `01-notes/stage1-basics/W01-Java集合.md` 的 Day 2 小节 | 笔记「核心问题」有 3 条个人回答       |
+**M0 任务 #2 + #4**：手写 `MyHashMap`（降级版：只写 put / get / resize 三段）
++ 把今天的题目整理进 `04-interview/question-bank/Java基础.md`。
 
----
-
-## 今天必须搞懂的三个问题
-
-1. HashMap 怎么从 key 找到桶？**为什么要对 `hashCode` 再异或一次 `>>> 16`？**
-2. 同 次，返回什么？`size` 变不变？
-3. 什么时候扩容？**JDK 8 扩容后元素的新位置为什么只有两种可能？**
-
----
-
-## 代码落点                                   
-
-- 目录：`02-code/stage1-basics/w01-collections/`
-- 今天新增：`src/main/java/com/newt/java48/w01/day2/HashMapProbe.java`
-  - 打印 `hash(key)` 结果、桶下标 `(n-1) & hash`
-  - 制造一次哈希冲突，用 `HashMap` 的容量变化证明扩容时机
-  - 打印 `put` 覆盖时的旧值返回值
-- 复用现有 `run.bat` / `run.sh`，用法：`run.bat day2.HashMapProbe`
-
----
-
-## 收工检查
-
-- [ ] 60 分钟真的坐了（可以不足 60，但要有"打开 IDE 并写了东西"）
-- [ ] 三个问题能用自己的话答出来
-- [ ] `HashMapProbe` 跑出了结果
-- [ ] W01 笔记的 Day 2 小节有内容（不是空白）
-
-> 做完这些，今天就是成功的一天。剩下 W01 的其他任务（MyHashMap、面试题整理）留给明天，  
-> **今天不贪。**
+> 优先做 MyHashMap 的 `put` + `resize`，这两段是理解"为什么扩容只拆两条链"的最快路径。
