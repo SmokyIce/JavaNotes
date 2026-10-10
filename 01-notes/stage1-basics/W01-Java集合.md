@@ -313,11 +313,11 @@ module java.base does not "opens java.util" to unnamed module @85ede7b
 
 **Q2.** 为什么 HashMap 的容量必须是 2 的幂？`new HashMap<>(17)` 实际容量是多少？
 
-答：
+答：可以用(n-1)\&hash代替%运算。容量为32
 
 **Q3.** 同一个 key 连续 `put` 三次，`size` 分别是多少？返回值分别是什么？
 
-答：
+答：1，1，1，返回值为null，第一次存入的值，第二次存入的值
 
 **Q4.** 扩容时为什么不用重新计算每个元素的 hash？新下标为什么只有两种可能？
 
