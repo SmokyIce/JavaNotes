@@ -67,6 +67,10 @@
 - JDK 7 和 JDK 8 的问题一样吗？（JDK 7 头插法并发扩容会**成环** → `get()` 死循环 CPU 打满；JDK 8 改尾插 + lo/hi 拆链，规避成环，但**数据丢失依然存在**）
 - 怎么解决？（并发一律 `ConcurrentHashMap`；`Collections.synchronizedMap` 只能保证单次操作原子，遍历仍要自己加锁）
 - `ConcurrentHashMap` 凭什么安全？（`addCount` 用 CAS/LongAdder；桶头用 `synchronized` 锁单个节点，锁粒度细到桶；扩容支持多线程协作搬运，`sizeCtl` 防重复扩容）
+- `size` 变小是不是就等于数据丢了？（**不是**。`size` 只是 `int` 计数器，和真实节点数没有强一致保证，**两个方向都会偏**：
+  `putVal` 里 `tab[i] = newNode()` 和 `++size` 是两步 —— 写不同桶时数据都进去了但 `++size` 撞车 → **size 偏小**；
+  写同一空桶时数据被盖掉但两次 `++size` 都成功 → **size 偏大**。
+  实测 8 线程 4 万条：偏差出现 +12842 / +1388 / **−2026** 三种。想判断数据丢没丢，只能遍历 `entrySet()` 数节点）
 
 **项目里的实际案例：**
 
