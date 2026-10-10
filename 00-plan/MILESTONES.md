@@ -75,7 +75,7 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 | 2 | 手写 MyHashMap | Day 6 | **降级**：只写 `put/get/resize` 三段核心，不追求完整 | `02-code/.../w01-collections/` 新增类 |
 | 3 | HashMap 扩容观察实验 | Day 3 | 合并进 #1 | 打印扩容现场 |
 | 4 | 集合面试题整理 | Day 5 | **提前到现在**，边走边攒 | `04-interview/question-bank/Java基础.md` |
-| 5 | HashSet / LinkedHashMap | Day 4 | **砍掉**：知道是"包装 HashMap"即可，20 分钟口头过 | 笔记一句话 |
+| 5 | HashSet / LinkedHashMap | Day 4 | **实际做成了完整一节 + 10 个实验**（原判"砍掉"过于激进：它们是 HashMap 的两种复用方式，不讲透 Day 2 就悬着） | 笔记「Day 3」一节 + `day3-result.txt` |
 | 6 | 全周总结 / 复述 | Day 7 | 封板时做 | 笔记「每日打卡」补完 |
 
 **M0 完成定义**：笔记 W01 的「本周知识点」6 个勾全勾上、「每日打卡」7 行有内容、

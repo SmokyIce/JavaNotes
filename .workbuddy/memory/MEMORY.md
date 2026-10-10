@@ -23,8 +23,16 @@
 **为什么改**：2026-09-22 跑完 W01 Day 1 后停了 17 天（学员"忙别的去了"）。
 周次制会产生"欠账感"——计划说第 3 周学并发、实际第 5 周才学到，于是每天都在还账，最后不看计划表。
 
-**当前状态**：M0（收尾）进行中 = 把 W01 做完封板。W01 任务已按性价比重排：
-保留 HashMap put 全流程 + 面试题整理；手写 MyHashMap 降级为只写 put/get/resize；HashSet/LinkedHashMap 砍掉。
+**当前状态**：M0（收尾）进行中 = 把 W01 做完封板。
+
+- Day 1（09-22）ArrayList / LinkedList ✅
+- Day 2（10-09）HashMap put 全流程 + 线程不安全复现 ✅
+- Day 3（10-10）**HashSet / LinkedHashMap 完整一节 + 10 个实验** ✅
+  （MILESTONES 里原本标着"砍掉"，学员主动点名要教程 → 已订正为保留）
+- 剩余：手写 MyHashMap（降级版 put/get/resize）、集合面试题补"我的回答"、全周复述封板
+
+**待办 #4「集合面试题」已部分完成**：`04-interview/question-bank/Java基础.md` 已有 10 道题（含追问预判），
+但「我的回答」栏全空着，等学员自己填。
 
 
 ## 目录职责（不要混）
@@ -53,6 +61,9 @@
 
 - Bash 工具默认 PATH 损坏（`ls: command not found`）。用命令前先 `export PATH="/usr/bin:/bin:/c/Windows/System32"`，或改用 PowerShell
 - PowerShell 工具不返回 stdout，需要看输出时把结果写进临时文件再 Read
+- **核对 JDK 源码**：`jar xf "/c/Program Files/Java/jdk-17/lib/src.zip" java.base/java/util/HashSet.java`
+  —— zip 条目前缀是 `java.base/`，写错前缀会静默失败
+- javac 的中文报错在 Git Bash 下是 GBK 乱码，靠 `文件:行号:` 定位，别读文案
 
 ## 学员偏好
 

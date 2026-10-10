@@ -1,0 +1,120 @@
+=== Day 3 Lab : HashSet / LinkedHashMap ===
+java.version = 17.0.12   maxHeap = 4030 MB   reflect = OK
+
+---- 实验 A：反射看 HashSet 的内部 ----
+  HashSet.map 的真实类型   : java.util.HashMap
+  HashSet 元素个数          : 3   （内部 map.size() = 3）
+  value 的运行时类型        : java.lang.Object
+  value 的 identityHashCode : 2093631819
+  不同 value 的个数(按引用)  : 1  ← 3 个元素只有 1 种 value
+  value 就是 PRESENT 常量吗 : true
+  map 里真实存的键值对      : 
+      key=banana   value=java.lang.Object@7cca494b  (value.hashCode=2093631819)
+      key=apple   value=java.lang.Object@7cca494b  (value.hashCode=2093631819)
+      key=cherry   value=java.lang.Object@7cca494b  (value.hashCode=2093631819)
+
+  源码里这几个方法都是单行：
+      add(e)      -> map.put(e, PRESENT) == null
+      contains(o) -> map.containsKey(o)
+      remove(o)   -> map.remove(o) == PRESENT
+      size()      -> map.size()
+
+---- 实验 B：add / remove 的返回值语义 ----
+  add("a")     -> true     size=1
+  add("a") 再来 -> false    size=1   ← 重复元素被吃掉
+  add("a") 三来 -> false    size=1
+  remove("a")  -> true     size=0
+  remove("a") 再来 -> false    size=0
+  remove("不存在") -> false    size=0
+
+---- 实验 C：去重，是 hashCode 和 equals 一起干的 ----
+  C1 只重写 hashCode，塞两个 (1,2)   -> size = 2   ← 期望 1，实际 2：桶对了，但桶内 equals 用的是地址比较
+  C2 只重写 equals，塞两个 (1,2)     -> size = 2   ← 期望 1，实际 2：equals 对了，但两个对象根本不在一个桶里
+  C3 两个都重写，塞两个 (1,2)        -> size = 1   ← 这才是对的
+
+  C4 可变对象当 key：
+      放入 (x=1) 后 contains -> true    size=1
+      把 x 改成 2 后 contains -> false   size=1   ← 对象还在里面，却再也查不到了
+      直接遍历能看见它吗     -> 
+          KeBian{x=2}  ← 它在集合里，只是被「弄丢」了
+
+---- 实验 D：contains 的复杂度对比 ----
+  元素规模 200000，随机探测 5000 次
+  实现                              总耗时(ns)         每次(ns)
+  ArrayList.contains           1879621200      375924.24
+  HashSet.contains                1049500         209.90
+  ArrayList / HashSet = 1791.0 倍
+  注：O(1) 和 O(n) 的差距，直观表现就是**随 n 线性拉开**。
+
+---- 实验 E："无序"到底有多无序 ----
+  E1 装 1..12 打印     : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+      ↑ 看着挺有序？假象。Integer.hashCode()=本身，容量 16 时 n&15=n。
+
+  E2 同样的 12 个字符串，插入顺序 = [delta, alpha, charlie, bravo, echo, golf, hotel, india, juliet, kilo, lima, mike]
+     装进 new HashSet<>(16) : [bravo, golf, juliet, kilo, lima, mike, alpha, delta, hotel, echo, india, charlie]
+     装进 new HashSet<>(64) : [mike, delta, echo, india, bravo, golf, kilo, alpha, hotel, lima, juliet, charlie]
+     同样元素、同样插入顺序，容量不同 → 顺序不同。这就是'无序'。
+     想要顺序：LinkedHashSet（插入序）或 TreeSet（排序）。
+
+---- 实验 F：遍历中修改集合 ----
+  F1 增强 for + remove(命中)     -> ConcurrentModificationException ✓
+  F2 增强 for + remove(不存在)   -> 正常结束，没抛   ← 因为 modCount 根本没变，不是它安全
+  F3 iterator.remove()           -> 正常结束，剩下 [a, c]
+  F4 removeIf("b"::equals)      -> 正常结束，剩下 [a, c]
+
+---- 实验 G：LinkedHashMap 的插入序 / 访问序 ----
+  插入顺序                : delta alpha charlie bravo echo golf
+  HashMap                 : [bravo, golf, alpha, delta, echo, charlie]
+  LinkedHashMap(默认)     : [delta, alpha, charlie, bravo, echo, golf]
+  LinkedHashMap(访问序)   : [delta, alpha, charlie, bravo, echo, golf]   ← 还没访问，暂时一样
+
+  get("charlie") 之后：
+      LinkedHashMap(默认)   : [delta, alpha, charlie, bravo, echo, golf]   ← 没动
+      LinkedHashMap(访问序) : [delta, alpha, bravo, echo, golf, charlie]   ← charlie 被挪到队尾
+  再 get("delta")、get("alpha") 之后：
+      LinkedHashMap(访问序) : [bravo, echo, golf, charlie, delta, alpha]
+      ↑ 队首 = 最久没被访问的，队尾 = 最近访问的。这就是 LRU 的原料。
+
+  LinkedHashSet           : [delta, alpha, charlie, bravo, echo, golf]   ← 保持插入序
+  TreeSet（对照，会排序） : [alpha, bravo, charlie, delta, echo, golf]
+
+---- 实验 H：6 行代码的 LRU ----
+  容量 3，依次 put a..e：
+      put(a) 后 -> [a]   size=1
+      put(b) 后 -> [a, b]   size=2
+      put(c) 后 -> [a, b, c]   size=3
+        淘汰最久未使用的：a（removeEldestEntry 调用时新元素已插入，所以此刻 size = 4）
+      put(d) 后 -> [b, c, d]   size=3
+        淘汰最久未使用的：b（removeEldestEntry 调用时新元素已插入，所以此刻 size = 4）
+      put(e) 后 -> [c, d, e]   size=3
+
+  演示「访问改变淘汰顺序」：
+      get("d") 让 d 变成最新 -> 命中，顺序 [c, e, d]
+        淘汰最久未使用的：c（removeEldestEntry 调用时新元素已插入，所以此刻 size = 4）
+      put(f) 后 -> [e, d, f]   ← 淘汰的是队首 c，刚 get 过的 d 保住了（这就是 LRU 想要的行为）
+
+  坑演示：把 `>` 写成 `>=`
+      容量声明 3，实际只留住了 2 个：[d, e]
+
+---- 实验 I：迭代速度对比（HashMap vs LinkedHashMap） ----
+  曾经放入 300000 个，现在各剩 1000 个
+  HashMap       table 长度（容量）: 524288
+  LinkedHashMap table 长度（容量）: 524288
+  遍历方式                                总耗时(ns)           每次(ns)
+  for-each HashMap                   14998200           749910
+  for-each LinkedHashMap               707000            35350
+  HashMap / LinkedHashMap = 21.2 倍
+  原因：HashMap 要扫完 524288 个桶（绝大多数是 null），LinkedHashMap 只走 1000 个链节点。
+
+---- 实验 J：LinkedHashMap 多花多少内存 ----
+  各放 500000 个 <Integer,Integer>
+  实现                        额外堆(MB)            字节/元素
+  HashMap                     36.55             76.7
+  LinkedHashMap               40.43             84.8
+  差值                           3.88              8.1
+  理论差值 = 2 个引用 × 4 字节（压缩指针）= 8 字节/元素
+  → 差值 = 8.135792 字节/元素，量级对得上
+  注：Runtime 读数含 GC / 装箱对象的噪声，只看数量级。key 和 value 都装箱了，两边一样，所以差值才是干净的（这就是为什么做'差值'而不是绝对值）。
+
+
+=== 全部实验结束（keep alive: 1794828987） ===

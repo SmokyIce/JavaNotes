@@ -12,7 +12,7 @@
 - [x] ArrayList / LinkedList ← **Day 1（2026-09-22）**
 - [x] HashMap 基本结构 ← **Day 2（2026-10-09）**
 - [x] HashMap 源码与扩容 ← **Day 2（2026-10-09）**
-- [ ] HashSet / LinkedHashMap
+- [x] HashSet / LinkedHashMap ← **Day 3（2026-10-10）**
 - [ ] 集合面试题
 - [ ] 手写简易 HashMap
 
@@ -184,6 +184,85 @@ put(key, value)
       map.computeIfAbsent("b", k -> 100);    // 不存在才计算并放入
       ```
 
+**扩容其实有两条触发路径（第二条大多数人不知道）**
+
+| # | 触发条件 | 什么时候发生 |
+| :--- | :--- | :--- |
+| ① | `++size > threshold`（阈值 = 容量 × 0.75） | 元素总数超了承载能力。容量 16 → 第 **13** 个触发；32 → 第 **25** 个；64 → 第 **49** 个 |
+| ② | 桶内链表变长，**且容量 < 64** | 个别桶太挤。此时**不树化，而是扩容** |
+
+第 ② 条的源码依据在 `treeifyBin()` 的第一行：
+
+```java
+if (tab == null || (n = tab.length) < MIN_TREEIFY_CAPACITY)
+    resize();          // 容量还没到 64？先扩容，别急着树化
+else
+    ...树化...
+```
+
+`MIN_TREEIFY_CAPACITY = 64`。所以「链表到 8 个就变红黑树」这句话**不完整** ——
+容量 < 64 时走的是**扩容**，容量 ≥ 64 才真的树化。
+设计意图：桶不够多的时候，冲突多半是「桶太少」造成的，拆桶比树化更划算。
+
+**实测（`HashMapKuoRong.java`，用 hashCode 恒为 0 的 key 制造极端冲突）**
+
+```text
+第 8 个   容量 16   阈值 12   size 8
+第 9 个   容量 32   ← 扩容 16→32 ｜ 链表变到 9 个，容量 < 64，链表触发（size 9 还没超阈值 12！）
+第 10 个  容量 64   ← 扩容 32→64 ｜ 同上（size 10 也没超阈值 24）
+第 11 个  容量 64   （已到 64，不再扩容，转为树化）
+  ...
+第 49 个  容量 128  ← 扩容 64→128 ｜ size 49 > 阈值 48，这回才是 size 触发
+```
+
+> **反直觉点**：16 → 32、32 → 64 这两次，在**这个实验里都是「链表触发」的**，
+> 根本不是 size 到 13、25 触发的 —— 因为所有 key 挤在同一个桶，链表很快就超了。
+> key 分布均匀时，走的才是「第 13 个 / 第 25 个」那条路。
+> **两条路最终都调同一个 `resize()`，所以容量永远是 2 的幂。**
+
+**扩容时，桶里的链表怎么分？（实测）**
+
+扩容不重算 hash，只看 `hash & oldCap` 这一位：
+
+| `hash & oldCap` | 去哪 |
+| :--- | :--- |
+| 0 | 留在原下标（lo 链） |
+| 非 0 | 移到 原下标 + oldCap（hi 链） |
+
+所以「桶 0 里的元素扩容后去哪」**不是固定的** —— 要看每个元素自己的 hash 在第 5 位上是 0 还是 1。
+
+**实测（`HashMapChaiLian.java`）**
+
+实验 A：4 个 key 的 hash 取 `0x00 / 0x10 / 0x20 / 0x30`，低 4 位全是 0 → 容量 16 时全挤在桶 0。
+
+```text
+扩容到 32 后：
+  k0(hash=0x00) → 桶 0    （hash & 16 == 0  → 留）
+  k1(hash=0x10) → 桶 16   （hash & 16 == 16 → 走）
+  k2(hash=0x20) → 桶 0    （留）
+  k3(hash=0x30) → 桶 16   （走）
+```
+
+桶 0 被劈成了「桶 0」+「桶 16」两条链。
+
+实验 B：**如果桶里所有元素的 hash 完全相同，就拆不动了** ——
+
+```text
+用 hashCode 恒为 0 的 key 塞 11 个：
+  第 9 个   容量 16 → 32    仍在桶 0
+  第 10 个  容量 32 → 64    仍在桶 0
+  第 11 个  容量 64         仍在桶 0
+```
+
+容量一路在涨，元素**始终在桶 0**。因为扩容不改变 hash，只是让**更多位**参与下标计算；
+hash 高位全是 0 → 新增的位永远是 0 → `(n-1) & 0` 永远是 0。
+
+> **两条结论**
+> 1. **不是「第几个元素」决定去哪，是「每个元素自己的 hash」决定去哪。**
+>    桶 0 里的第 9 个和第 1 个地位完全一样，各按自己的 hash 归位。
+> 2. 同桶元素能被拆开的前提，是它们的 hash 在**新增那一位**上有差异。
+>    hash 全相同（比如自己写的 `hashCode` 恒返回常量）时，扩容只会让桶变多，**救不了这个桶**。
+
 ### 2. 代码 / 实验
 
 - 新增：`src/main/java/com/newt/java48/w01/day2/HashMapProbe.java`
@@ -326,6 +405,295 @@ module java.base does not "opens java.util" to unnamed module @85ede7b
 
 ---
 
+## Day 3 · 2026-10-10（周六）HashSet / LinkedHashMap
+
+> `MILESTONES.md` 的任务 #5 本来标着"砍掉 —— 知道是包装 HashMap 即可"。
+> 实际做成了完整一节 + 10 个实验，因为这两块**不是两个新容器，而是 HashMap 的两种复用方式**：
+> 一个把 value 抽掉变成 Set，一个给节点缝上一条双向链表。
+> 这一节看完，Day 2 的 HashMap 才算真懂。
+
+### 1. 先把四个容器摆在一起
+
+| 容器             | 本质                          | 比 HashMap 多出来的东西        | 迭代顺序     | 单元素查找    |
+| :------------- | :-------------------------- | :---------------------- | :------- | :------- |
+| `HashSet`      | 一个 `HashMap`，元素全挂在 key 上    | 无                       | 无序       | O(1)     |
+| `LinkedHashSet` | 一个 `LinkedHashMap`          | 双向链表                    | 插入序      | O(1)     |
+| `TreeSet`      | 一个 `TreeMap`                | 红黑树                     | 按 key 排序 | O(log n) |
+| `LinkedHashMap` | `extends HashMap`           | `before` / `after` 两个指针 | 插入序 或 访问序 | O(1)     |
+
+**一句话**：Set 家族全是 Map 换皮，差别只在"底层用哪种 Map"。
+
+### 2. HashSet：三个单行方法就是全部秘密
+
+源码（JDK 17，`java.base/java/util/HashSet.java`）：
+
+```java
+private transient HashMap<E, Object> map;              // 第 100 行附近：唯一的存储
+private static final Object PRESENT = new Object();    // 一个全类共享的哨兵常量
+
+public boolean add(E e)           { return map.put(e, PRESENT) == null; }   // 221 行
+public boolean contains(Object o) { return map.containsKey(o); }            // 205 行
+public boolean remove(Object o)   { return map.remove(o) == PRESENT; }      // 237 行
+public int size()                 { return map.size(); }
+```
+
+**实验 A 读数**（反射掏出 `HashSet.map` 字段看内部）
+
+```text
+HashSet.map 的真实类型   : java.util.HashMap
+value 的运行时类型        : java.lang.Object
+不同 value 的个数(按引用)  : 1     ← 3 个元素，只有 1 个 value 对象
+value 就是 PRESENT 常量吗 : true
+```
+
+**为什么 value 可以全类共享一个对象？**
+HashSet 从不暴露 value，所以它不需要"每个元素配一个 value"。
+若真给每个元素 `new Object()` 当 value，100 万元素就多背 100 万个对象头（约 16 字节）≈ **16 MB 纯浪费**。
+共享一个 `static final` 常量是零成本优化 —— 这就是 `PRESENT` 存在的全部理由。
+
+**实验 B：返回值语义**
+
+```text
+add("a") 第一次 -> true    size=1
+add("a") 第二次 -> false   size=1     ← 重复元素被吃掉
+add("a") 第三次 -> false   size=1
+remove("a") 第一次 -> true
+remove("a") 第二次 -> false
+```
+
+`add` 返回的 boolean，本质就是 `map.put(e, PRESENT) == null`：
+`put` 返回 null 说明桶里原本没这个 key → 确实是新增。
+
+> 这里正好是 Day 2 那个坑的**反面教材**：
+> `HashMap.put` 返回 null 时你分不清"首次插入"还是"插进去的 value 本身是 null"；
+> HashSet 的 value 恒为非 null 的 `PRESENT`，天然没有这个歧义。
+
+**顺手一条源码阅读**：`new HashSet<>(已有集合)` 会先按 `c.size()/0.75f + 1` 预分配容量再 `addAll`
+（JDK 17 源码第 120 行），避免构造过程中反复扩容。
+被问"`new HashSet<>(list)` 相比逐个 add 有什么好处"时可以答这个。
+
+### 3. 去重：hashCode 和 equals 缺一不可（实验 C）
+
+同一组数据 `(1,2)` 塞两遍，三种重写方式的结果完全不同：
+
+| 重写了什么             | size  | 为什么                                                          |
+| :---------------- | :---: | :----------------------------------------------------------- |
+| 只有 `hashCode`     | **2** | 两个对象落进同一个桶，但桶内逐个 `equals` 用的是 `Object` 默认实现（地址比较）→ 都不相等 |
+| 只有 `equals`       | **2** | `equals` 是 true，但两个对象用**默认 hashCode（地址哈希）**，根本分不到同一个桶       |
+| 两个都重写             | **1** | 这才是对的                                                        |
+
+口诀：**hashCode 决定"分到哪个桶"，equals 决定"桶里是不是同一个"。**
+
+**反直觉点（C4）：可变对象当 key 会变成"幽灵"**
+
+```text
+放入 (x=1) 后 contains -> true    size=1
+把 x 改成 2 后 contains -> false   size=1
+但直接遍历还能看见它            -> KeBian{x=2}
+```
+
+对象还在集合里（`size` 没变、遍历拿得到），`contains` 却永远 false ——
+因为它现在拿着**新的 hashCode** 去别的桶里找了。
+
+**结论：HashSet 的 key 必须是不可变对象**（String / Integer / 枚举 / record）。
+把可变对象塞进 Set 或当 Map 的 key，是生产环境里的经典幽灵 Bug。
+
+### 4. 性能：同样的 contains，差了三个数量级（实验 D）
+
+200,000 个元素，随机探测 5,000 次（JDK 17.0.12，实测）：
+
+| 实现                  | 总耗时(ns)        | 每次(ns)      |
+| :------------------ | -------------: | ----------: |
+| `ArrayList.contains` | 1,879,621,200 | **375,924** |
+| `HashSet.contains`   | 1,049,500     | **209.9**   |
+| 倍数                  |                | **1791 倍**  |
+
+`List.contains` 是 O(n) 逐个 equals，`HashSet.contains` 是 O(1) 均摊（定位桶 + 桶内少量比较）。
+**业务里"判断这个 id 处理过没有"如果写成 `List.contains`，数据量一上来就是灾难。**
+这是本节最实用的一条。
+
+### 5. "无序"的准确含义（实验 E）
+
+```text
+E1  装 1..12 打印 : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+```
+
+**陷阱**：看着完全有序。因为 `Integer.hashCode()` 返回自身，
+容量 16 时 `n & 15 = n`（n < 16），于是"桶下标 = 数值"，自然从小到大。
+**别用小整数验证 HashSet 的有序性，会得出完全错误的结论。**
+
+换成字符串立刻露馅 —— 同样 12 个词、同样插入顺序，**只改容量**：
+
+```text
+插入顺序              : delta alpha charlie bravo echo golf hotel india juliet kilo lima mike
+new HashSet<>(16)     : bravo golf juliet kilo lima mike alpha delta hotel echo india charlie
+new HashSet<>(64)     : mike delta echo india bravo golf kilo alpha hotel lima juliet charlie
+```
+
+结论：**无序 ≠ 随机，而是"顺序由 hashCode 和当时的 capacity 共同决定，不受你控制"。**
+迭代顺序 = 桶下标升序 + 桶内链表顺序，而桶下标 = `hash & (capacity - 1)`：
+capacity 一变大，`&` 取的位数就变了，顺序自然全乱。
+
+想要顺序就用 `LinkedHashSet`（插入序）或 `TreeSet`（排序）。
+
+### 6. 遍历中改集合：fail-fast 和它的例外（实验 F）
+
+```text
+F1  增强 for + remove(命中)     -> ConcurrentModificationException
+F2  增强 for + remove(不存在)   -> 正常结束，没抛
+F3  iterator.remove()           -> 正常结束
+F4  removeIf("b"::equals)       -> 正常结束
+```
+
+机制：集合内部有个 `modCount`，迭代器创建时记下快照，每次 `next()` 校验它有没有被改。
+
+**反直觉点在 F2**：只有**真的改到了结构**（remove 命中 / 新增 / 扩容）时 `modCount` 才 +1。
+所以"遍历中删一个不存在的元素"不抛异常 —— **这不是安全，只是恰好没被发现**。
+别把"跑起来没报错"当成"这段代码没问题"。
+
+正确写法：`iterator.remove()`（迭代器自己同步 `modCount`），或 JDK 8 的 `removeIf(...)`。
+
+### 7. LinkedHashMap：先搞清楚它有几种"有序"（实验 G）
+
+实现方式：`extends HashMap`，**额外**用一条双向链表把所有节点串起来
+（JDK 17 源码里是 `head` / `tail` 两个字段，节点多了 `before` / `after` 指针）。
+迭代时走链表，不是走桶数组。
+
+关键是三个钩子 —— HashMap 在 `put` / `get` / `remove` 收尾处各留了一个**空方法**：
+
+```java
+// HashMap 里的空实现（父类定义骨架）
+void afterNodeAccess(Node<K,V> p)      { }
+void afterNodeInsertion(boolean evict) { }
+void afterNodeRemoval(Node<K,V> p)     { }
+
+// LinkedHashMap 重写它们来维护链表（子类只补自己那部分）
+void afterNodeRemoval(Node<K,V> e)     { ... unlink ... }              // 第 284 行
+void afterNodeInsertion(boolean evict) { ... possibly remove eldest ... } // 第 298 行
+void afterNodeAccess(Node<K,V> e)      { ... move node to last ... }   // 第 306 行
+```
+
+这是教科书级的**模板方法模式**：HashMap 一行都不用改，就凭空获得了"顺序"能力。
+
+顺序由构造函数第三个参数 `accessOrder` 决定：
+
+```text
+插入顺序                : delta alpha charlie bravo echo golf
+HashMap                 : bravo golf alpha delta echo charlie      ← 无序
+LinkedHashMap(默认)     : delta alpha charlie bravo echo golf      ← 插入序
+LinkedHashMap(访问序)   : delta alpha charlie bravo echo golf      ← 还没访问，暂时一样
+
+get("charlie") 之后：
+    LinkedHashMap(默认)   : 没动
+    LinkedHashMap(访问序) : delta alpha bravo echo golf charlie     ← charlie 被挪到队尾
+```
+
+**反直觉点：`accessOrder = true` 时，`get()` 会修改结构**（重排链表 + `modCount++`）。
+也就是说这个 `get` 不是只读操作：
+① 并发下比普通读更容易出问题；② 读一次就会改变后续的迭代顺序。
+而 ② 正是 LRU 的立身之本。
+
+### 8. 用 LinkedHashMap 手写 LRU —— 只要 6 行（实验 H）
+
+```java
+int capacity = 3;
+Map<String, Integer> lru = new LinkedHashMap<String, Integer>(16, 0.75f, true) {
+    @Override
+    protected boolean removeEldestEntry(Map.Entry<String, Integer> eldest) {
+        return size() > capacity;      // 超了就淘汰队首（最久未使用）
+    }
+};
+```
+
+实测（容量 3）：
+
+```text
+put a, b, c  → [a, b, c]
+put d        → 淘汰 a         → [b, c, d]
+put e        → 淘汰 b         → [c, d, e]
+get("d")     → 顺序变 [c, e, d]     d 变成"最新"
+put f        → 淘汰队首 c     → [e, d, f]   ← 刚 get 过的 d 保住了，这就是 LRU 要的行为
+```
+
+**两个坑**
+
+1. 判断必须写 `size() > capacity`。写成 `>=` 会**少存一个**：实测声明容量 3，实际只留住 2 个 `[d, e]`。
+   原因：`removeEldestEntry` 是在**新元素已经插入之后**才被调用的，此刻 `size` 已经 +1。
+2. `removeEldestEntry` 只在**插入新 key** 时被调用（走 `afterNodeInsertion`）。
+   覆盖已有 key 走的是 `afterNodeAccess` 分支，不触发淘汰 ——
+   但访问序会把它挪到队尾，所以语义上仍然正确。
+
+> 现实提醒：JDK 这个 LRU **非线程安全**，而且每次读都改结构。
+> 生产里要并发 + 高性能，一般用 Caffeine（W-TinyLFU），别自己拿它硬撑。
+
+### 9. 两个反直觉的收尾数字
+
+**实验 I：更"重"的 LinkedHashMap，迭代反而快 21 倍**
+
+```text
+曾经放入 300,000 个，现在各剩 1,000 个
+HashMap        table 长度（容量）: 524288     ← table 只扩容、不缩容
+LinkedHashMap  table 长度（容量）: 524288
+
+for-each HashMap          总耗时 14,998,200 ns   （每轮  749,910 ns）
+for-each LinkedHashMap    总耗时    707,000 ns   （每轮   35,350 ns）
+→ HashMap 是 LinkedHashMap 的 21.2 倍
+```
+
+原因在 `HashMap` 的迭代器里：它要**从头扫完整个 table 数组，含所有 null 桶**，
+成本 **O(capacity + size)**；LinkedHashMap 只沿链表走，成本 **O(size)**。
+删元素不缩容，于是 300,000 删到 1,000 之后，HashMap 每次遍历仍要扫 524,288 个桶。
+
+**所以"LinkedHashMap 每节点多两个指针 → 更重 → 更慢"是错的。**
+内存开销和遍历性能是两笔独立的账，别混着算。
+
+**实验 J：那两个指针到底值多少钱**
+
+```text
+各放 500,000 个 <Integer,Integer>
+HashMap         额外堆 36.55 MB    76.7 字节/元素
+LinkedHashMap   额外堆 40.43 MB    84.8 字节/元素
+差值                              8.1 字节/元素   ← 理论值 8 字节（2 个压缩指针）
+```
+
+**8 字节/元素**。50 万元素多花 3.9 MB，换一条能精确控制顺序的链表 —— 很值。
+
+> 这里做的是**差值**而不是绝对值：key 和 value 都装箱了，两边一样，差值才是干净的。
+> `Runtime` 读数含 GC 噪声，只看数量级。
+
+### 10. 这一节直接产出的面试题
+
+- HashSet 怎么实现去重？只重写 `hashCode` 会发生什么？（答"会重复"就完了，要讲清**为什么**：桶内 `equals` 用的是地址比较）
+- 为什么 HashSet 的 value 是全类共享的一个常量？不共享会怎样？
+- HashSet 是无序的，那我放 1..12 进去为什么打印出来是升序的？（**陷阱题**，考你知不知道 `Integer.hashCode()` 和 `hash & (cap-1)`）
+- 遍历 Set 时删元素，什么时候会抛 `ConcurrentModificationException`？（答出"删不存在的元素不抛"是加分项）
+- 怎么用 JDK 自带类实现 LRU？（`accessOrder=true` + `removeEldestEntry`；再补一句"生产用 Caffeine"）
+- LinkedHashMap 怎么在不改 HashMap 一行代码的前提下维护链表？（三个 `afterNodeXxx` 钩子 → 模板方法模式）
+- LinkedHashMap 比 HashMap 重，那它迭代更慢吗？（**反直觉**：更快，因为 HashMap 要扫空桶）
+
+### 11. Day 3 · 核心问题（先自己写）
+
+> 答案在上面各小节里，写完再看文末「参考要点」。
+
+**Q1.** `HashSet` 和 `HashMap` 是什么关系？`add` 的返回值是怎么来的？
+>
+
+**Q2.** 只重写 `hashCode` 不重写 `equals`，往 `HashSet` 里放两个"逻辑相同"的对象会怎样？反过来呢？为什么两种失败方式不一样？
+>
+
+**Q3.** `HashSet` 里放 1..12，打印出来是升序的，这能说明它有序吗？迭代顺序的真正决定因素是什么？
+>
+
+**Q4.** 遍历 `HashSet` 时删元素，为什么删"不存在的元素"不抛异常？这算安全吗？
+>
+
+**Q5.** `LinkedHashMap` 的插入序和访问序怎么切？为什么说访问序下 `get()` 不是只读操作？
+>
+
+**Q6.** 为什么 LinkedHashMap 每个元素更重、占内存更多，但迭代反而比 HashMap 快？
+
+---
+
 ## 二、核心问题（能用自己的话脱稿讲出来，才算学会）
 
 > 先自己写。写不出来的先空着，回头翻上面的知识点，**不要直接抄**。  
@@ -463,13 +831,15 @@ module java.base does not "opens java.util" to unnamed module @85ede7b
 
 - 代码目录：`02-code/stage1-basics/w01-collections/`
 - Day 2 计划：HashMap 基本结构 + 源码与扩容
+- Day 3 计划：HashSet / LinkedHashMap → 见上面 Day 3 一节
 - Day 5 计划：集合面试题 → `04-interview/question-bank/Java基础.md`
 - Day 6 计划：手写简易 HashMap
 
 ```text
-Day 1（已完成）  动态数组 vs 双向链表：结构、扩容、真实耗时
-Day 2（待做）    HashMap put 全流程：hash → 扰动 → 下标 → 处理冲突 → 扩容
-Day 6（待做）    手写 MyHashMap：put / get / resize 三段
+Day 1（已完成 09-22）  动态数组 vs 双向链表：结构、扩容、真实耗时
+Day 2（已完成 10-09）  HashMap put 全流程：hash → 扰动 → 下标 → 处理冲突 → 扩容
+Day 3（已完成 10-10）  HashSet / LinkedHashMap：PRESENT 哨兵、去重、无序、LRU
+Day 6（待做）          手写 MyHashMap：put / get / resize 三段
 ```
 
 ### Day 1 复习与验收
@@ -542,6 +912,7 @@ Day 6（待做）    手写 MyHashMap：put / get / resize 三段
 | 2026-10-09 | 五  | HashMap put 全流程：扰动 / 桶定位 / 冲突 / 扩容（断档 17 天后重启） | 55 | `day2/HashMapProbe.java` + `day2-result.txt` | [x] |
 | 2026-10-09 | 五  | HashMap 线程不安全复现（8 线程 put 4 万条，实丢 1.2~2 万） | 25 | `day2/HashMapBuAnQuan.java` + `day2-buanquan-result.txt` | [x] |
 | 2026-10-10 | 六  | 补完 W01 核心问题（Day1 六题 + Day2 八题）+ 逐题细节订正 | 45 | 本笔记「核心问题」 | [x] |
+| 2026-10-10 | 六  | HashSet / LinkedHashMap：10 个实验（PRESENT / 去重 / 无序 / fail-fast / LRU / 迭代 / 内存） | 50 | `day3/HashSetLinkedHashMapProbe.java` + `day3-result.txt` | [x] |
 |            | 三  |                                                |    |                                              |     |
 |            | 四  |                                                |    |                                              |     |
 |            | 五  |                                                |    |                                              |     |
@@ -576,3 +947,54 @@ Day 6（待做）    手写 MyHashMap：put / get / resize 三段
    所以标准答案其实是「用 `ArrayDeque`」。真要用 `LinkedList` 的场景通常是：  
    用 `ListIterator` 边走边插删（比如实现 LRU、或流式处理中在当前位置反复改结构）。  
    面试里大方承认「业务代码里我基本不用它」，比硬编一个场景更可信。
+
+---
+
+## 附：Day 3 参考要点（**先自己写完「Day 3 核心问题」再往下看**）
+
+1. **HashSet = HashMap 的 key 视图**。`add(e)` 就是 `map.put(e, PRESENT) == null`，  
+   其中 `PRESENT` 是 `private static final Object` —— 一个**全类共享**的哨兵常量  
+   （实测：3 个元素的 value 是同一个对象，`== PRESENT` 为 true，按引用去重后只有 1 种 value）。  
+   共享的理由：value 永远不被读取，共享能省掉每个元素一个对象头（约 16 字节）。  
+   顺带的意义：`HashMap.put` 返回 null 时无法区分「首次插入」和「插入了 null value」，  
+   而 HashSet 的 value 恒非 null，所以 `put()==null` 这个判据在这里是干净的。  
+   —— 追问「那 remove 怎么判断成功」：`map.remove(o) == PRESENT`，同样是拿哨兵做判据。
+
+2. **两种都 → size = 2；只少一个也是 2，但失败方式不同**：  
+   · **只有 `hashCode`**：两个对象能进同一个桶（hashCode 对了），  
+     但桶内逐个比较用的是 `equals`，`Object` 默认实现是 `==`（地址比较），两个新对象必然 false → 都留下。  
+   · **只有 `equals`**：`equals` 虽然是 true，但默认 `hashCode` 是地址哈希，  
+     两个对象分到**不同桶**，Java 在桶这一层就免掉了 `equals` 调用 → 都留下。  
+   · 口诀：**hashCode 管分桶，equals 管同桶内是不是同一个**。缺一个都不去重。  
+   · 连带考点：**可变对象当 key 会变"幽灵"** —— 改掉参与 hashCode 的字段之后，  
+     `contains` 永远 false，但 `size` 不变、遍历还看得见它。所以 key 必须不可变。
+
+3. **不能说明有序，那是巧合**。`Integer.hashCode()` 返回自身，容量 16 时 `hash & 15 == n`，  
+   于是「桶下标 = 数值」，看着像排好序。真实规则是：  
+   **迭代顺序 = 桶下标升序 + 桶内链表顺序，而桶下标 = `hash & (capacity - 1)`**。  
+   元素 hashCode 或 capacity **任何一个变了顺序就变** ——  
+   实测同样 12 个字符串、同样插入顺序，容量 16 和容量 64 打出来的顺序完全不同。  
+   所以「无序」的准确含义是「顺序由实现细节决定、不受你控制」，**不是随机**。  
+   想控制顺序：`LinkedHashSet`（插入序）/ `TreeSet`（排序）/ 自己排序后放 `ArrayList`。
+
+4. **因为它没真的改到结构**。`modCount` 只在结构发生变更（remove 命中 / 新增 / 扩容）时 +1，  
+   迭代器每次 `next()` 才校验。删一个不存在的 key，`HashMap.remove` 直接返回 null，  
+   `modCount` 不动 → 不抛异常。**这不代表安全，只是恰好没被发现**：  
+   一旦那个 key 真的存在，立刻 `ConcurrentModificationException`。  
+   正确写法：`iterator.remove()`（迭代器自己同步 `modCount`）或 `removeIf(...)`。
+
+5. **看构造函数第三个参数 `accessOrder`**：`new LinkedHashMap<>(16, 0.75f, true)` 是访问序，  
+   默认 `false` 是插入序。访问序下 `get(k)` 会触发 `afterNodeAccess(e)`，把节点**移到链表尾部**，  
+   并且 `modCount++` —— 所以它不是只读操作：  
+   ① 并发下比普通读更容易出问题；② 读一次就改变后续迭代顺序。  
+   而 ② 正好是 LRU 需要的语义：最近被访问的排到最后，队首自然就是最久未使用的。  
+   —— 追问「为什么 get 要改结构」：因为 LRU 的"使用"必须被记录下来，否则无法判断谁该淘汰。
+
+6. **因为两者的迭代成本不是一个量级**：  
+   `HashMap` 的迭代器要扫完整个 `table` 数组（含所有 null 桶），成本 **O(capacity + size)**；  
+   `LinkedHashMap` 只沿双向链表走，成本 **O(size)**。  
+   而 `table` 只扩容、**不缩容** —— 实测放 30 万再删到剩 1,000 个后 capacity 仍是 524,288，  
+   于是 HashMap 每次遍历要扫 52 万个桶，实测比 LinkedHashMap 慢 **21.2 倍**。  
+   代价是内存：每元素多 `before` / `after` 两个指针 = 8 字节（实测差值 8.1 字节/元素）。  
+   —— 一句话收尾：**「更重」和「更慢」是两码事。**
+
