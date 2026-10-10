@@ -298,9 +298,10 @@ module java.base does not "opens java.util" to unnamed module @85ede7b
 4. `list.add(0, x)` 这一行，ArrayList 内部到底做了什么？为什么它是 O(n)？
    > 将数据放到了第一个，原本在数组中的元素需要依次往后移动1位腾位置。
 5. 实测里 LinkedList 连 `add(E)` 都跑不过 ArrayList，为什么？「O(1)」错了吗？
-   >
+   > 创建节点会花点时间
 6. 什么场景下你真的该用 LinkedList？举一个业务里可能出现的例子。
-   >
+   > 需要头插法，获取头部元素时会快一些。
+
 
 ### Day 2 · HashMap 核心问题
 
@@ -308,7 +309,7 @@ module java.base does not "opens java.util" to unnamed module @85ede7b
 
 **Q1.** `HashMap` 的 `hash()` 为什么要写成 `h ^ (h >>> 16)`？不做扰动会怎样？
 
-答：
+答：按照后四位哈希，如果相同会造成都放到同一个链中
 
 **Q2.** 为什么 HashMap 的容量必须是 2 的幂？`new HashMap<>(17)` 实际容量是多少？
 
