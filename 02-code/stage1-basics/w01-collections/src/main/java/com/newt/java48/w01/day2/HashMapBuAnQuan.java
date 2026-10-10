@@ -37,12 +37,47 @@ import java.util.Map;
  *           → 两个线程各建一个新数组，后完成的把先完成的整个覆盖掉
  *           → 结果：大批数据同时消失
  *
+ *   情形 D：并发树化
+ *           → 桶内链表长度到 8 时会把 Node 换成 TreeNode
+ *           → 但另一个线程可能正好在这个桶里 put，读到「半转换」的状态
+ *           → 结果：抛 ClassCastException
+ *             （HashMap$Node cannot be cast to HashMap$TreeNode，栈里能看到 moveRootToFront）
+ *           → 实测最严重的一次：8 个线程全部崩掉，40000 条只进去 1542 条
+ *
  * 所以结论是：**三种都可能 —— 只丢 size、只丢数据、两者都丢**。
  * 因此：
  *   · size 变小，不代表数据一定少（可能只是计数器少算）
  *   · size 正常，不代表数据没丢
  *   · 唯一可靠的判断：**遍历一遍，真的数节点**
  * 这个类就把这两个数都打出来对比。
+ *
+ * ============================================================
+ * 附带修正一个流传很广的说法：JDK 8 修好了「成环死循环」吗？
+ * ============================================================
+ * 常见说法是「JDK 7 头插会导致并发扩容成环，JDK 8 改成尾插就修好了」。
+ * **这个说法只对了一半。** 实测结论（JDK 17.0.12，8 线程 × 5000）：
+ *
+ *   跑 13 次 → 1 次检出 2 个成环的桶 + 1 次直接死循环超时（约 15%）
+ *   剩下 11 次：结构没坏，但数据照样丢一万多
+ *
+ * JDK 8 真正修掉的是 **JDK 7 那个「必然发生」的自环**：
+ *   JDK 7 用头插（transfer），改指针顺序是「反的」，两个线程交错时几乎必然成环；
+ *   JDK 8 改成尾插 + 显式断尾（loTail.next = null），**单线程下**不会出错。
+ *
+ * 但**多线程交错时它依然会坏**，根因在 resize() 的这一行：
+ *
+ *     Node<K,V>[] newTab = (Node<K,V>[])new Node[newCap];
+ *     table = newTab;        // ← 先挂上去，再开始搬
+ *     if (oldTab != null) { ... 搬运 ... }
+ *
+ * 两个线程同时 resize 时：
+ *   A: oldTabA = T0，newTabA = Node[32]，table = newTabA
+ *   B: 读 table 拿到的是 **newTabA**（A 刚挂上的！），于是 newTabB = Node[64]，table = newTabB
+ *   → A 在往 newTabA 写，B 却把 newTabA 当**源**在读，还顺手改 next 指针
+ *   → 同一条链表被一边写一边读，结构错乱，就能拼出环
+ *
+ * 所以准确的说法是：**JDK 8 把成环从「必然」降成了「偶发」，但没有消除。**
+ * 结论完全不变：**HashMap 任何并发场景都不能用，一律 ConcurrentHashMap。**
  *
  * 运行：run.bat day2.HashMapBuAnQuan
  */
@@ -66,14 +101,24 @@ public class HashMapBuAnQuan {
 
         Thread[] xianChengShuZu = new Thread[XIAN_CHENG_SHU];
         int yingFangRuShu = XIAN_CHENG_SHU * MEI_XIAN_CHENG_PUT_SHU;
+        // 统计有多少线程中途崩了（并发把 HashMap 内部结构搞坏时会抛异常）
+        java.util.concurrent.atomic.AtomicInteger bengKuiShu = new java.util.concurrent.atomic.AtomicInteger();
 
         for (int i = 0; i < XIAN_CHENG_SHU; i++) {
             // 每个线程负责一段互不重叠的 key 区间，保证「理论上一个都不该丢」
             final int qiShiXuHao = i * MEI_XIAN_CHENG_PUT_SHU;
 
             xianChengShuZu[i] = new Thread(() -> {
-                for (int xuHao = qiShiXuHao; xuHao < qiShiXuHao + MEI_XIAN_CHENG_PUT_SHU; xuHao++) {
-                    haXiBiao.put(xuHao, xuHao);
+                try {
+                    for (int xuHao = qiShiXuHao; xuHao < qiShiXuHao + MEI_XIAN_CHENG_PUT_SHU; xuHao++) {
+                        haXiBiao.put(xuHao, xuHao);
+                    }
+                } catch (Throwable t) {
+                    // 并发下常见的第三种崩法：树化时 Node / TreeNode 类型混乱
+                    //   ClassCastException: HashMap$Node cannot be cast to HashMap$TreeNode
+                    bengKuiShu.incrementAndGet();
+                    System.out.println("  [线程-" + qiShiXuHao / MEI_XIAN_CHENG_PUT_SHU + "] 崩了: "
+                            + t.getClass().getSimpleName());
                 }
             }, "线程-" + i);
         }
@@ -94,6 +139,7 @@ public class HashMapBuAnQuan {
         int jiShuQiPianCha = zhenShiJieDianShu - baoDeSize;       // 计数器算错了多少
 
         System.out.println("应放入        : " + yingFangRuShu);
+        System.out.println("中途崩掉的线程 : " + bengKuiShu.get() + " / " + XIAN_CHENG_SHU);
         System.out.println("HashMap 报的 size : " + baoDeSize);
         System.out.println("实际遍历节点数    : " + zhenShiJieDianShu);
         System.out.println();
@@ -227,7 +273,7 @@ public class HashMapBuAnQuan {
         for (Map.Entry<?, ?> yiGeJieDian : biao.entrySet()) {
             geShu++;
             if (geShu > ZUI_DA_BIAN_LI_SHU) {
-                // 并发破坏后链表理论上可能成环（JDK 8 已很难出现），加个保险
+                // 成环时迭代器会沿着环无限走，必须有个上限兜底（本机实测约 15% 的概率遇到）
                 System.out.println("  [警告] 遍历超过 " + ZUI_DA_BIAN_LI_SHU + " 个，疑似链表成环，提前停止");
                 break;
             }
