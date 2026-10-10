@@ -263,6 +263,82 @@ hash 高位全是 0 → 新增的位永远是 0 → `(n-1) & 0` 永远是 0。
 > 2. 同桶元素能被拆开的前提，是它们的 hash 在**新增那一位**上有差异。
 >    hash 全相同（比如自己写的 `hashCode` 恒返回常量）时，扩容只会让桶变多，**救不了这个桶**。
 
+**hash 存在哪？为什么扩容不用重算？**
+
+`Node` 里本来就有一个 `hash` 字段，存的是**扰动之后**的值：
+
+```java
+static class Node<K,V> implements Map.Entry<K,V> {
+    final int hash;      // ← 存进去时算过一次，之后一直复用
+    final K key;
+    V value;
+    Node<K,V> next;
+}
+```
+
+所以扩容拆链是「读现成的」，不是「算」：
+
+```java
+do {
+    next = e.next;
+    if ((e.hash & oldCap) == 0) {     // 读 e.hash 的某一位，一次与运算
+        ...挂到 lo 链（留原下标）...
+    } else {
+        ...挂到 hi 链（+oldCap）...
+    }
+} while ((e = next) != null);
+```
+
+对比 JDK 7：`int i = indexFor(e.hash, newCapacity);` —— 要拿新容量**重新取模**才算得出新下标。
+
+> **"不用重算"省的是"算"（hash + 取模），省不掉"搬"（遍历链表 + 重新串指针）。**
+> 拆链本身是 O(n)，所以扩容不便宜。
+
+**同一个 `hash` 字段还有第二个用处：加速 key 比较**
+
+`getNode` / `putVal` 判断「是不是同一个 key」时，先比 hash，再比 equals：
+
+```java
+if (e.hash == hash && ((k = e.key) == key || (key != null && key.equals(k))))
+```
+
+先比 hash（一次整数比较，快），hash 相同了才去调 `equals`（可能很慢）。
+大多数情况下 hash 就不同，`equals` 直接被短路掉 —— 这是很典型的"用便宜的比较过滤掉绝大多数情况"。
+
+注意：**hash 相同不等于同一个 key**（那就是哈希冲突），所以 `equals` 这一步不能省。
+
+**容量的天花板：2^30，不是 2^32**
+
+直觉上 hash 是 32 位，是不是能扩到 2^32 个桶？**不是。**
+
+```java
+static final int MAXIMUM_CAPACITY = 1 << 30;      // 1073741824，约 10.7 亿
+```
+
+为什么卡在 2^30：
+
+- 容量必须是 **2 的幂**，所以候选只有 2^30 / 2^31 / 2^32 …
+- 桶数组的长度是 `int`，而 `1 << 31` = `Integer.MIN_VALUE`（**负数**），当不了数组长度
+- 于是 2 的幂里最大的安全值就是 `1 << 30`
+
+实测（`HashMapKuoRong` 实验 C）：
+
+```text
+new HashMap<>(100)                    → 实际容量 128
+new HashMap<>(1000)                   → 实际容量 1024
+new HashMap<>(1073741823)             → 实际容量 1073741824
+new HashMap<>(1073741824)             → 实际容量 1073741824
+new HashMap<>(Integer.MAX_VALUE)      → 实际容量 1073741824   ← 被截断到 2^30
+```
+
+到达上限后，`resize()` 会把 `threshold` 设成 `Integer.MAX_VALUE`，**从此不再扩容**。
+
+现实约束：2^30 个引用 ≈ 4 GB（压缩指针）～ 8 GB，普通机器根本分配不出来 —— 所以这个上限更多是理论边界。
+
+> 顺带一个细节：容量到 2^30 时 `n-1 = 0b0111...1111`（30 个 1），**只用到 hash 的低 30 位**，
+> hash 的最高 2 位永远闲置。这也说明 `h ^ (h >>> 16)` 的扰动设计假设了「容量不会太大」——
+> 实际业务里容量基本不会超过 2^16，所以把高 16 位掺进低 16 位就够用了。
+
 ### 2. 代码 / 实验
 
 - 新增：`src/main/java/com/newt/java48/w01/day2/HashMapProbe.java`

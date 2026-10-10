@@ -1,5 +1,6 @@
 package com.newt.java48.w01.day2;
 
+import java.lang.reflect.Field;
 import java.util.HashMap;
 
 /**
@@ -142,5 +143,48 @@ public class HashMapKuoRong {
         System.out.println("  · size 触发：元素总数超了容量承载能力 → 整表翻倍（16→32→64→128…）");
         System.out.println("  · 链表触发：个别桶太挤，但容量还不到 64 → 也翻倍（可避免过早树化）");
         System.out.println("  两条路走的都是同一个 resize()，所以容量永远是 2 的幂。");
+
+        System.out.println();
+        shiYanC();
+    }
+
+    /** 反射读 HashMap 的静态常量 */
+    static int duChangLiang(String ming) {
+        try {
+            Field f = HashMap.class.getDeclaredField(ming);
+            f.setAccessible(true);
+            return f.getInt(null);
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // ---------- 实验 C：容量的天花板 ----------
+
+    static void shiYanC() {
+        System.out.println("========== 实验 C：容量的天花板在哪 ==========");
+        System.out.println("  HashMap.MAXIMUM_CAPACITY = " + duChangLiang("MAXIMUM_CAPACITY")
+                + "   （就是 1 << 30 = " + (1 << 30) + "，约 10.7 亿）");
+        System.out.println();
+
+        // 构造时 threshold 里存的就是「向上取整到 2 的幂」之后的容量，且不会真的分配数组（懒加载）
+        int[] shiRuDe = {100, 1000, 1 << 20, (1 << 30) - 1, 1 << 30, Integer.MAX_VALUE};
+        System.out.println("  传入的初始容量     →  实际容量（threshold 里存的值）");
+        for (int shiRu : shiRuDe) {
+            HashMap<Object, Object> biao = new HashMap<>(shiRu);
+            System.out.printf("  %-18d →  %d%n", shiRu, yuZhi(biao));
+        }
+        System.out.println();
+
+        System.out.println("  为什么不是 2^32？也不是 2^31 - 1？");
+        System.out.println("    · 容量必须是 2 的幂，候选只有 2^30 / 2^31 / 2^32 …");
+        System.out.println("    · 桶数组的长度是 int，而 1 << 31 = Integer.MIN_VALUE（负数），当不了长度");
+        System.out.println("    · 所以 2 的幂里最大的安全值就是 1 << 30 = 1073741824");
+        System.out.println("    · 到顶之后 resize() 会把 threshold 设成 Integer.MAX_VALUE，从此不再扩容");
+        System.out.println();
+        System.out.println("  还有个现实约束：2^30 个引用 ≈ 4 GB（压缩指针）～ 8 GB，普通机器分配不出来。");
+        System.out.println();
+        System.out.println("  顺带一个细节：容量到 2^30 时，n-1 = 0b0111...1111（30 个 1），");
+        System.out.println("                只用到 hash 的低 30 位 —— hash 的最高 2 位永远闲置。");
     }
 }
