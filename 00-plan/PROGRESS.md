@@ -11,7 +11,7 @@
 
 | 周 | 阶段 | 主题 | 笔记 | 代码 | 完成 |
 | :--- | :--- | :--- | :--- | :--- | :--: |
-| W01 | 第一阶段 · 打基础 | Java 集合 | [笔记](../01-notes/stage1-basics/W01-Java集合.md) | `02-code/stage1-basics/w01-collections/` | [ ] |
+| W01 | 第一阶段 · 打基础 | Java 集合 | [笔记](../01-notes/stage1-basics/W01-Java集合.md) | `02-code/stage1-basics/w01-collections/` | [x] |
 | W02 | 第一阶段 · 打基础 | Java 泛型 · 异常 · Optional · Stream | [笔记](../01-notes/stage1-basics/W02-泛型-异常-Stream.md) | `02-code/stage1-basics/w02-generics-stream/` | [ ] |
 | W03 | 第一阶段 · 打基础 | Java 并发基础 | [笔记](../01-notes/stage1-basics/W03-Java并发基础.md) | `02-code/stage1-basics/w03-concurrency-basics/` | [ ] |
 | W04 | 第一阶段 · 打基础 | 线程池与 CompletableFuture | [笔记](../01-notes/stage1-basics/W04-线程池与CompletableFuture.md) | `02-code/stage1-basics/w04-threadpool-completablefuture/` | [ ] |

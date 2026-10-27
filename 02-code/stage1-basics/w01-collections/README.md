@@ -52,6 +52,7 @@ w01-collections/
 ├── day2-kuorong-result.txt                         Day 2 扩容触发条件的实测输出
 ├── day2-chailian-result.txt                        Day 2 扩容拆链的实测输出
 ├── day3-result.txt                                 Day 3 HashSet / LinkedHashMap 的实测输出
+├── day6-result.txt                                 Day 6 手写 MyHashMap 的实测输出（含与 JDK 对拍）
 └── src/main/java/com/newt/java48/w01/
     ├── day1/
     │   ├── ArrayListVsLinkedList.java              7 项操作的真实耗时对比 + 内存占用
@@ -61,8 +62,11 @@ w01-collections/
     │   ├── HashMapBuAnQuan.java                    多线程 put 丢数据的最小复现 + 成环检测
     │   ├── HashMapKuoRong.java                     扩容的两条触发路径（size / 链表太长）
     │   └── HashMapChaiLian.java                    扩容时桶内链表怎么拆（按 hash & oldCap）
-    └── day3/
-        └── HashSetLinkedHashMapProbe.java          HashSet 哨兵 value / 去重 / 无序 / LRU / 迭代 / 内存
+    ├── day3/
+    │   └── HashSetLinkedHashMapProbe.java          HashSet 哨兵 value / 去重 / 无序 / LRU / 迭代 / 内存
+    └── day6/
+        ├── MyHashMap.java                          手写 HashMap：put / get / resize 三段核心
+        └── MyHashMapProbe.java                     5 个实验：扩容触发点 / 拆链 / 与 JDK 对拍 / 性能 / 树化退化
 ```
 
 ---
@@ -212,10 +216,35 @@ w01-collections/
 > 实验 1 需要反射读 `HashSet.map`，依赖 `run.bat` 里已经带上的  
 > `--add-opens java.base/java.util=ALL-UNNAMED`。忘了带也不会崩，只是会打 `reflect = BLOCKED`。
 
+## Day 6（手写 MyHashMap）实验清单
+
+> 只写 `put` / `get` / `resize` 三段，代码 200 行，注释占一半。
+> 目标是**能自己从零写出来**，不是复刻 HashMap 的 2000 行。
+
+| #  | 要验证的结论                       | 命令                        | 预期                                                             |
+| :- | :--------------------------- | :------------------------ | :------------------------------------------------------------- |
+| 1  | 扩容触发是**严格大于**阈值             | `run.bat day6.MyHashMapProbe` | 容量 16/阈值 12：第 12 个不扩，**第 13 个**才扩到 32；25 → 64；49 → 128        |
+| 2  | 扩容后下标只有两种命运                | 同上                        | hashCode 1 和 17 在容量 16 时同桶（`&15` 都是 1）；扩容到 32 后分别落到桶 **1** 和桶 **17**（= 1 + oldCap） |
+| 3  | 手写的和 JDK 结果**完全一致**         | 同上                        | 20 万次随机 put/get：size 都是 **48609**、容量 **65536/49152**、返回值不一致 **0 处**   |
+| 4  | 随机 key 下，手写版甚至略快            | 同上                        | 30 万次 put：手写 **46 ms** vs JDK **77 ms**（0.60 倍），**别当结论，见 5、6**     |
+| 5  | hash 全等 + key **不可比较** → JDK 更慢 | 同上                        | 2 万条全挤一个桶：手写 **374 ms** vs JDK **2521 ms**（JDK 慢 6.7 倍）          |
+| 6  | hash 全等 + key **可比较** → JDK 反超 | 同上                        | 同样 2 万条：手写 **539 ms** vs JDK **44 ms**（JDK 快 12 倍）              |
+
+**这一节最值钱的三个点**
+
+1. **`resize` 没有重算过一次 hash**：容量翻倍时 `n-1` 只多一位（这一位恰好等于 `oldCap`），
+   所以用 `(e.hash & oldCap) == 0` 拆成 lo（留在 `j`）/ hi（去 `j + oldCap`）两条链。
+   实测 hashCode 1 和 17：扩容前同在桶 1，扩容后一个留在 1、一个去 17，**一个都没丢**。
+2. **「链表到 8 个就转红黑树」少了两个前提**：容量必须 ≥ 64，而且 **key 要能比较大小**。
+   E1/E2 对照就是证据：自定义 key 忘了实现 `Comparable` 时，`putTreeVal` 里
+   `if (!searched) { ... ch.find(h, k, kc) ... }` 只能对子树做一次全扫，
+   每次插入 O(n)，`TreeNode` 又比链表节点重（多 `parent/left/right/prev/red`），结果**比链表还慢**。
+3. **微基准的单次数字什么都不能证明**：同一份代码，E1 说「JDK 慢 6.7 倍」、E2 说「JDK 快 12 倍」，
+   差别只在于 key 有没有实现 `Comparable`。看数量级、看前提，不看小数点。
+
 ## 读代码的顺序
 
 **Day 1**
-
 1. 先跑 `run.bat MyArrayList`，看扩容现场，读 `MyArrayList.grow()` —— 只有十来行，把这十行看懂，  
    JDK `ArrayList` 的扩容你就懂了 80%。
 2. 再读 `MyArrayList.add()` 和 `remove()`：存入元素、更新个数、搬移元素分开写，  
@@ -243,6 +272,17 @@ w01-collections/
 3. 实验 H 的 LRU 用了一个匿名子类 + 一个 `removeEldestEntry`，  
    这是"模板方法模式"最便宜的示例，值得逐行读一遍。
 4. 实验 I 的 `tableLength()` 会打印 capacity，用来解释"为什么删到只剩 1000 个还那么慢"。
+
+**Day 6**
+
+1. 先读 `MyHashMap` 的字段：`table` / `size` / `threshold` 三个 + `loadFactor`，
+   对照 JDK —— 你会发现 JDK 也差不多就这几个，其余全是辅助。
+2. 再读 `put`：四步（懒加载 → 定位 → 冲突/覆盖 → 检查扩容），
+   注意覆盖已有 key 时**直接 return，不检查扩容**。
+3. 最后读 `resize`，只看 lo/hi 那段 `do-while`。看懂 `(e.hash & oldCap) == 0` 这一行，
+   你就把 JDK 里最长的那段 `resize` 拿下了。
+4. 写完再回头看 `MyHashMapProbe` 的实验 C —— 对拍才是真正的验收，自己说"我觉得对"不算。
+
 
 `warmUp()` 用于预热，`consumedSum` 用于保存计算结果、降低无用计算被消除的风险。  
 这些处理不能保证测量精确；部分实验的两种集合规模不同，表中倍率仅供本次观察。
