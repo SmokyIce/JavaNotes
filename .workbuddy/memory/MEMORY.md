@@ -31,9 +31,17 @@
   （MILESTONES 里原本标着"砍掉"，学员主动点名要教程 → 已订正为保留）
 - Day 4（10-27）**手写 MyHashMap（`day6/` 包，put/get/resize）+ 与 JDK 20 万次对拍 0 处不一致** ✅
 - Day 4（10-27）题库扩到 **12 题**、题题有「我的回答 + 追问预判 + 项目案例草稿」；全周复述封板 ✅
+- **M1 Day 1（10-28）`w02-generics-stream/` 工程建好，类型擦除 + PECS 两个 Demo + 6 类编译期报错原文** ✅
+  题库同天 12 → **15 题**（擦除 / 泛型数组与 TypeReference / PECS）
 
-**下一步**：M1 第一步 = `W02-泛型-异常-Stream.md` 的泛型部分（类型擦除的反射证据），
-代码工程 `02-code/stage1-basics/w02-generics-stream/` 还是空的 `.gitkeep`。
+**下一步**：W02 Day 2 = 异常体系（`try-with-resources`、`finally` 里 `return` 吞异常、
+`throw new RuntimeException(e)` 丢栈 vs `addSuppressed`），时间盒在 `00-plan/today.md`。
+
+**W02 最值钱的一条（讲泛型必用）**：擦除擦的是**实参**、留下的是**声明**。
+`List<String>` 和 `List<Integer>` 的 `getClass() ==` 为 true，但实参藏在子类的 `Signature` 属性里 ——
+`StringBox.class.getGenericSuperclass()` 拿到 `Box<java.lang.String>`。
+Spring `ParameterizedTypeReference` / Jackson `TypeReference` 的匿名子类就是为这一招而存在。
+另一个必讲点：**CCE 抛在 `get` 那一行，不是 `add` 那一行**（编译器在 get 后插 checkcast）。
 
 **W01 最值钱的一条实测结论（以后讲集合必用）**：
 「链表到 8 个就转红黑树」缺两个前提 —— **容量 ≥ 64** 且 **key 能比较大小**。

@@ -100,9 +100,15 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 
 **M1 解锁标准**：三份笔记各自「核心问题」有个人回答 + 三个工程能一条命令跑起来 + 题库 8 道题有内容。
 
-> 📌 **M1 第一步已经从 M0 顺带完成了一半**：W01 的 12 道集合题已经进 `Java基础.md`，
-> 所以 M1 的「题库 8 道」只差泛型 / 并发 / 线程池那部分。下一步是 `W02-泛型-异常-Stream.md`，
-> 重点做 Stream 那个 `List<User>` 过滤→排序→分组→统计的练习。
+> 📌 **M1 进展**
+>
+> | 时间 | 做了什么 | 产出 |
+> | :--- | :--- | :--- |
+> | 2026-10-28 | **W02 Day 1 · 类型擦除 + PECS**（补掉 W02 空目录 + W01 遗留清单） | `w02-generics-stream/` 工程 + `day1/` 两个 Demo + `compile-errors/` + `day1-result.txt`；笔记 Day 1 整节；`Java基础.md` 12 → **15 题** |
+>
+> 题库这边已经超额：M1 只要 8 道，现在光是泛型就写了 3 道，加上 W01 的 12 道集合题共 15 道。
+> 剩下 W02 的异常 / Optional / Lambda / Stream，以及 W03 / W04 的并发部分。
+> 重点仍是 Stream 那个 `List<User>` 过滤→排序→分组→统计的练习。
 
 > W02 的 Stream 练习（`List<User>` 过滤→排序→分组→统计）是**最能直接用在业务代码里**的一次练习，认真做。
 
@@ -147,6 +153,9 @@ M3 之后的内容原封不动沿用 `java-48week-plan.md` 里的知识点清单
 
 **M0 已封板（2026-10-27），当前焦点是 M1 · Java 地基。**
 
-下一个时间盒（60 分钟）：`W02-泛型-异常-Stream.md` 的泛型部分 ——
-先搞清楚「类型擦除到底擦掉了什么」，再写 PECS 的三个例子。
+**W02 Day 1 已完成（2026-10-28）**：`w02-generics-stream/` 工程建好，`ErasureProof` / `PecsDemo`
+两个 Demo + `compile-errors/GenericLimits.java` 四类报错原文跑通，笔记 Day 1 整节写完。
+
+下一个时间盒（60 分钟）：**W02 Day 2 · 异常体系** ——
+`try-with-resources` 与 `finally` 里 `return` 吞异常、`throw new RuntimeException(e)` 丢栈，
 时间盒见 `00-plan/today.md`（每天开工前先打开它，收工时覆盖）。

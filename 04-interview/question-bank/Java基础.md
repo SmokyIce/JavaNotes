@@ -345,3 +345,91 @@
 > 这类场景要么换成 `Objects.hash`，要么老老实实让 IDE 生成。
 
 ---
+
+### 13. 类型擦除到底擦掉了什么？运行时还能不能拿到泛型实参？
+
+**我的回答（自己的话）：**
+
+> 擦掉的是「使用处填的实参」，留下的是「声明」。
+> `new ArrayList<String>()` 和 `new ArrayList<Integer>()` 的 `getClass()` 是同一个对象，
+> 连 `List` 都不剩，只剩 `java.util.ArrayList` —— 所以在运行时判断不了它是 `List<String>`。
+> 但声明处的类型变量还在：`Box.class.getTypeParameters()` 能读出 `T`，
+> `Box.get` 的泛型返回类型也是 `T`。
+> 实参唯一能捞回来的地方是**子类继承时写下的那段签名**，它被写进 class 文件的 `Signature` 属性，
+> `StringBox.class.getGenericSuperclass()` 能拿到 `Box<java.lang.String>`。
+> 代价是类型检查从「运行时每个元素」搬到了「编译期每个表达式」——
+> 错误不在 `add` 时报，而在 `get` 后面编译器插的 `checkcast` 那一刻才报。
+> 顺带一个副作用：实现泛型接口时，编译器会补一个桥方法（`bridge=true, synthetic=true`）对齐擦除后的签名。
+
+**追问预判：**
+- 现场证明一下擦除？（`getClass() ==` 判 true，或者 `getMethod("add", String.class)` 抛 `NoSuchMethodException`）
+- 那 `Signature` 属性里到底存了什么？（泛型父类/接口的实参、泛型字段和方法的类型变量）
+- 反射有两个视图是什么意思？（`getParameterTypes()` 是擦除后的 `Object`，`toGenericString()` 能还原成 `add(E)`）
+- 桥方法是干嘛的？（接口方法擦除后是 `compare(Object,Object)`，实现类写的是 `compare(String,String)`，编译器补一个转发 + checkcast）
+- 桥方法会带来什么坑？（遍历 `getDeclaredMethods()` 会多出一个，框架必须按 `isBridge()` 跳过）
+
+**项目里的实际案例：**
+
+> 场景：线上出现 `Integer cannot be cast to String`，栈顶落在某个看起来毫无问题的 `map.get(key)` 上。
+> 排查发现是上游用原始类型 `Map` 塞了数字，下游按 `Map<String,String>` 取。
+> 结论：CCE 的位置是「按类型读出来」那一行，不是塞进去那一行 —— 修 `get` 没用，要往上追入口。
+
+---
+
+### 14. 为什么不能 `new T[]`？那框架是怎么创建泛型数组、拿到泛型类型的？
+
+**我的回答（自己的话）：**
+
+> 因为数组在运行时必须知道自己的组件类型 —— `ArrayStoreException` 就是靠这个检查的。
+> 而擦除后的 `T` 什么都不剩，编译期无法把这个信息写进 `newarray` 指令，所以 `new T[10]` 直接
+> `generic array creation` 报错。
+> `(T[]) new Object[n]` 只是骗过编译器，数组的真实类型还是 `[Ljava.lang.Object;`，
+> 一旦赋给 `String[]` 立刻 ClassCastException。
+> JDK 自己的兜底是把组件类型显式传进来：`Array.newInstance(type, n)`；
+> 框架拿泛型类型也是同一个思路 —— 让调用方继承一个写了实参的类（`TypeReference<T>` 的匿名子类），
+> 再从 `getGenericSuperclass()` 里把实参读出来。
+> 说白了：**擦除把「类型」变成了「必须由调用方显式告知的参数」**，`Class<T>` / `TypeReference` 都是在补这一课。
+
+**追问预判：**
+- 那 `new ArrayList[10]` 为什么可以？（原始类型的数组，没有实参要检查；但用它就是 unchecked，容易混装）
+- 为什么不允许 `new List<String>[10]`？（数组协变 + 擦除，会让「绕过编译器塞错类型」成为可能，破坏类型安全）
+- `Array.newInstance` 返回的是真数组吗？（是，组件类型就是传进去的那个 Class）
+- `TypeReference` 的原理？（匿名子类把实参写进 `Signature`，再 `getGenericSuperclass()` 取 `ParameterizedType`）
+
+**项目里的实际案例：**
+
+> 场景：用 Jackson 反序列化一个统一响应体 `Result<List<User>>`，直接
+> `objectMapper.readValue(json, Result.class)` 拿到的是 `Result`，里面的 data 变成
+> `List<LinkedHashMap>`，取字段时 CCE。改成 `new TypeReference<Result<List<User>>>(){}` 就好了。
+> 本质就是匿名子类 + `getGenericSuperclass()`，和 `Array.newInstance` 是同一类解法。
+
+---
+
+### 15. PECS 是什么？`Collections.copy` 的签名为什么用两个不同的通配符？
+
+**我的回答（自己的话）：**
+
+> PECS = Producer Extends, Consumer Super：参数是生产者（你从里面读）就用 `? extends T`，
+> 是消费者（你往里面写）就用 `? super T`。
+> `? extends Number` 能安全读成 `Number`，但写不进去 —— 编译器不知道容器实际是 `List<Integer>`
+> 还是 `List<Double>`，只允许 `add(null)`。
+> `? super Integer` 能安全写 `Integer`，因为容器至少能装 `Integer`；但读出来只能当 `Object`。
+> `Collections.copy(List<? super T> dest, List<? extends T> src)` 正好一写一读：
+> `dest` 是消费者用 `super`，`src` 是生产者用 `extends`，`T` 由两边共同推断。
+> 如果两边都写成 `<T>`，`List<Object>` 和 `List<String>` 就没法一起传 —— 泛型是不变的。
+
+**追问预判：**
+- 泛型为什么不变？数组协变不是挺方便吗？（数组协变把检查推到运行时，泛型用不变性把错误挡在编译期）
+- `List<? extends Number>` 为什么能 `add(null)`？（`null` 是唯一对所有子类型都合法的值）
+- `?` 和 `<T>` 有什么区别？（`?` 是「一个确定但我不知道的类型」，不能声明新变量；`<T>` 是给方法/类引入一个可命名的类型参数）
+- 通配符捕获是什么？（`capture of ?` 报错时，用一个 `<T> helper(List<T>)` 把它捕获成具名类型）
+- 什么时候干脆用 `<T>`？（进和出是同一种类型、需要在方法体里声明该类型的变量时）
+
+**项目里的实际案例：**
+
+> 场景：写一个批量搬运的公共方法 `moveAll(List<? super T> dest, List<? extends T> src)`，
+> 上层既能 `List<Object>` 收、也能 `List<User>` 收。一开始签名写成两个 `List<T>`，
+> 调用方传 `List<Object>` 和 `List<User>` 直接编译不过，改成 PECS 后一次通过。
+
+---
+
