@@ -433,3 +433,78 @@
 
 ---
 
+### 16. `finally` 里写 `return` 或 `throw` 会发生什么？TWR 为什么需要 `addSuppressed`？
+
+**我的回答（自己的话）：**
+
+> `finally` 里 `return`：方法走「正常返回」，`try` 里正在冒泡的异常被**直接丢弃** ——
+> 不 catch、不打日志、不进 suppressed，调用方只看到一个正常返回值。我实测过
+> `swallow()` 里 throw 了 `IllegalStateException`，方法返回 `42`，什么痕迹都没留。
+> 而且 `finally` 的 `return` 还会盖掉 `try` 的 `return` 值。javac 对这个写法一句话都不说，
+> 只有 IDE 会警告。
+>
+> `finally` 里 `throw`：新异常成为最终抛出的那个，`try` 的原始异常被**覆盖**，
+> 既不是 cause 也不是 suppressed —— 实测 `getSuppressed().length = 0`、`getCause() = null`，
+> 原始异常彻底消失。线上表现是日志里只有「close 炸了」，业务异常查不到。
+>
+> 所以 TWR 才需要 suppressed：Java 7 之前关资源写在 `finally` 里，close 一抛就覆盖主异常。
+> TWR 由编译器生成「关资源 + 保留主异常」的代码，而保留不能靠 cause（close 失败不是业务失败的原因，
+> 用 cause 会把因果说反），也不能靠重新抛（一次只能抛一个）。`suppressed` 就是为此加的语义：
+> 主异常照常抛，附带损害挂在它身上，两个都能进日志。
+
+**追问预判：**
+- 关闭顺序为什么是逆序？（后面的资源可能依赖前面的，先关被依赖的会让 close 拿到坏连接）
+- body 和 close 都抛，谁是主异常？（body 的；实测 `getSuppressed()` 里是 close 的那个）
+- body 正常、只有 close 抛呢？（close 的就是主异常，没有东西可压制）
+- `finally` 里为什么连 `close()` 都不该写？（close 自己就可能抛，等于把风险留在 `finally`；
+  正确做法是让资源实现 `AutoCloseable`，交给 TWR）
+- `cause` 和 `suppressed` 有什么区别？（cause 一对一，`initCause` 只能补一次；suppressed 一对多，可反复 add）
+
+**项目里的实际案例：**
+
+> 场景：老代码里 `finally { conn.close(); }` 包在业务逻辑外面，某次数据库主从切换，
+> `close()` 抛了 `SQLException`，把真正的「订单状态机校验失败」覆盖掉了，
+> 日志里只有 close 的错，查了两小时。后来统一改成 try-with-resources，
+> 同一个故障再出现时，日志里同时有主异常和 `Suppressed: java.sql.SQLException`。
+
+---
+
+### 17. `throw new RuntimeException(e)` 会丢栈吗？什么样的写法才是真的丢栈？
+
+**我的回答（自己的话）：**
+
+> 这句话不准确。`new RuntimeException(e)` 的栈**没丢**，是断成了两段：
+> 新异常的栈从包装那一行开始往上，真正的出错点在 cause 里。
+> 我实测过：包装异常栈深度 3、栈顶是 `wrapWithCause:50`（包装那一行）；
+> cause 是 `IllegalStateException`、栈深度 5、栈顶是真正出事的 `deepest()`。
+> 只要日志把 cause 打出来（`log.error("...", e)`），两段栈都能看到，还多了一句业务语义。
+>
+> 真正丢栈的是这两类：
+> ① `new RuntimeException(e.getMessage())` —— `getCause()` 直接是 `null`，异常类型、栈、嵌套关系全没了；
+> ② `log.error("... " + e.getMessage())` —— 异常对象根本没进日志。同一个异常，
+> `getMessage()` 只有 11 个字符 1 行，`printStackTrace` 是 634 个字符 9 行还带 `Caused by`。
+>
+> 所以判断标准不是「要不要包装」，而是「包装时有没有把 cause 传下去、打日志时有没有把异常对象传下去」。
+> 该包装的场合：跨层（DAO 的 SQLException 不该漏到 Controller）、受检转非受检（lambda 里写不了 throws）、
+> 补上下文（把 orderId 塞进 message）。不该包装：同层同语义（只多一层 Caused by 纯噪音）、
+> 只想加日志（打完直接 `throw e`）。
+
+**追问预判：**
+- 那为什么很多人说它丢栈？（看的是新异常的栈顶，没往下翻 cause；或者日志只打了一半）
+- 怎么在包装时同时保留两个独立异常？（`addSuppressed`，TWR 就是这么干的）
+- 受检异常的边界在哪？能不能绕过？（编译器只检查「可能抛出的受检异常」；
+  `sneakyThrow` 用泛型擦除可以绕过，Lombok `@SneakyThrows` 就是这个原理）
+- `catch (Throwable)` 为什么危险？（会把 `OutOfMemoryError`、`StackOverflowError` 一起吞掉，
+  JVM 已经进入不确定状态，继续跑反而更糟）
+- 异常的性能成本在哪？（`fillInStackTrace` 要遍历栈帧，比普通对象创建贵得多；
+  高频路径上不要用异常做流程控制）
+
+**项目里的实际案例：**
+
+> 场景：一个「订单导出」接口线上一半失败，日志只有一行
+> `导出失败：导出失败：null` —— 典型的 `catch (Exception e) { throw new RuntimeException("导出失败：" + e.getMessage()); }`，
+> 而且外面还套了一层同样的包装。改成 `throw new BizException("导出失败，orderNo=" + orderNo, e)` 后，
+> 下一次故障直接从 `Caused by` 里看到 `SocketTimeoutException: Read timed out`，定位时间从小时级到分钟级。
+
+---
+

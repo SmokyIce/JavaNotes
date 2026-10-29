@@ -122,9 +122,14 @@ public class ErasureProof {
         java.lang.reflect.ParameterizedType pt =
                 (java.lang.reflect.ParameterizedType) StringBox.class.getGenericSuperclass();
         System.out.println("  从中拿到的实参 = " + pt.getActualTypeArguments()[0]);
-        System.out.println("  但 StringBox.class.getMethod(\"set\", Object.class).getGenericParameterTypes()[0] = "
-                + StringBox.class.getMethod("set", Object.class).getGenericParameterTypes()[0]
+
+        // 注意：这里必须用 getDeclaredMethod + 父类。Box.set 是包私有，getMethod 只认 public，
+        // 直接 StringBox.class.getMethod("set", Object.class) 会抛 NoSuchMethodException（踩过）。
+        Method setter = Box.class.getDeclaredMethod("set", Object.class);
+        System.out.println("  但 Box.set 的泛型参数类型 = " + setter.getGenericParameterTypes()[0]
                 + "   <- 方法自己的签名里只有 T，没有 String");
+        System.out.println("  StringBox 自己声明的方法数 = " + StringBox.class.getDeclaredMethods().length
+                + "   <- 一个都没重写，实参只写在了类声明那一行");
         System.out.println("  => 想复原类型，只能「继承一个带实参的类」再读 getGenericSuperclass()：");
         System.out.println("     Spring 的 ParameterizedTypeReference、Jackson 的 TypeReference 都是这一招。");
         System.out.println();
@@ -247,7 +252,7 @@ public class ErasureProof {
         System.out.println("  ② catch (T e) / new T() / T.class  -> 运行时不知道 T 是什么");
         System.out.println("  ③ void f(List<String>) + void f(List<Integer>) -> name clash: same erasure");
         System.out.println("  ④ static 成员不能用类的类型参数      -> 静态上下文里没有 this，也就没有实参");
-        System.out.println("  真报错原文见 compile-errors/javac-output.txt（javac 只会报第一条错，够用了）");
+        System.out.println("  真报错原文见 day1-result.txt 第 3/4 段（GenericLimits + GenericLimits2）");
         System.out.println();
         System.out.println("========== 收尾 ==========");
         System.out.println("一句话：擦除擦掉的是「实参」，留下的是「声明」，代价是运行时无法复原类型。");

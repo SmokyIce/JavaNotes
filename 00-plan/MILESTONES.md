@@ -105,9 +105,10 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > | 时间 | 做了什么 | 产出 |
 > | :--- | :--- | :--- |
 > | 2026-10-28 | **W02 Day 1 · 类型擦除 + PECS**（补掉 W02 空目录 + W01 遗留清单） | `w02-generics-stream/` 工程 + `day1/` 两个 Demo + `compile-errors/` + `day1-result.txt`；笔记 Day 1 整节；`Java基础.md` 12 → **15 题** |
+> | 2026-10-29 | **W02 Day 2 · 异常体系** + Day 1 三个遗留 | `day2/` 两个 Demo（10 段实验）+ `day1/WildcardCapture` + `compile-errors/GenericLimits2`（6 个错）+ `day2-result.txt`；修掉 `ErasureProof` B2 段的 `NoSuchMethodException`；笔记 Day 2 整节；`Java基础.md` 15 → **17 题** |
 >
-> 题库这边已经超额：M1 只要 8 道，现在光是泛型就写了 3 道，加上 W01 的 12 道集合题共 15 道。
-> 剩下 W02 的异常 / Optional / Lambda / Stream，以及 W03 / W04 的并发部分。
+> 题库这边已经超额：M1 只要 8 道，现在光是泛型 3 道 + 异常 2 道 + W01 的 12 道集合题共 17 道。
+> 剩下 W02 的 Optional / Lambda / Stream，以及 W03 / W04 的并发部分。
 > 重点仍是 Stream 那个 `List<User>` 过滤→排序→分组→统计的练习。
 
 > W02 的 Stream 练习（`List<User>` 过滤→排序→分组→统计）是**最能直接用在业务代码里**的一次练习，认真做。
@@ -156,6 +157,12 @@ M3 之后的内容原封不动沿用 `java-48week-plan.md` 里的知识点清单
 **W02 Day 1 已完成（2026-10-28）**：`w02-generics-stream/` 工程建好，`ErasureProof` / `PecsDemo`
 两个 Demo + `compile-errors/GenericLimits.java` 四类报错原文跑通，笔记 Day 1 整节写完。
 
-下一个时间盒（60 分钟）：**W02 Day 2 · 异常体系** ——
-`try-with-resources` 与 `finally` 里 `return` 吞异常、`throw new RuntimeException(e)` 丢栈，
-时间盒见 `00-plan/today.md`（每天开工前先打开它，收工时覆盖）。
+**W02 Day 2 已完成（2026-10-29）**：异常体系。`day2/` 两个 Demo 共 10 段实验
+（TWR 逆序关闭与 suppressed / `finally` 里 `return` 吞异常 / `finally` 里 `throw` 覆盖主异常 /
+包装是切栈而非丢栈 / cause 与 suppressed 分工 / 受检边界 / sneakyThrow）。
+顺带补掉 Day 1 三个遗留：修 `ErasureProof` B2 段的 `NoSuchMethodException`、
+`compile-errors/GenericLimits2.java`（6 个通配符报错）、`day1/WildcardCapture.java`（捕获正例 + JDK 的 raw 选择）。
+
+下一个时间盒（60 分钟）：**W02 Day 3 · Optional** ——
+三个反模式（`isPresent()+get()` 当 null 检查 / `orElse(compute())` 白算一次 / Optional 当字段和参数）
++ 一条 `map/flatMap/filter` 链，时间盒见 `00-plan/today.md`（每天开工前先打开它，收工时覆盖）。

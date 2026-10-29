@@ -1,0 +1,132 @@
+# W02 · Day 2 实测快照 · 异常体系
+# 生成时间：2026-10-29
+# 环境：java version "17.0.12" 2024-07-16 LTS  / Windows
+
+########## 1/2  TryWithResourcesProbe · 五个实验 ##########
+
+========== A · 关闭顺序 ==========
+  open  A
+  open  B
+  use   A
+  use   B
+  close B
+  close A
+  结论：close 顺序是 B -> A，即「后开的先关」，和栈一样。
+  为什么必须逆序：B 可能依赖 A（比如 B 是 A 上的事务），先关 A 会让 B 的 close 拿到坏连接。
+
+========== B · close 抛异常：TWR 用 suppressed 保住两个 ==========
+  catch 到的： java.lang.RuntimeException: 业务代码里炸的
+  getSuppressed().length = 1
+  suppressed: java.lang.IllegalStateException: close 阶段自己炸了
+  => 主异常是业务异常，close 的异常降级成 suppressed，两个信息都在。
+  如果 try 块正常结束、只有 close 抛，那 close 的异常就是主异常（没有东西可压制）。
+
+========== C · finally 里 return：静默吞异常 ==========
+  swallow() 返回 42，没有异常、没有日志、没有任何痕迹
+  try 里那句 throw new IllegalStateException(...) 就这样消失了 ——
+  不是被 catch 了，是「方法正常返回」把异常帧一起扔了。
+  overrideReturn() 返回 2（try 的 return 1 被 finally 的 return 2 覆盖）
+  javac 对这个写法一句话都不说，IDEA 才会标 'return inside finally block'。
+
+========== D · finally 里抛异常：主异常被覆盖，连 suppressed 都没有 ==========
+  finally: 准备关闭资源
+  catch 到的： java.lang.IllegalStateException: close 阶段自己炸了
+  getSuppressed().length = 0   <- 业务异常 A 彻底消失
+  getCause() = null   <- 也没有
+  => 线上表现：日志里只有「close 阶段自己炸了」，业务异常查不到，白排查半天。
+  这就是 TWR 被设计出来的直接原因：把「关资源」从 finally 里挪走，
+  由编译器生成 try/finally + addSuppressed，保证主异常不被覆盖。
+
+========== E · 受检异常在 TWR 里的位置 ==========
+  body 正常结束
+  catch(IOException) 收到： close 抛受检异常
+  => close 的 throws 会被「提升」到 try-with-resources 语句上，
+     写这段代码的人必须处理它，编译器不会替你兜。
+  body 和 close 都抛 IOException 时：
+    主异常 = body 里的受检异常，suppressed = [java.io.IOException: close 抛受检异常]
+  => 主异常永远是 try 块里的那个，close 的进 suppressed（和 B 段同一条规律）。
+
+========== 收尾 ==========
+C 和 D 是同一个病的两种表现：finally 里只要有 return / throw，try 里正在冒泡的异常就没了。
+TWR 的价值不只是「少写 close」，而是它保证了「主异常一定活下来，close 的异常降级成 suppressed」。
+
+########## 2/2  ExceptionChainProbe · 六个实验 ##########
+
+========== A · 三种包装写法 ==========
+A1 new RuntimeException("查询用户失败", e)
+   栈深度 = 3，栈顶 = com.newt.java48.w02.day2.ExceptionChainProbe.wrapWithCause:50
+   getCause() = java.lang.IllegalStateException: 数据库连接超时
+   cause 栈深度 = 5，cause 栈顶 = com.newt.java48.w02.day2.ExceptionChainProbe.deepest
+   => 栈没有被「丢」，只是被「分成了两段」：包装点到 main 在新异常上，
+      真正的出错点在 cause 里。少打 cause 就等于只看半段栈。
+
+A2 new RuntimeException("查询用户失败：" + e.getMessage())
+   栈深度 = 3，getCause() = null
+   原始异常类型 IllegalStateException 也一起没了，只剩一句话
+   => 这才是真的丢栈。现场只剩「数据库连接超时」这七个字，
+      不知道是哪一行、哪个类型、有没有被别的异常包过。
+
+A3 不包装，直接 throws 往上抛
+   栈深度 = 4，栈顶 = com.newt.java48.w02.day2.ExceptionChainProbe.deepest(ExceptionChainProbe.java:38)
+   => 栈是完整一段，没有 cause、没有断层，排查最省事。
+      代价是方法签名上多一个 throws，调用方必须知道底层异常类型。
+
+========== B · 日志写法决定还剩多少现场 ==========
+  ① log.error("..." + e.getMessage())   字符数 = 11，行数 = 1
+     查询失败：查询用户失败
+  ② log.error("..." + e)               字符数 = 39，行数 = 1
+     查询失败：java.lang.RuntimeException: 查询用户失败
+  ③ log.error("...", e)                字符数 = 634，行数 = 9
+     at com.newt.java48.w02.day2.ExceptionChainProbe.wrapWithCause(ExceptionChainProbe.java:50)
+     at com.newt.java48.w02.day2.ExceptionChainProbe.howToLog(ExceptionChainProbe.java:119)
+     at com.newt.java48.w02.day2.ExceptionChainProbe.main(ExceptionChainProbe.java:28)
+     Caused by: java.lang.IllegalStateException: 数据库连接超时
+     at com.newt.java48.w02.day2.ExceptionChainProbe.deepest(ExceptionChainProbe.java:38)
+     at com.newt.java48.w02.day2.ExceptionChainProbe.middle(ExceptionChainProbe.java:42)
+     at com.newt.java48.w02.day2.ExceptionChainProbe.wrapWithCause(ExceptionChainProbe.java:48)
+  => ① 只有一句话；② 多了类名但还在同一行；③ 才是完整现场（含 Caused by）。
+     slf4j 的 {} 占位符最后一个是异常对象时，会自动打全栈，不需要 e.toString()。
+
+========== C · cause 与 suppressed 的分工 ==========
+  主异常 = java.lang.IllegalStateException: 主异常：订单状态校验失败
+  getCause() = null   <- 还是 null
+  getSuppressed() = [java.io.IOException: 附属 1：写审计日志失败, java.lang.IllegalArgumentException: 附属 2：MQ 发送失败]
+  分工：
+    cause      = 「因为什么才失败」—— 一对一，能用 initCause 补一次，之后不能再改；
+    suppressed = 「失败路上还顺手炸了别的」—— 一对多，TWR 关资源就靠它。
+  顺带一个坑：addSuppressed 传 null 会抛 NullPointerException，传自己会抛 IllegalArgumentException。
+  实测 main.addSuppressed(main) -> IllegalArgumentException: Self-suppression not permitted
+
+========== D · 受检 / 非受检的分界线 ==========
+  编译器只做一件事：检查「这里有没有可能抛出受检异常，而你没交代」。
+  · try 里不可能抛 IOException，却写 catch (IOException e) -> 编译错：
+      error: exception IOException is never thrown in body of corresponding try statement
+  · catch (RuntimeException e) / catch (Exception e) 永远合法 —— 非受检异常编译器不管。
+  · 所以「受检」的本质是：Throwable 的子类里，除 Error / RuntimeException 之外的那些，
+    方法必须显式 throws 或就地 catch。它约束的是「调用方必须做决定」，不是「更严重」。
+
+  try { int x = 1 / 1; } 里没有受检异常，但 catch (Exception e) 编译通过（x=1）
+
+========== E · 用擦除绕过受检检查（sneaky throw） ==========
+  looksInnocent() 的签名是 void looksInnocent()，一个 throws 都没有
+  实际抛出了： java.io.IOException: 我是受检异常，但没人声明我
+  getCause() = null   <- 不是被包装，是原样抛出
+  原理：方法声明 throws T，T 擦除成 Throwable 的下界检查，而调用处显式指定 T = RuntimeException，
+        编译器只按 RuntimeException 检查 —— 实参是 IOException 这件事它看不见（Day 1 的擦除）。
+  这就是 Lombok @SneakyThrows 的实现方式。生产代码慎用：
+        调用方按签名以为不用处理，实际会在运行期收到没声明过的受检异常。
+
+========== F · 什么时候包装，什么时候不包装 ==========
+  该包装（并且一定带上 cause）：
+    ① 跨层：DAO 的 SQLException 不该漏到 Controller，换成业务语义的异常；
+    ② 换异常体系：受检 -> 非受检（比如在 lambda / Stream 里没法写 throws）；
+    ③ 补上下文：把 orderId、userId 这类「排查必需但底层拿不到」的信息塞进 message。
+  不该包装：
+    ① 同层、同一个语义，包装只会多一层 Caused by，纯噪音；
+    ② 只想加日志 —— 打完日志直接 throw e，不要 new 一个新的；
+    ③ 用 message 替代 cause（A2 那种），现场全丢。
+  判断标准一句话：包装是为了「给上层一个能处理的抽象」，不是为了「显得统一」。
+
+========== 收尾 ==========
+RuntimeException(e) 不丢栈，它把栈切成两段；只传 message 才是真丢栈。
+finally 里的 return / throw 才是真的「静默吃掉异常」—— 这也是 TWR 存在的理由。

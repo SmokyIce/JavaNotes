@@ -32,16 +32,25 @@
 - Day 4（10-27）**手写 MyHashMap（`day6/` 包，put/get/resize）+ 与 JDK 20 万次对拍 0 处不一致** ✅
 - Day 4（10-27）题库扩到 **12 题**、题题有「我的回答 + 追问预判 + 项目案例草稿」；全周复述封板 ✅
 - **M1 Day 1（10-28）`w02-generics-stream/` 工程建好，类型擦除 + PECS 两个 Demo + 6 类编译期报错原文** ✅
-  题库同天 12 → **15 题**（擦除 / 泛型数组与 TypeReference / PECS）
+- **M1 Day 2（10-29）异常体系**（`day2/` 10 段实验）+ 补完 Day 1 三个遗留
+  （修 `ErasureProof` B2 段 `NoSuchMethodException`、`GenericLimits2` 6 个通配符报错、`WildcardCapture` 捕获正例）✅
+  题库同天 15 → **17 题**（异常 2 道）
 
-**下一步**：W02 Day 2 = 异常体系（`try-with-resources`、`finally` 里 `return` 吞异常、
-`throw new RuntimeException(e)` 丢栈 vs `addSuppressed`），时间盒在 `00-plan/today.md`。
+**下一步**：W02 Day 3 = Optional（三个反模式 + map/flatMap 链），时间盒在 `00-plan/today.md`。
 
-**W02 最值钱的一条（讲泛型必用）**：擦除擦的是**实参**、留下的是**声明**。
-`List<String>` 和 `List<Integer>` 的 `getClass() ==` 为 true，但实参藏在子类的 `Signature` 属性里 ——
-`StringBox.class.getGenericSuperclass()` 拿到 `Box<java.lang.String>`。
-Spring `ParameterizedTypeReference` / Jackson `TypeReference` 的匿名子类就是为这一招而存在。
-另一个必讲点：**CCE 抛在 `get` 那一行，不是 `add` 那一行**（编译器在 get 后插 checkcast）。
+**W02 最值钱的三条（讲课直接用）**
+
+1. 擦除擦的是**实参**、留下的是**声明**；实参藏在子类的 `Signature` 属性里
+   （`StringBox.class.getGenericSuperclass()` → `Box<java.lang.String>`）。
+   Spring `ParameterizedTypeReference` / Jackson `TypeReference` 的匿名子类就是为这一招而生。
+2. **CCE 抛在 `get` 那一行，不是 `add` 那一行**（编译器在 get 后插 checkcast）。
+3. **`new RuntimeException(e)` 不丢栈，是把栈切成两段**（实测包装栈深度 3 / cause 5）；
+   真丢栈是只传 message（`getCause() = null`）。**`finally` 里的 `return` 才是真的把异常变没**
+   （方法返回 42，异常无影无踪，javac 不报错）—— 这就是 TWR 与 `addSuppressed` 存在的理由。
+
+**踩过的工具坑**：`Class.getMethod()` 只找 public，包私有方法要用 `getDeclaredMethod`（且不含继承）；
+抓 `capture of ?` 细节要加 `-Xdiags:verbose`；`compile-errors/` 下的注释必须写英文，
+否则 javac 回显源码行时中文变 GBK 乱码。
 
 **W01 最值钱的一条实测结论（以后讲集合必用）**：
 「链表到 8 个就转红黑树」缺两个前提 —— **容量 ≥ 64** 且 **key 能比较大小**。

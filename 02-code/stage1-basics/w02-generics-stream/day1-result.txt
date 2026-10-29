@@ -1,8 +1,8 @@
-# W02 · Day 1 实测快照 · 泛型擦除 + PECS
-# 生成时间：2026-10-28
+# W02 · Day 1 实测快照 · 泛型擦除 + PECS + 通配符捕获
+# 生成时间：2026-10-29（2026-10-28 首跑，B2 段崩溃后修复重跑）
 # 环境：java version "17.0.12" 2024-07-16 LTS  / Windows
 
-########## 1/3  ErasureProof · run.bat ErasureProof ##########
+########## 1/4  ErasureProof · 六个实验 ##########
 
 ========== A · 运行时还有没有泛型？ ==========
 strings.getClass() = java.util.ArrayList
@@ -27,12 +27,50 @@ Box.set 的参数类型（反射 getParameterTypes）：Object
 B2 · 实参藏在哪：子类的 Signature 属性
   StringBox.class.getGenericSuperclass() = com.newt.java48.w02.day1.ErasureProof$Box<java.lang.String>
   从中拿到的实参 = class java.lang.String
-Exception in thread "main" java.lang.NoSuchMethodException: com.newt.java48.w02.day1.ErasureProof$StringBox.set(java.lang.Object)
-	at java.base/java.lang.Class.getMethod(Class.java:2227)
-	at com.newt.java48.w02.day1.ErasureProof.sectionB(ErasureProof.java:126)
-	at com.newt.java48.w02.day1.ErasureProof.main(ErasureProof.java:55)
+  但 Box.set 的泛型参数类型 = T   <- 方法自己的签名里只有 T，没有 String
+  StringBox 自己声明的方法数 = 0   <- 一个都没重写，实参只写在了类声明那一行
+  => 想复原类型，只能「继承一个带实参的类」再读 getGenericSuperclass()：
+     Spring 的 ParameterizedTypeReference、Jackson 的 TypeReference 都是这一招。
 
-########## 2/3  PecsDemo · run.bat PecsDemo ##########
+
+========== C · 往 List<String> 里塞 Integer ==========
+塞完之后 size = 2，没有人在存的时候拦你
+用 Object 接住： 42，类型是 java.lang.Integer
+ClassCastException 抛在 ErasureProof.java:154  —— 就是 String s = list.get(1) 这一行
+  class java.lang.Integer cannot be cast to class java.lang.String (java.lang.Integer and java.lang.String are in module java.base of loader 'bootstrap')
+反射 add 之后 list2 = [123]，元素运行时类型 java.lang.Integer
+结论：擦除把类型检查从「运行时每个元素」搬到了「编译期每个表达式」，
+      所以错误不会在写入时报，而是在「按 String 读出来」的那一刻才报 —— 报错位置和出错原因隔了好几层。
+
+========== D · 为什么不能 new T[] ==========
+(T[]) new Object[3] 的真实类型 = [Ljava.lang.Object;，放 Integer 也没事
+赋给 String[] 时炸了： class [Ljava.lang.Object; cannot be cast to class [Ljava.lang.String; ([Ljava.lang.Object; and [Ljava.lang.String; are in module java.base of loader 'bootstrap')
+  说明 (T[]) new Object[n] 只是骗过了编译器，数组的真实组件类型还是 Object
+Array.newInstance(String.class, 3) 的真实类型 = [Ljava.lang.String;
+往 String[] 里塞 Integer -> ArrayStoreException（数组的元素类型检查是运行时的）
+结论：数组在运行时必须知道自己的组件类型，而擦除后的 T 什么都不剩，
+      所以 new T[n] 编译不过；要造真数组，只能把 Class<T> 显式传进来。
+
+========== E · 桥方法（bridge method）==========
+StringCmp 声明的全部方法：
+  compare(String, String)                       bridge=false synthetic=false
+  compare(Object, Object)                       bridge=true  synthetic=true 
+原因：Comparator 接口擦除后是 compare(Object, Object)，
+      实现类写的是 compare(String, String)，两个签名对不上；
+      编译器就补一个 compare(Object,Object) 做 checkcast 再转调 —— 这就是桥方法。
+      所以反射数方法时会多出一个「你没写过」的方法，框架里遍历 method 要留意 isBridge()。
+
+========== F · 擦除的四条硬限制（编译期就挡） ==========
+  ① new T[n] / new List<String>[n]   -> generic array creation
+  ② catch (T e) / new T() / T.class  -> 运行时不知道 T 是什么
+  ③ void f(List<String>) + void f(List<Integer>) -> name clash: same erasure
+  ④ static 成员不能用类的类型参数      -> 静态上下文里没有 this，也就没有实参
+  真报错原文见 day1-result.txt 第 3/4 段（GenericLimits + GenericLimits2）
+
+========== 收尾 ==========
+一句话：擦除擦掉的是「实参」，留下的是「声明」，代价是运行时无法复原类型。
+
+########## 2/4  PecsDemo · 五个实验 ##########
 
 ========== A · 泛型是不变的（invariant） ==========
 List<Object> objs = strs;  编译错误：incompatible types
@@ -73,9 +111,69 @@ popAll 到 Collection<Object> -> [2.5, 1.5, 3, 2, 1]
 PECS：参数是「生产者」用 extends（只读），是「消费者」用 super（只写）。
 没有通配符的 <T> 只能保证「进和出是同一种类型」，一旦要跨类型传，就得放开一端。
 
-########## 3/3  compile-errors/GenericLimits.java · javac 报错原文 ##########
-# 命令：javac -J-Duser.language=en -encoding UTF-8 -d ../out-errors GenericLimits.java
+########## 3/4  WildcardCapture · 通配符捕获（Day 1 遗留补齐） ##########
 
+========== A · 直接对 List<?> 交换，编译不过 ==========
+  能想到的最自然写法：
+    void swapBad(List<?> xs, int i, int j) {
+        Object tmp = xs.get(i);
+        xs.set(i, xs.get(j));   // <- 编译错误
+        xs.set(j, tmp);         // <- 编译错误
+    }
+  javac -Xdiags:verbose 的原话（实测，不是想象）：
+    error: method set in interface List<E> cannot be applied to given types;
+      required: int,CAP#1
+      found:    int,CAP#2
+      reason: argument mismatch; Object cannot be converted to CAP#1
+      where CAP#1,CAP#2 are fresh type-variables:
+        CAP#1 extends Object from capture of ?
+        CAP#2 extends Object from capture of ?
+  关键就在 required CAP#1 / found CAP#2：同一句里的两个 ? 各自独立捕获，
+  编译器没有依据认为 CAP#1 和 CAP#2 是同一个类型，而 set 要求「和 get 出来的那个一致」。
+  第二行 xs.set(j, tmp) 的报错是 found: int,Object —— tmp 的静态类型是 Object，
+  同样不是 CAP#1。所以两个 ? 的容器，连「读出来再放回去」都做不到。
+
+========== B · 正例：helper 方法把 ? 捕获成 T ==========
+swapWild(List<Integer>, 0, 4) -> [5, 2, 3, 4, 1]
+  入口签名仍是 List<?>，里面转调 swap(List<T>)：
+  T 被推断成「那个 ? 捕获出来的 CAP#1」，整个方法体内 T 是同一个类型，set 就合法了。
+reverseWild(List<String>) -> [d, c, b, a]
+  交换之后 ints.get(0) 仍然是 Integer -> Integer
+
+========== C · JDK 17 自己怎么写的 ==========
+  java.util.Collections:495-502（JDK 17 src.zip 原文）：
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    public static void swap(List<?> list, int i, int j) {
+        // instead of using a raw type here, it's possible to capture
+        // the wildcard but it will require a call to a supplementary
+        // private method
+        final List l = list;
+        l.set(i, l.set(j, l.get(i)));
+    }
+  两个结论：
+  ① 捕获不是唯一解，JDK 明确知道「捕获要多一个私有方法」，选了 raw type + 压制警告；
+  ② 它把 raw 的作用范围压到 3 行内（final List l = list 之后就再没碰过 list），
+     这是 raw type 唯一可以接受的用法 —— 局部、短、有注释、有 @SuppressWarnings。
+  Collections.swap(List<Integer>, 0, 2) -> [9, 8, 7]（行为与 B 段一致）
+
+========== D · raw type 的代价：错误被推迟到读出来 ==========
+  raw.set(0, "我不是 Integer") 编译通过，容器里现在混了一个 String
+  容器内容 = [我不是 Integer, 2, 3]
+  按 Integer 读出来 -> ClassCastException: class java.lang.String cannot be cast to class java.lang.Integer (java.lang.String and java.lang.Integer are in module java.base of loader 'bootstrap')
+  和 Day 1 C 段同一个病：错误现场（get）离肇事现场（raw.set）隔了好几层。
+  所以 helper 捕获不只是「少个警告」，它把 checkcast 之外的类型约束也保住了。
+  Map<?, ?> 读 entrySet -> [a=1]；但 wild.put("b", 2) 编译不过（key 和 value 都是捕获类型）
+
+========== 收尾 ==========
+通配符捕获 = 编译器给这个 ? 起个临时名字（CAP#1）。但捕获发生在「每次方法调用」上：
+同一个 List<?> 在同一句里调 get 和 set，各捕各的（CAP#1 / CAP#2），
+所以「get 出来的那个」塞不回「要求 CAP#1 的 set」。把签名换成 <T> 之后，
+T 在方法体里只推断一次，全程同一个类型，才写得下去。
+
+########## 4/4  compile-errors · javac 报错原文 ##########
+# 命令：javac -J-Duser.language=en -encoding UTF-8 -d ../out-errors <file>.java
+
+---- GenericLimits.java（擦除的四条硬限制 + 泛型数组 + instanceof） ----
 GenericLimits.java:38: error: name clash: f(List<Integer>) and f(List<String>) have the same erasure
     void f(List<Integer> xs) {
          ^
@@ -98,4 +196,34 @@ GenericLimits.java:42: error: generic array creation
 GenericLimits.java:46: error: Object cannot be safely cast to List<String>
         return o instanceof List<String>;
                ^
+6 errors
+
+---- GenericLimits2.java（通配符六种拒绝，Day 1 遗留补齐） ----
+GenericLimits2.java:72: error: name clash: f(List<? super Number>) and f(List<? extends Number>) have the same erasure
+    void f(List<? super Number> b) {
+         ^
+GenericLimits2.java:36: error: incompatible types: List<String> cannot be converted to List<Object>
+        List<Object> objs = strs;
+                            ^
+GenericLimits2.java:47: error: incompatible types: int cannot be converted to CAP#1
+        src.add(4);                  // write a real value: rejected
+                ^
+  where CAP#1 is a fresh type-variable:
+    CAP#1 extends Number from capture of ? extends Number
+GenericLimits2.java:54: error: incompatible types: CAP#1 cannot be converted to Integer
+        Integer got = dst.get(0);    // read back as Integer: rejected, only Object is safe
+                             ^
+  where CAP#1 is a fresh type-variable:
+    CAP#1 extends Object super: Integer from capture of ? super Integer
+GenericLimits2.java:63: error: incompatible types: String cannot be converted to CAP#1
+        any.add("x");                // write: rejected, nobody knows what the list holds
+                ^
+  where CAP#1 is a fresh type-variable:
+    CAP#1 extends Object from capture of ?
+GenericLimits2.java:78: error: unexpected type
+        return new ArrayList<?>();
+                            ^
+  required: class or interface without bounds
+  found:    ?
+Note: Some messages have been simplified; recompile with -Xdiags:verbose to get full output
 6 errors

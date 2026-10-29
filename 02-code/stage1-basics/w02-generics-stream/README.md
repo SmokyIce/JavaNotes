@@ -40,11 +40,18 @@ java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w02.day1.ErasureProof
 w02-generics-stream/
 ├── run.bat / run.sh                        一键编译 + 运行
 ├── day1-result.txt                         Day 1 实测输出（含 javac 报错原文）
+├── day2-result.txt                         Day 2 实测输出（资源关闭 + 异常包装）
 ├── compile-errors/
-│   └── GenericLimits.java                  故意编译不过：擦除的四条硬限制
-└── src/main/java/com/newt/java48/w02/day1/
-    ├── ErasureProof.java                   六个实验：类同一性 / 反射签名 / CCE 位置 / 泛型数组 / 桥方法 / 硬限制
-    └── PecsDemo.java                       五个实验：不变性 / ? extends / ? super / copy / Stack pushAll
+│   ├── GenericLimits.java                  故意编译不过：擦除的四条硬限制
+│   └── GenericLimits2.java                 故意编译不过：通配符的六种拒绝
+└── src/main/java/com/newt/java48/w02/
+    ├── day1/
+    │   ├── ErasureProof.java               六个实验：类同一性 / 反射签名 / CCE 位置 / 泛型数组 / 桥方法 / 硬限制
+    │   ├── PecsDemo.java                   五个实验：不变性 / ? extends / ? super / copy / Stack pushAll
+    │   └── WildcardCapture.java            四个实验：捕获报错原文 / helper 捕获正例 / JDK 的 raw 选择 / raw 的代价
+    └── day2/
+        ├── TryWithResourcesProbe.java      五个实验：逆序关闭 / suppressed / finally 里 return / finally 里 throw / 受检 close
+        └── ExceptionChainProbe.java        六个实验：三种包装 / 日志写法 / cause vs suppressed / 受检边界 / sneakyThrow / 何时包装
 ```
 
 > `compile-errors/` 不在 `src/main/java` 下，不会被 `run.bat` 编译 —— 否则整个工程编不过。
@@ -53,10 +60,13 @@ w02-generics-stream/
 > ```bash
 > cd compile-errors
 > javac -J-Duser.language=en -encoding UTF-8 -d ../out-errors GenericLimits.java
+> javac -J-Duser.language=en -encoding UTF-8 -d ../out-errors GenericLimits2.java
 > ```
 >
 > 加 `-J-Duser.language=en` 是因为中文 locale 下 `name clash: ... same erasure` 会被译成
 > 「具有相同擦除」，搜不到任何资料 —— 报错原文比译文有用得多。
+> `GenericLimits2` 的注释刻意写成英文：javac 会把出错那行源码原样回显，
+> 中文注释在那里会变成 GBK 乱码，污染快照。
 
 ---
 
@@ -89,10 +99,15 @@ w02-generics-stream/
 2. **反射有两个视图：`getParameterTypes()` 是擦除后的，`toGenericString()` 会还原成 `add(E)`。**
    同一个方法两套签名，框架里混用就会出 bug。
 3. **想复原类型只有一个办法：继承一个写了实参的类，再读 `getGenericSuperclass()`。**
-   `StringBox extends Box<String>` 能拿到 `String`，但 `StringBox.class.getMethod("set")`
-   的泛型参数类型还是 `T`（方法自己的签名里没有 String）。
+   `StringBox extends Box<String>` 能拿到 `String`，但 `Box.class.getDeclaredMethod("set", Object.class)`
+   的泛型参数类型还是 `T`（方法自己的签名里没有 String），`StringBox` 自己声明的方法数是 **0**。
    Spring 的 `ParameterizedTypeReference`、Jackson 的 `TypeReference` 全靠这一招 ——
    匿名子类 + 泛型父类，本质是"用继承把实参写进 class 文件"。
+
+   > ⚠️ 这里原先写的是 `StringBox.class.getMethod("set", Object.class)`，**跑起来直接抛
+   > `NoSuchMethodException`**，把 Day 1 的演示程序截断在 B2 段（`day1-result.txt` 第一版末尾
+   > 就留着那个异常栈）。原因是 `Box.set` 是包私有方法，而 `getMethod()` 只找 **public**。
+   > 换成 `Box.class.getDeclaredMethod(...)` 才读得到。这条坑已修，快照 2026-10-29 重跑。
 
 ## 读代码的顺序
 
@@ -103,3 +118,35 @@ w02-generics-stream/
    是"运行时需要组件类型"的唯一证据。
 4. 最后跑 `PecsDemo`，按 `invariance → extends → super → copy → Stack` 的顺序读，
    每读一个就猜一下"这行会不会编译过"，再跑。
+5. 补跑 `WildcardCapture`：先看 A 段的 `required: int,CAP#1 / found: int,CAP#2`，
+   再看 B 段 helper 怎么一次捕获搞定。
+
+---
+
+## Day 2（异常体系）实验清单
+
+| #  | 要验证的结论 | 命令 | 实测 |
+| :- | :--- | :--- | :--- |
+| 1 | TWR 关闭顺序是逆序 | `run.bat day2.TryWithResourcesProbe` | `open A → open B → use A → use B → close B → close A` |
+| 2 | `close()` 抛异常时主异常不被覆盖 | 同上 | 主异常 `RuntimeException: 业务代码里炸的`，`getSuppressed().length = 1` |
+| 3 | `finally` 里 `return` 静默吞异常 | 同上 | `swallow()` 返回 42，异常**无影无踪**；`overrideReturn()` 返回 2 |
+| 4 | `finally` 里 `throw` 覆盖主异常，连 suppressed 都没有 | 同上 | 只 catch 到 close 的异常，`getSuppressed().length = 0`、`getCause() = null` |
+| 5 | `close()` 的受检异常会被提升到 TWR 语句上 | 同上 | `catch(IOException)` 必须写，否则编译不过 |
+| 6 | body 和 close 都抛时谁是主异常 | 同上 | 主异常是 body 的，close 的进 suppressed |
+| 7 | `new RuntimeException(e)` **不丢栈**，是把栈切成两段 | `run.bat day2.ExceptionChainProbe` | 包装栈深度 3、栈顶在包装行；cause 栈深度 5、栈顶在 `deepest` |
+| 8 | 只传 message 才是真丢栈 | 同上 | `getCause() = null`，异常类型也没了 |
+| 9 | 日志写法决定还剩多少现场 | 同上 | `getMessage()` 11 字 1 行；`+e` 39 字 1 行；`printStackTrace` 634 字 9 行含 `Caused by` |
+| 10 | `cause` 与 `suppressed` 分工不同 | 同上 | cause 一对一（`addSuppressed(main)` 抛 `Self-suppression not permitted`）；suppressed 一对多 |
+| 11 | 受检的边界是「有没有可能抛出」 | 同上 | 无受检来源却 `catch (IOException)` → `exception IOException is never thrown in body of corresponding try statement` |
+| 12 | 擦除能绕过受检检查（sneaky throw） | 同上 | `void looksInnocent()` 无 throws，运行期真抛 `java.io.IOException`，`getCause() = null` |
+
+**本节最值钱的两个点**
+
+1. **「`RuntimeException(e)` 丢栈」这个说法只对一半。**
+   实测：包装异常的栈深度 3（栈顶是包装那一行），cause 的栈深度 5（栈顶是真正出事的 `deepest`）。
+   栈没丢，是断成两截。所以「日志里带不带 cause」决定了你能不能看到后半截 ——
+   真正丢栈的是 `new RuntimeException(e.getMessage())`，`getCause()` 直接是 `null`。
+2. **`finally` 里的 `return` 才是真的把异常变没。**
+   `swallow()` 里 `throw` 了一句 `IllegalStateException`，方法却返回 42 给调用方，
+   没有异常、没有日志、没有 suppressed。javac 一句话都不说。
+   TWR 存在的理由不是「少写 close」，而是保证主异常活下来、close 的异常降级成 suppressed。
