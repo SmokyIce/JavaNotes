@@ -18,3 +18,15 @@
 - 新增经验（写进 MEMORY.md）：`getMethod` 只认 public；抓 `capture of ?` 要 `-Xdiags:verbose`；
   `compile-errors/` 下注释必须英文（javac 回显源码行会让中文变 GBK 乱码）。
 - 口径提醒：笔记「一句话总结」「核心问题」仍按约定留空给学员，只把答案写进文末「参考要点」。
+
+## 2026-10-30（第三次执行）
+- 开工先做**回归验证**：清空 `out/` 全量重编 + 跑全部 8 个入口（day1×3 / day2×3 / day3×2），无回归。
+  这一步值得固化成每天第一步 —— 比逐条找 TODO 更快发现「中断的代码」。
+- 补完 1 项遗留：Day 2 §9「异常开销没量」→ `day2/ExceptionCost.java`，两遍 JVM 参数对照
+  （447 ns → 31 ns，15 倍）。Day 2 另一条遗留（`Error` / `catch(Throwable)`）按计划留给 W13，未动。
+- 推进 M1 Day 3：Optional，`day3/` 两个 Demo 共 11 段 + `day3-result.txt`；题库 17 → 18。
+- 同步：`W02` 笔记（Optional 勾选 + Day 3 整节 + Day 2 §10 + 踩坑 4 条 + 面试问题 5 条 + Q6 + 打卡）、
+  `today.md`、`MILESTONES.md`、工程 `README.md`（目录树 + Day 3 清单）。
+- 下次起点：`00-plan/today.md` 的「下一个时间盒」= W02 Day 4 Lambda。
+- 新增经验（已写进 MEMORY.md）：手动编译要刷新 `sources.txt`；微基准必须多轮取最小值（单轮差 6 倍）；
+  TWR 里 catch 子类不够，资源 `close()` 的 IOException 会提升到语句上。

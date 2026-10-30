@@ -496,8 +496,9 @@
   `sneakyThrow` 用泛型擦除可以绕过，Lombok `@SneakyThrows` 就是这个原理）
 - `catch (Throwable)` 为什么危险？（会把 `OutOfMemoryError`、`StackOverflowError` 一起吞掉，
   JVM 已经进入不确定状态，继续跑反而更糟）
-- 异常的性能成本在哪？（`fillInStackTrace` 要遍历栈帧，比普通对象创建贵得多；
-  高频路径上不要用异常做流程控制）
+- 异常的性能成本在哪？（`fillInStackTrace` 要遍历栈帧。W02 实测栈深 1 约 447 ns/次，
+  用 `-XX:-StackTraceInThrowable` 关掉采集后 31 ns，差 15 倍；多 5 层栈再多 63 ns。
+  高频路径上不要用异常做流程控制，但「该抛就抛」，一次几百纳秒比查不出问题便宜）
 
 **项目里的实际案例：**
 
@@ -505,6 +506,45 @@
 > `导出失败：导出失败：null` —— 典型的 `catch (Exception e) { throw new RuntimeException("导出失败：" + e.getMessage()); }`，
 > 而且外面还套了一层同样的包装。改成 `throw new BizException("导出失败，orderNo=" + orderNo, e)` 后，
 > 下一次故障直接从 `Caused by` 里看到 `SocketTimeoutException: Read timed out`，定位时间从小时级到分钟级。
+
+---
+
+### 18. `Optional` 能消灭 NPE 吗？`orElse` 和 `orElseGet` 有什么区别？
+
+**我的回答（自己的话）：**
+
+> 消灭不了。`Optional` 只是把「可能没有值」写进**返回类型**，逼调用方表态，它自己照样能炸：
+> `get()` 抛 `NoSuchElementException`、`orElse(null)` 当场把契约破坏掉、当字段用还能被序列化绕过。
+> 它真正值钱的是链式：`map` / `flatMap` / `filter` 把「缺失」一路短路到链尾，只在一处兜底。
+>
+> `orElse` 和 `orElseGet` 的差别是 **eager 还是 lazy**：`orElse` 的副参数在进 `orElse` 之前就求值完了，
+> 所以命中缓存时也白算一次。我实测过：模拟一次 20 ms 的远程查询，有值时 `orElse` 还是调了 **1 次、36 ms**，
+> `orElseGet` 是 **0 次、0.3 ms**。结果完全正确，只是慢，所以这类 bug 极难发现。
+> 判断标准一条：参数里有 IO / 远程调用 / 加锁 / 大对象，就必须 `orElseGet`。
+>
+> 还有两个常被问到的坑：`Optional` 不能做字段 —— 它没实现 `Serializable`，
+> 一个 `Optional` 字段就让整个 DTO 去序列化时抛 `NotSerializableException`；
+> `map` 里返回 `null` 会**静默**变成 `empty`，而 `flatMap` 里返回 `null` 直接 NPE。
+
+**追问预判：**
+- `Optional` 该不该做方法参数？（不该：调用方每个地方都要 `Optional.ofNullable(x)` 包一遍，
+  而且照样能传 `null`，签名给人的安全感是假的）
+- `map` 和 `flatMap` 怎么选？（被调方法**自己返回 Optional** 就用 `flatMap`，返回普通值用 `map`。
+  写错不是编译错，是多一层 `Optional<Optional<T>>`，到链尾 `orElse` 时才露馅）
+- `Optional` 能提升性能吗？（不能，还多一次对象分配；`OptionalInt` 这类特化只是为了少装箱。
+  它的价值是可读性 + 强制表态）
+- `filter` 在链里干什么？（把「有值但无效」也归到 `empty`。业务例子里：
+  订单 200 元用 500 元券，不 `filter(c -> c.off() <= amount)` 会算出 **−300**）
+- 为什么 `empty.get()` 的报错比 NPE 还难查？（只有一句 `No value present`，
+  没有变量名和上下文；而 JDK 14+ 的 NPE 有 helpful message，会说清谁为 null）
+
+**项目里的实际案例：**
+
+> 场景：商品详情接口从缓存取价格，`return cache.get(id).orElse(loadFromDb(id));`，
+> 缓存命中率 95%，逻辑上看没问题。压测时发现 DB 的 QPS 是缓存未命中率的 5 倍，
+> 一直找不到原因 —— 因为 `orElse` 的副参数**每次**都求值。
+> 改成 `orElseGet(() -> loadFromDb(id))` 后 DB QPS 立刻掉到原来的 1/20 以下。
+> 这个 bug 的特征值得记：**结果永远正确、只在监控上表现为「DB 压力莫名偏高」**。
 
 ---
 

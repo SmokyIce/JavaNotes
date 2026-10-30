@@ -1,0 +1,99 @@
+# W02 · Day 3 实测快照 · Optional
+# 生成时间：2026-10-30
+# 环境：java version "17.0.12" 2024-07-16 LTS  / Windows
+
+########## 1/2  OptionalAntiPatterns · 三个反模式 + 五个陷阱 ##########
+
+========== A · isPresent() + get() 当 null 检查 ==========
+A1 两种写法结果相同：newt / newt
+A1 但写法 1 多了 5 行，且 get() 在 JDK 10 起被标注为「优先用 orElseThrow」
+A2 三层嵌套 = 杭州；一条链 = 杭州（结果同，行数 16 vs 4）
+A3 empty.get() -> java.util.NoSuchElementException: No value present
+A3 这一句里没有任何变量名、没有任何业务上下文，比 NPE 的 helpful message 更难查
+A3 对照 NPE  -> java.lang.NullPointerException: Cannot invoke "String.length()" because "<parameter1>" is null
+
+========== B · orElse(compute()) 白算一次 ==========
+B1 orElse(remote())    有值时远程调用次数 = 1，耗时 25.5 ms，结果 本地缓存
+B1 orElseGet(() -> ...) 有值时远程调用次数 = 0，耗时 0.3 ms，结果 本地缓存
+B2 空值时调用次数：orElse = 1，orElseGet = 1（一样）
+B3 orElse(new ArrayList<>()) 白构造一次，但对象没被使用，逃逸分析后基本无成本，size=0
+B3 判断标准：参数里有没有 IO / 远程调用 / 加锁 / 大对象 —— 有就必须 orElseGet
+
+========== C · Optional 当字段 / 参数 / 集合元素 ==========
+C1 序列化失败 -> NotSerializableException: java.util.Optional
+C1 改成可空字段后序列化成功，133 字节
+C2 sendMail(null) -> NullPointerException，栈顶 sendMail
+C2 参数用 Optional 的两个代价：① 签名给人的安全感是假的；② 每个调用点都要 Optional.ofNullable(x) 包一遍
+C2 调用点噪声示例：3 个调用点 = 3 次包装
+C3 List<Optional<String>> 长度 3，有效 2；遍历时每个元素还要再判一次
+C3 正解：源头上就不放空值 -> [a, c]（Optional.stream() 展平）
+
+========== D · 五个静默陷阱 ==========
+D1 Optional.of(null)      -> NPE（of 不允许 null，要用 ofNullable）
+D2 map(s -> null)        -> Optional.empty（静默变空，可能掩盖真实 bug）
+D3 flatMap(s -> null)    -> NPE（flatMap 要求返回 Optional，不能是 null）
+D4 orElse(null)          -> 返回 null，等于把 Optional 又变回 null，下游照样 NPE
+D5 orElse / orElseGet 编译期完全同签名，只能靠 code review 或 Sonar 规则拦（java:S5411 / java:S3553）
+
+========== E · 判定表 ==========
+用法                      | 结论   | 理由
+--------------------------|--------|--------------------------------------
+方法返回值                 | 该用   | 显式告诉调用方「可能没有」
+字段                       | 别用   | 不可序列化；字段天然可空，包一层没收益
+方法参数                   | 别用   | 逼调用方包装；照样能传 null
+集合元素                   | 别用   | 空元素应该在源头过滤掉
+Optional<Optional<T>>      | 绝不用 | 一定是用错了 map，应该 flatMap
+OptionalInt / OptionalLong | 看情况 | 基本类型特化，避免装箱；没有 OptionalFloat
+
+一句话：Optional 是「返回值的类型」，不是「所有可空位置的容器」。
+
+
+########## 2/2  OptionalChain · 一条链怎么写 ##########
+
+========== A · null 检查 vs 一条链 ==========
+A1 传统写法 = 杭州；链式写法 = 杭州
+A2 三种缺失场景（无地址 / 城市为空白 / 城市正常），链式写法都是同一段代码：
+   城市[杭州]       -> 杭州
+   无地址          -> 未知
+   城市[  ]       -> 未知
+A2 关键点：map 遇到 null 会直接短路成 empty，所以链上不需要任何 if
+
+========== B · map 与 flatMap 的差别 ==========
+B1 map(u -> addressOf(u))     -> Optional，要 .get().get() 才能拿到城市：杭州
+B2 flatMap(u -> addressOf(u)) -> 一层 Optional，城市 = 杭州
+B3 map(User::name)            -> 普通值，用 map 就对了：newt
+B4 判定规则只有一条：**被调的方法自己返回 Optional 就用 flatMap，返回普通值就用 map**
+B4 写成 map 的后果不是编译错，而是多一层 Optional —— 会在链尾 orElse 时露馅
+
+========== C · filter：连「有值但无效」一起挡掉 ==========
+C1 输入 [杭州] -> 有效:杭州
+C1 输入 [  ] -> 被 filter 挡住
+C1 输入 [] -> 被 filter 挡住
+C1 filter 与 map 的关系：filter 只保留「让谓词为 true」的值，结果仍是 Optional，所以可以继续接 map
+C1 它的价值是把「空」和「脏」统一成同一个出口 —— empty
+
+========== D · orElseGet / orElseThrow ==========
+   (computeDefaultCity 被调用了 —— 只在真的为空时才走这里)
+D1 orElseGet(computeDefaultCity) = 北京
+D2 orElseThrow(带上下文) -> 用户地址缺失，userId=10086
+D2 同样场景 get()       -> No value present（没有 userId，不知道该查谁）
+D3 orElse 还有第三个陷阱：类型是 T，可以直接写 orElse(null)，等于把 Optional 就地变回 null
+
+========== E · 消费侧：ifPresentOrElse 与 stream() ==========
+E1 有城市：杭州
+E1 没城市：走降级逻辑（用 IP 定位）
+E2 三个用户里有效的 zip = [310000]（空的被 flatMap(Optional::stream) 吃掉）
+E2 注意 JDK 8 没有 Optional.stream()，等价写法是 filter(Optional::isPresent).map(Optional::get)
+
+========== F · 业务样例：优惠券算价 ==========
+订单金额 = 200
+F1 券 [SAVE30   ] -> 实付 170
+F1 券 [SAVE500  ] -> 实付 200
+F1 券 [EXPIRED  ] -> 实付 200
+F1 券 [NOT_EXIST] -> 实付 200
+F1 两个 filter 都在链上，所以「没有券 / 券失效 / 券超额」三种情况共用同一个 orElse；
+F1 如果写成 coupon.map(Coupon::off).orElse(0) 再算减法，SAVE500 会算出 -300。
+
+========== 收尾 ==========
+Optional 不是「消除 null」，而是「把 null 的处理推迟到链尾，只写一次」。
+链上每一步都是「有就继续、没有就短路」，直到 orElse / orElseThrow 落地。

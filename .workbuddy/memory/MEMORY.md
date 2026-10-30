@@ -35,8 +35,12 @@
 - **M1 Day 2（10-29）异常体系**（`day2/` 10 段实验）+ 补完 Day 1 三个遗留
   （修 `ErasureProof` B2 段 `NoSuchMethodException`、`GenericLimits2` 6 个通配符报错、`WildcardCapture` 捕获正例）✅
   题库同天 15 → **17 题**（异常 2 道）
+- **M1 Day 3（10-30）Optional**（`day3/` 11 段实验：三反模式 + 五陷阱 + 一条链）
+  + 补 Day 2 遗留「异常开销」（`ExceptionCost`，447 ns → 关栈 31 ns，15 倍）✅
+  题库 17 → **18 题**（Optional 1 道）
 
-**下一步**：W02 Day 3 = Optional（三个反模式 + map/flatMap 链），时间盒在 `00-plan/today.md`。
+**下一步**：W02 Day 4 = Lambda（函数式接口四形态 + 方法引用四种写法 + 变量捕获 effectively final），
+时间盒在 `00-plan/today.md`。
 
 **W02 最值钱的三条（讲课直接用）**
 
@@ -50,7 +54,10 @@
 
 **踩过的工具坑**：`Class.getMethod()` 只找 public，包私有方法要用 `getDeclaredMethod`（且不含继承）；
 抓 `capture of ?` 细节要加 `-Xdiags:verbose`；`compile-errors/` 下的注释必须写英文，
-否则 javac 回显源码行时中文变 GBK 乱码。
+否则 javac 回显源码行时中文变 GBK 乱码；
+手动编译前必须刷新 `find src/main/java -name "*.java" > sources.txt`，
+否则新建的类报 `ClassNotFoundException`（`run.bat` 每次都会重扫，手动走容易漏）；
+**微基准只测一轮会差 6 倍**（44 ns vs 295 ns，JIT 分层编译），必须多轮 × 大样本取最小值。
 
 **W01 最值钱的一条实测结论（以后讲集合必用）**：
 「链表到 8 个就转红黑树」缺两个前提 —— **容量 ≥ 64** 且 **key 能比较大小**。

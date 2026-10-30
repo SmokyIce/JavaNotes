@@ -1,7 +1,7 @@
 # W02 · Java 泛型 · 异常 · Optional · Stream
 
 > **第一阶段 · 打基础（W01–W12）** ｜ 预计投入 ≈ 7 小时（每天 60 分钟）
-> 状态：🟨 进行中（Day 1 / Day 2 完成）　｜　开始日期：2026-10-28　｜　完成日期：____-__-__
+> 状态：🟨 进行中（Day 1 / Day 2 / Day 3 完成）　｜　开始日期：2026-10-28　｜　完成日期：____-__-__
 
 > 💡 周六练习：给一个 List<User>，完成 过滤 → 排序 → 分组 → 统计。
 
@@ -11,7 +11,7 @@
 
 - [x] 泛型
 - [x] 异常体系
-- [ ] Optional
+- [x] Optional
 - [ ] Lambda
 - [ ] Stream
 - [ ] 过滤 / 排序 / 分组 / 统计
@@ -23,6 +23,7 @@
 3. `List<? extends Number>` 和 `List<? super Integer>` 各自能做什么、不能做什么？为什么 `Collections.copy` 要用两个不同的通配符？
 4. `finally` 里的 `return` 和 `throw` 分别会怎样处理 `try` 里正在冒泡的异常？为什么 `try-with-resources` 要专门发明 `addSuppressed`？
 5. 说 `throw new RuntimeException(e)` 会「丢栈」，这句话哪里不准确？什么样的写法才是真的丢栈？
+6. `isPresent() + get()` 和 `orElse` 都是「有值取值、没值兜底」，为什么前者是反模式？`orElse` 又在什么情况下会白算一次、甚至算出负数？
 
 > 自己先答一遍，再翻文末「参考要点」，别倒着来。
 
@@ -35,7 +36,8 @@
 Day 1（已完成 10-28）  类型擦除：六个实验 + PECS 五个实验 + 四类编译期报错原文
 Day 1 补（已完成 10-29）通配符捕获：capture 报错原文 + helper 正例 + JDK 的 raw 选择
 Day 2（已完成 10-29）  异常体系：TWR 关闭与 suppressed / finally 吞异常 / 包装丢栈真相 / sneakyThrow
-Day 3（待做）          Optional：正确用法与三个反模式
+Day 2 补（已完成 10-30）异常开销：fillInStackTrace 才是账单，-XX:-StackTraceInThrowable 对照实测
+Day 3（已完成 10-30）  Optional：三个反模式 + 五个陷阱 + 一条 map/flatMap/filter 链
 Day 4（待做）          Lambda：函数式接口 + 方法引用 + 变量捕获（ effectively final ）
 Day 5（待做）          Stream：中间/终止操作、惰性求值、短路
 Day 6（待做）          List<User> 过滤 → 排序 → 分组 → 统计
@@ -355,10 +357,156 @@ private static void looksInnocent() {                       // 签名上一个 t
 
 #### 9. 遗留
 
-- `Error`（`OutOfMemoryError` / `StackOverflowError`）只提了一句，没做实验；
-  「为什么 `catch (Throwable)` 危险」还没展开 —— 等 W13 JVM 内存那块一起补更顺。
-- 异常的性能成本只说了「`fillInStackTrace` 贵」，没量。可以用 `-XX:-StackTraceInThrowable`
-  跑一个 100 万次的循环对比 —— 顺手能当 JVM 参数的第一个实验。
+- ✅ 异常的性能成本 —— 2026-10-30 补完，`day2/ExceptionCost.java`，见文末「补 · 异常开销」一节。
+- ⬜ `Error`（`OutOfMemoryError` / `StackOverflowError`）只提了一句，没做实验；
+  「为什么 `catch (Throwable)` 危险」还没展开 —— 等 W13 JVM 内存那块一起补更顺（不补课，到那儿再说）。
+
+#### 10. 补 · 异常开销（2026-10-30）
+
+Day 2 说「`fillInStackTrace` 贵」但没量。补法是把同一个类跑两遍，只改一个 JVM 参数。
+每用例 5 轮 × 10 万次**取最小值**（原因见下面第 3 条），JDK 17.0.12：
+
+| 用例 | 默认 | `-XX:-StackTraceInThrowable` |
+| :--- | ---: | ---: |
+| A `new` 但不抛（栈深 1） | 418 ns | 37 ns |
+| B `throw` + `catch`（栈深 1） | 447 ns | 31 ns |
+| C `throw` + `catch`（栈深 6） | 510 ns | 31 ns |
+| D 反复抛同一个缓存异常 | ≈0 ns | ≈0 ns |
+
+三条结论，一条比一条反直觉：
+
+1. **贵的是抓栈，不是抛。** B − A = +29 ns —— 「抛 + 捕」这个动作本身几乎免费；
+   把采集关掉，B 直接掉到 31 ns，差 15 倍。整笔账单在 `Throwable` 构造函数里的 `fillInStackTrace`。
+2. **栈深是线性成本。** C − B = +63 ns 就是多走 5 层栈的代价。线上真实栈深 30~50 层，
+   一次异常几百纳秒到微秒级 —— 这解释了「循环里用异常控流程」为什么会把接口拖慢一个数量级。
+3. **微基准不能只测一轮。** 第一版代码每用例只测一轮，同一段代码两次跑出 **44 ns 和 295 ns**
+   （JIT 还停在 C1 甚至解释执行）。改成多轮取最小值后才稳定。这条比异常本身更值得记：
+   **任何「一次跑出来的耗时」都不可信。**
+
+> `-XX:-StackTraceInThrowable` 只用来做实验，生产绝对不能开 —— 排障全靠那份栈，
+> 关掉之后日志里 `at xxx` 一行都没有。缓存异常（D 那行）同理：栈是第一次创建时的，
+> 出事的时候只能看到一个陈年现场。
+
+---
+
+### Day 3 · 2026-10-30（周五）· Optional
+
+| 时间 | 做什么 | 产出 |
+| -: | :--- | :--- |
+| 10 分钟 | 复述 Day 2：`finally` 里 return/throw 各自怎么吞异常 / 包装是切栈不是丢栈 | 口头过，卡住回看 Day 2 |
+| 25 分钟 | 三个反模式：`isPresent()+get()`、`orElse(compute())`、Optional 当字段/参数/集合元素 | `day3/OptionalAntiPatterns.java` 五段 |
+| 15 分钟 | 正例：`map/flatMap/filter/orElseGet/orElseThrow` 串成一条链 | `day3/OptionalChain.java` 六段 |
+| 10 分钟 | 输出：一句话讲清「Optional 是给返回值用的」 | 本节第 6 小节 + 核心问题 Q6 |
+
+实测快照：`w02-generics-stream/day3-result.txt`（JDK 17.0.12）
+
+#### 1. 反模式一：`isPresent() + get()` 只是换了个壳的 `!= null`
+
+实测同一件事的两种写法：三层嵌套 `isPresent` **16 行**，`flatMap` 一条链 **4 行**，结果一样。
+但这只是「丑」，还不是要害。要害在 `get()` 的报错信息：
+
+```text
+empty.get()   -> java.util.NoSuchElementException: No value present
+lengthOf(null) -> java.lang.NullPointerException: Cannot invoke "String.length()" because "<parameter1>" is null
+```
+
+`No value present` **没有变量名、没有业务上下文、没有是哪一层的 Optional**。
+JDK 14 给 NPE 加的 helpful message 反而把「谁是 null」说清楚了 ——
+**用 Optional 把 null 包起来，报错信息是退化的，不是进化的。** 这条很少有人说。
+
+> 🔍 补充：上面 NPE 里显示 `<parameter1>` 而不是参数名，是因为 javac 默认只带
+> `-g:source,lines`，没有局部变量表。加 `-g` 才显示 `s`。想看变量名就得付 10%~20% 的 class 体积。
+
+#### 2. 反模式二：`orElse(compute())` 白算一次
+
+`orElse` 的参数是**方法调用**，在进 `orElse` 之前就求值完了。实测（模拟一次 20ms 远程查询）：
+
+| 写法 | 有值时远程调用次数 | 耗时 |
+| :--- | ---: | ---: |
+| `cacheHit.orElse(remote("user:1"))` | **1 次** | 36.2 ms |
+| `cacheHit.orElseGet(() -> remote("user:1"))` | **0 次** | 0.3 ms |
+
+空值时两者完全一样（都是 1 次）。所以这个 bug 的特征很刁钻：
+**命中缓存的路径上多打一次数据库，业务结果完全正确，监控上看只像「偶尔慢一点」。**
+
+但也不必谈 `orElse` 色变 —— `orElse(new ArrayList<>())` 这种廉价对象，白构造一次基本无害
+（对象没被使用，逃逸分析后直接消掉）。判断标准就一条：
+
+> **参数里有没有 IO / 远程调用 / 加锁 / 大对象？有就必须 `orElseGet`。**
+> 所以 Sonar 规则 `java:S5411` 才直接一刀切禁掉 `orElse` 的调用形式。
+
+#### 3. 反模式三：Optional 当字段 / 参数 / 集合元素
+
+三个代价，一个比一个实际：
+
+| 位置 | 实测现象 | 为什么 |
+| :--- | :--- | :--- |
+| 字段 | `NotSerializableException: java.util.Optional` | `Optional` **没实现 `Serializable`**。任何走 Java 序列化的地方（Session、RPC、本地缓存、`ObjectOutputStream`）直接炸 |
+| 方法参数 | `sendMail(null)` 照样 NPE，栈顶就在 `sendMail` | 签名给人的安全感是假的；而且每个调用点都要 `Optional.ofNullable(x)` 包一遍（实测 3 个调用点 = 3 次包装） |
+| 集合元素 | `List<Optional<String>>` 3 个元素、2 个有效，遍历还要再判一次 | 空元素应该在**源头**过滤掉，而不是塞进集合让所有人处理 |
+
+`Settings` 那个例子只加了一行 `Optional<String> port`，整个对象就从「能序列化」变成「不能」。
+改成 `String port` + `Optional<String> portOpt()` 之后，序列化 133 字节正常 —
+**这就是 JDK 官方那句「Optional 是为返回值设计的」的真实含义，不是风格洁癖。**
+
+#### 4. 五个静默陷阱
+
+| 写法 | 结果 | 危害 |
+| :--- | :--- | :--- |
+| `Optional.of(null)` | NPE | `of` 不接受 null，要用 `ofNullable`；差一个词，运行时才炸 |
+| `opt.map(s -> null)` | **静默变成 `Optional.empty()`** | 不报错不提示，把一个 bug 伪装成「没有值」 |
+| `opt.flatMap(s -> null)` | NPE | `flatMap` 的契约是「你必须还我一个 Optional」 |
+| `empty.get()` | `NoSuchElementException: No value present` | 见第 1 小节，信息量比 NPE 还少 |
+| `opt.orElse(null)` | 返回 `null` | 当场把 Optional 的契约破坏掉，下游照样 NPE |
+
+最有意思的是第 2、3 行：**`map` 和 `flatMap` 对 null 的态度完全相反，而两者都「合理」**。
+`map` 的契约是「函数可能返回 null，那我短路」，`flatMap` 的契约是「函数必须返回 Optional」。
+同一个 `s -> null` 传进去，一个静默、一个爆炸 —— 这类差异只能靠实测记住，看文档看不出来。
+
+#### 5. 正例：一条链 + `filter` 才是完整形态
+
+`map` / `flatMap` 的判定只有一条：
+
+> **被调的方法自己返回 `Optional` → 用 `flatMap`；返回普通值 → 用 `map`。**
+
+实测写成 `map` 的后果不是编译错，而是得到 `Optional<Optional<Address>>`，
+要 `.get().get()` 才能拿出城市 —— 然后在链尾 `orElse` 的时候才露馅。
+
+`filter` 的作用常被低估：它把「空」和「脏」统一成同一个出口 `empty`。业务样例（订单 200 元）：
+
+| 券 | 优惠额 | 不走 filter | 走 filter |
+| :--- | ---: | ---: | ---: |
+| `SAVE30` | 30 | 170 | 170 |
+| `SAVE500` | 500 | **−300** | 200 |
+| `EXPIRED` | 0 | 200 | 200 |
+| `NOT_EXIST` | — | 200 | 200 |
+
+```java
+int pay = findCoupon(code)
+        .filter(c -> c.off() > 0)          // 挡掉失效券
+        .filter(c -> c.off() <= amount)    // 挡掉「券比订单大」
+        .map(Coupon::off)
+        .map(off -> amount - off)
+        .orElse(amount);
+```
+
+两个 `filter` 让「没券 / 券失效 / 券超额」三种情况共用同一个 `orElse`。
+少了第二个 `filter` 就会**算出一个负数的实付金额** —— 这是链式写法里最容易漏的一环：
+`Optional` 只管「有没有」，**不管「值合不合法」，合法性得自己 `filter`。**
+
+消费侧还有两个 JDK 9 之后才有的写法：`ifPresentOrElse(consumer, runnable)`
+一次写清「有值做什么、没值做什么」，不用先 `isPresent()`；
+`flatMap(Optional::stream)` 能把 `List<Optional<T>>` 里的空值直接吃掉（JDK 8 得写
+`filter(Optional::isPresent).map(Optional::get)`）。
+
+#### 6. 一句话边界
+
+> **Optional 是「返回值的类型」，不是「所有可空位置的容器」。**
+
+它的价值不是消除 null，而是**把「缺失」的处理收敛到链尾，只写一次**：
+链上每步都是「有就继续、没有就短路」，到 `orElse` / `orElseGet` / `orElseThrow` 才落地。
+所以判断一个 Optional 用得对不对，最简单的办法是看 `orElse` 出现了几次 ——
+**出现多次说明你在用它做 null 检查，不是在做链式取值。**
 
 ---
 
@@ -371,6 +519,10 @@ private static void looksInnocent() {                       // 签名上一个 t
 | javac 报「具有相同擦除」，搜不到任何资料 | 中文 locale 的译文不是通行术语 | 换成英文 locale 重跑 | `javac -J-Duser.language=en` | 报错原文是 `name clash: ... same erasure` |
 | `ErasureProof` 跑完 B 段就抛 `NoSuchMethodException: ...StringBox.set(java.lang.Object)`，后面 C~F 四段全没跑 | `Box.set` 是包私有，而 `Class.getMethod()` 只找 **public** 方法 | 异常栈顶落在 `ErasureProof.java:126`，正是那句 `StringBox.class.getMethod("set", Object.class)` | 改成 `Box.class.getDeclaredMethod("set", Object.class)`，并补打「StringBox 自己声明的方法数 = 0」 | `getMethod` = public + 含继承；`getDeclaredMethod` = 本类全部（含私有），但**不含继承**，所以只能在 `Box` 上取 |
 | 以为是「两个 `?` 捕获成 CAP#1 和 CAP#2，所以不能互转」，先写进了笔记 | 想当然，没实测 | 编译一个最小用例，用 `-Xdiags:verbose` 抓原文 | 原文是 `required: int,CAP#1 / found: int,CAP#2 / reason: argument mismatch` | 捕获发生在**每次方法调用**上，同一句里的 `get` 和 `set` 各捕各的，不能当成「一个 ? 捕一次」 |
+| `try (ByteArrayOutputStream bos = ...; ObjectOutputStream oos = ...) { ... } catch (NotSerializableException e) { ... }` 编译不过，报「未报告的异常错误 `IOException`」 | TWR 里资源的 `close()` 声明了 `IOException`，它会被**提升**到整个语句上；`NotSerializableException` 是它的子类，只 catch 子类不算交代 | 报错点在 `try (` 那一行的资源变量上，正是 Day 2 §7「受检 close 提升」的原话 | 补一个 `catch (java.io.IOException e)` 兜底 | TWR 的受检异常是「body 的 + 所有资源 close 的」合集，catch 必须覆盖全集 |
+| 新建 `ExceptionCost.java` 后 `java -cp out ...ExceptionCost` 报 `ClassNotFoundException` | `javac @sources.txt` 只编清单里列出的文件，清单是之前 `find` 生成的 | 看 `sources.txt` 里根本没有新文件 | 重新 `find src/main/java -name "*.java" > sources.txt` 再编 | `run.bat` 每次都会重新 `dir /s /b`，手动编译时容易漏这一步 |
+| 同一段异常代码，两次测量读出 `44 ns` 和 `295 ns`，差了 6 倍，差点当成「JVM 参数没生效」 | 只测了一轮，且当时 JIT 还停在 C1 / 解释执行；`-XX:-StackTraceInThrowable` 本身是生效的（栈帧数确实是 0） | 把「栈深 1 抓到的帧数」一起打出来，确认参数生效，怀疑对象转向测量方法 | 改成每用例 5 轮 × 10 万次**取最小值**，数字立刻稳定（418 / 447 / 510 ns） | JIT 分层编译让「一次测量」毫无意义；微基准要么取最小值，要么用 JMH |
+| 想看 NPE 的 helpful message 里显示变量名，结果打出 `because "<parameter1>" is null` | javac 默认只生成 `-g:source,lines`，**不含局部变量表** | 对照 `javap -l` 看 LocalVariableTable 是空的 | 知道即可（加 `-g` 能显示 `s`，但 class 体积涨 10%~20%） | helpful message 靠局部变量表还原名字，没有就退化成 `<parameter1>` |
 
 ---
 
@@ -391,6 +543,11 @@ private static void looksInnocent() {                       // 签名上一个 t
 - `cause` 和 `suppressed` 有什么区别？谁会往里塞？（TWR 关资源塞 suppressed）
 - 受检异常的边界在哪？能不能绕过？（`sneakyThrow` / 泛型擦除，Lombok @SneakyThrows）
 - 什么时候该包装异常、什么时候不该？（跨层/换体系/补上下文 vs 同层纯噪音）
+- 异常到底慢在哪？量过吗？（`fillInStackTrace` 走栈，实测 447 ns vs 关掉采集后 31 ns）
+- `Optional` 能彻底消灭 NPE 吗？（不能：`get()` / `orElse(null)` / 当字段都还能漏）
+- `orElse` 和 `orElseGet` 有什么区别？实际线上会出什么问题？（eager 求值，命中缓存时白打一次远程）
+- 为什么 `Optional` 不该做字段？（没实现 `Serializable`，序列化直接炸；官方立场是「给返回值用」）
+- `Optional.map` 里返回 `null` 会怎样？`flatMap` 呢？（前者静默变 empty，后者 NPE）
 
 > 对应的口述版答案在 `04-interview/question-bank/Java基础.md`（M1 要求 +3 道，现已 17 道）。
 
@@ -406,6 +563,7 @@ private static void looksInnocent() {                       // 签名上一个 t
 | :--- | :--- | :--- | ---: | :--- | :--: |
 | 2026-10-28 | 三 | 类型擦除六个实验 + PECS 五个实验 + 四类编译期报错原文 | 60 min | `ErasureProof` / `PecsDemo` / `GenericLimits` / `day1-result.txt` | ✅ |
 | 2026-10-29 | 四 | 补 Day 1 遗留（GenericLimits2 + WildcardCapture / B2 崩溃修复）+ Day 2 异常体系十段实验 | 60 min | `WildcardCapture` / `TryWithResourcesProbe` / `ExceptionChainProbe` / `day2-result.txt` | ✅ |
+| 2026-10-30 | 五 | Day 3 Optional（三反模式 + 五陷阱 + 一条链）+ 补 Day 2 遗留「异常开销」 | 60 min | `OptionalAntiPatterns` / `OptionalChain` / `ExceptionCost` / `day3-result.txt` | ✅ |
 |  | 一 |  |  |  |  |
 |  | 二 |  |  |  |  |
 |  | 三 |  |  |  |  |
@@ -471,3 +629,24 @@ private static void looksInnocent() {                       // 签名上一个 t
 ② `log.error("... " + e.getMessage())` —— 异常对象根本没进日志，只剩一句话。
 
 所以判断标准不是「要不要包装」，而是「包装时有没有把 cause 传下去、打日志时有没有把异常对象传下去」。
+
+**Q6 · `isPresent()+get()` 为什么是反模式，`orElse` 又什么时候会咬人**
+
+先纠一个常见误解：`isPresent()+get()` 的问题**不是「写法更长」**，是它把 Optional 退化成
+「一个必须拆开的盒子」，而拆开的代价是报错信息变差 —— 实测 `empty.get()` 只给
+`NoSuchElementException: No value present`，没有变量名、没有业务上下文、没说是哪一层；
+同一场景的 NPE 反而有 helpful message（`because "<parameter1>" is null`）。
+也就是说，包了一层 Optional，**错误现场是退化的**。
+
+真正的用法是把「缺失」沿链传递、在链尾处理一次：`map` / `flatMap` / `filter` 串起来，
+最后用 `orElse` / `orElseGet` / `orElseThrow` 落地。判断写得对不对，看 `orElse` 出现了几次 ——
+出现多次就是在用它做 null 检查。
+
+`orElse` 咬人的地方是**参数 eager 求值**：`orElse(remote("user:1"))` 在进 `orElse` 之前就执行了，
+所以「命中缓存」这条路径上也白打一次远程（实测有值时调用 1 次、36 ms；`orElseGet` 0 次、0.3 ms）。
+它不报错、结果还对，只表现为「偶尔慢一点」。判断标准：参数里有 IO / 远程 / 加锁 / 大对象就必须 `orElseGet`；
+廉价小对象（`new ArrayList<>()`）则可以不管，逃逸分析会消掉。
+
+还有一个更隐蔽的坑：`orElse` 返回类型是 `T`，所以能写 `orElse(null)` —— 当场把 Optional 的契约破坏掉；
+以及 `filter` 不能省：订单 200 元的券减 500，不 `filter(c -> c.off() <= amount)` 会算出 **−300**。
+**Optional 只管「有没有」，不管「值合不合法」。**
