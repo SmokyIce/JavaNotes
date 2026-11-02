@@ -107,8 +107,10 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > | 2026-10-28 | **W02 Day 1 · 类型擦除 + PECS**（补掉 W02 空目录 + W01 遗留清单） | `w02-generics-stream/` 工程 + `day1/` 两个 Demo + `compile-errors/` + `day1-result.txt`；笔记 Day 1 整节；`Java基础.md` 12 → **15 题** |
 > | 2026-10-29 | **W02 Day 2 · 异常体系** + Day 1 三个遗留 | `day2/` 两个 Demo（10 段实验）+ `day1/WildcardCapture` + `compile-errors/GenericLimits2`（6 个错）+ `day2-result.txt`；修掉 `ErasureProof` B2 段的 `NoSuchMethodException`；笔记 Day 2 整节；`Java基础.md` 15 → **17 题** |
 > | 2026-10-30 | **W02 Day 3 · Optional** + Day 2 遗留「异常开销」 | `day3/` 两个 Demo（11 段实验）+ `day2/ExceptionCost`（两遍 JVM 参数对照）+ `day3-result.txt`；笔记 Day 3 整节 + Day 2 §10；`Java基础.md` 17 → **18 题** |
+> | 2026-11-02 | **W02 Day 4 · Lambda** | `day4/` 两个 Demo（12 段实验）+ `compile-errors/LambdaLimits{,2,3}`（8 条报错原文，拆三个文件）+ `day4-result.txt` + `day4-bytecode.txt`（javap 三段证据）；笔记 Day 4 整节 + 参考要点 Q7/Q8；`Java基础.md` 18 → **20 题** |
 >
-> 题库这边已经超额：M1 只要 8 道，现在光是泛型 3 道 + 异常 3 道 + Optional 1 道 + W01 的 12 道集合题共 18 道。
+> 题库这边已经超额：M1 只要 8 道，现在光是泛型 3 道 + 异常 3 道 + Optional 1 道 + Lambda 2 道
+> + W01 的 12 道集合题共 20 道。
 > 剩下 W02 的 Lambda / Stream，以及 W03 / W04 的并发部分。
 > 重点仍是 Stream 那个 `List<User>` 过滤→排序→分组→统计的练习。
 
@@ -170,8 +172,15 @@ M3 之后的内容原封不动沿用 `java-48week-plan.md` 里的知识点清单
 顺带把 Day 2 最后一个遗留量掉了：异常开销 447 ns → 关掉栈采集 31 ns（15 倍），
 `day2/ExceptionCost.java`，跑两遍只改一个 JVM 参数。
 
-下一个时间盒（60 分钟）：**W02 Day 4 · Lambda** ——
-函数式接口（`Function` / `BiFunction` / `Consumer` / `Supplier` / `Predicate` 的四种形态）
-+ 方法引用四种写法（`静态` / `实例` / `对象::实例` / `构造`）+ 变量捕获与 effectively final
-（为什么 lambda 里改不了外面的局部变量：捕获的是**值拷贝**，Day 1 的擦除在这里又一次露面）。
+**W02 Day 4 已完成（2026-11-02）**：Lambda。`day4/` 两个 Demo 共 12 段实验
+（五种形状 / `Predicate` 短路组合 / `andThen` vs `compose` / 装箱逃逸对照 / 自定义函数式接口 /
+lambda 缺目标类型 / 方法引用五连 / 值捕获 / 循环变量 / `this` 归属 / 实例复用 / `invokedynamic`）。
+核心结论：`javap -p` 里 `lambda$sectionB$1(int, int)` 直接证明**捕获 = 把变量当实参传进静态方法**，
+`effectively final` 由此不再需要背；装箱代价实测不逃逸 **2 倍**、逃逸 **36 倍**。
+`compile-errors/LambdaLimits{,2,3}` 收 8 条报错原文 —— 必须拆三个文件，否则 attribution 阶段的报错
+会让 FLOW 分析整个跳过，`effectively final` 那条根本不出现。
+
+下一个时间盒（60 分钟）：**W02 Day 5 · Stream** —— 重点不是 API 列表，而是「谁在什么时候执行」：
+中间操作只是记账（惰性），终止操作才真跑；短路（`findFirst` / `anyMatch` / `limit`）能在无限流上停下来，
+而 `sorted` 必须消费全部；以及一个流只能用一次。
 时间盒见 `00-plan/today.md`（每天开工前先打开它，收工时覆盖）。

@@ -42,9 +42,14 @@ w02-generics-stream/
 ├── day1-result.txt                         Day 1 实测输出（含 javac 报错原文）
 ├── day2-result.txt                         Day 2 实测输出（资源关闭 + 异常包装 + 异常开销）
 ├── day3-result.txt                         Day 3 实测输出（Optional 反模式 + 链式正例）
+├── day4-result.txt                         Day 4 实测输出（函数式接口 + 捕获 + 8 条报错原文）
+├── day4-bytecode.txt                       Day 4 字节码证据（javap -p / -c / -v）
 ├── compile-errors/
 │   ├── GenericLimits.java                  故意编译不过：擦除的四条硬限制
-│   └── GenericLimits2.java                 故意编译不过：通配符的六种拒绝
+│   ├── GenericLimits2.java                 故意编译不过：通配符的六种拒绝
+│   ├── LambdaLimits.java                   故意编译不过：五个 lambda 目标类型 / 函数式接口错误
+│   ├── LambdaLimits2.java                  故意编译不过：lambda 里 break、void 里 return 值
+│   └── LambdaLimits3.java                  故意编译不过：effectively final（必须单独一个文件）
 └── src/main/java/com/newt/java48/w02/
     ├── day1/
     │   ├── ErasureProof.java               六个实验：类同一性 / 反射签名 / CCE 位置 / 泛型数组 / 桥方法 / 硬限制
@@ -54,9 +59,12 @@ w02-generics-stream/
     │   ├── TryWithResourcesProbe.java      五个实验：逆序关闭 / suppressed / finally 里 return / finally 里 throw / 受检 close
     │   ├── ExceptionChainProbe.java        六个实验：三种包装 / 日志写法 / cause vs suppressed / 受检边界 / sneakyThrow / 何时包装
     │   └── ExceptionCost.java              异常开销：fillInStackTrace 的账单（跑两遍，只改一个 JVM 参数）
-    └── day3/
-        ├── OptionalAntiPatterns.java       五段：isPresent+get / orElse 白算 / 字段参数集合 / 五个陷阱 / 判定表
-        └── OptionalChain.java              六段：null 检查对比 / map vs flatMap / filter / orElseGet vs orElseThrow / 消费侧 / 优惠券算价
+    ├── day3/
+    │   ├── OptionalAntiPatterns.java       五段：isPresent+get / orElse 白算 / 字段参数集合 / 五个陷阱 / 判定表
+    │   └── OptionalChain.java              六段：null 检查对比 / map vs flatMap / filter / orElseGet vs orElseThrow / 消费侧 / 优惠券算价
+    └── day4/
+        ├── FunctionalShape.java            六段：五种形态 / Predicate 短路 / andThen vs compose / 装箱逃逸 / 自定义接口 / 目标类型
+        └── LambdaCapture.java              六段：方法引用五连 / 值捕获 / 循环变量 / this 归属 / 实例复用 / invokedynamic
 ```
 
 > `compile-errors/` 不在 `src/main/java` 下，不会被 `run.bat` 编译 —— 否则整个工程编不过。
@@ -66,12 +74,19 @@ w02-generics-stream/
 > cd compile-errors
 > javac -J-Duser.language=en -encoding UTF-8 -d ../out-errors GenericLimits.java
 > javac -J-Duser.language=en -encoding UTF-8 -d ../out-errors GenericLimits2.java
+> javac -J-Duser.language=en -encoding UTF-8 -d ../out-errors LambdaLimits.java
+> javac -J-Duser.language=en -encoding UTF-8 -d ../out-errors LambdaLimits2.java
+> javac -J-Duser.language=en -encoding UTF-8 -d ../out-errors LambdaLimits3.java
 > ```
 >
 > 加 `-J-Duser.language=en` 是因为中文 locale 下 `name clash: ... same erasure` 会被译成
 > 「具有相同擦除」，搜不到任何资料 —— 报错原文比译文有用得多。
-> `GenericLimits2` 的注释刻意写成英文：javac 会把出错那行源码原样回显，
+> `GenericLimits2` / `LambdaLimits*` 的注释刻意写成英文：javac 会把出错那行源码原样回显，
 > 中文注释在那里会变成 GBK 乱码，污染快照。
+>
+> **`LambdaLimits` 为什么拆成三个文件**：javac 先做 attribution（类型 / 重载 / 目标类型），
+> 再做 FLOW 分析，`effectively final` 属于后者。只要文件里有任何一个 attribution 错误，
+> flow 分析就整个被跳过 —— 六条错误一起放会只报五条，`effectively final` 那条**凭空消失**。
 
 ---
 
@@ -202,3 +217,31 @@ java -Dfile.encoding=UTF-8 -XX:-StackTraceInThrowable -cp out com.newt.java48.w0
 2. **`orElse` 参数是 eager 的，且 `Optional` 只管「有没有」不管「合不合法」。**
    前者让「命中缓存」的路径白打一次远程（36 ms vs 0.3 ms，结果完全正确）；
    后者让券减 500 的订单算出 −300。两个都是「结果看起来正常」的 bug，只能靠 `orElseGet` + `filter` 挡。
+
+---
+
+## Day 4（Lambda）实验清单
+
+| #  | 要验证的结论 | 命令 | 实测 |
+| :- | :--- | :--- | :--- |
+| 1 | 五种形状覆盖所有函数式接口 | `run.bat day4.FunctionalShape` | `Function` / `BiFunction` / `Consumer` / `Supplier` / `Predicate` 各一个业务例子 |
+| 2 | `Predicate.and` 是短路的 | 同上 | 三层 `and`，第二个返回 false，**第三个没执行**（日志缺 check3） |
+| 3 | `andThen` 与 `compose` 顺序相反 | 同上 | `(2+1)*10 = 30` vs `2*10+1 = 21` |
+| 4 | 装箱贵不贵取决于逃逸 | 同上 | 不逃逸 **2.0 倍**（10.0 vs 4.9 ms）；逃逸到 `Integer[]` **36 倍**（23.7 vs 0.7 ms） |
+| 5 | 函数式接口可以有多个 default 方法 | 同上 | `OrderRule` 抽象方法 1 个、default 1 个，`@FunctionalInterface` 仍然合法 |
+| 6 | `var` / `Object` 都不是 lambda 的目标类型 | 同上 + `LambdaLimits` | 两条都是编译错，原文在 `day4-result.txt` 第 3 段 |
+| 7 | 方法引用绑定与未绑定差一个参数 | `run.bat day4.LambdaCapture` | `String::length` 1 个参数 vs `str::length` 0 个参数 |
+| 8 | 捕获是值拷贝，合成方法的形参为证 | 同上 | `lambda$sectionB$1(int, int)`：第二个 int 就是 `base` |
+| 9 | 字段能改、数组能绕过 | 同上 | 改 `delta` 1→100，同一 lambda 结果 `6`→`105`；`box[0]` 同理 |
+| 10 | `for` 编译错、`for-each` 各自拷贝、数组共享 | 同上 | `[1,2,3]` vs `[3,3,3]` |
+| 11 | lambda 的 `this` 是外部类 | 同上 | 匿名类 `LambdaCapture$1` vs lambda `LambdaCapture` |
+| 12 | 非捕获 lambda 复用单例 | 同上 | `nonCapturing()==nonCapturing()` **true**；`capturing(1)==capturing(1)` **false** |
+| 13 | lambda 是 `invokedynamic` + 隐藏类 | `day4-bytecode.txt` | 磁盘无 `$$Lambda`；`isHidden()`=true；`BootstrapMethods` 指向 `LambdaMetafactory` |
+
+**本节最值钱的两个点**
+
+1. **`effectively final` 不是语法洁癖，是值拷贝的必然结果。** `javap -p` 能直接看到
+   `lambda$sectionB$1(int, int)` —— 捕获的变量成了合成方法的**形参**。于是「字段能改」
+   （捕获的是 `this`，合成方法非 static）、「数组能绕过」（拷的是引用）都有了同一个解释。
+2. **「装箱很贵」只有一半对，贵的是逃逸的装箱。** 不逃逸时标量替换把 `new Integer` 消掉，只差 2 倍；
+   一逃逸立刻 36 倍。所以优化判断要落在「会不会进集合/跨线程」，不是「有没有装箱」。

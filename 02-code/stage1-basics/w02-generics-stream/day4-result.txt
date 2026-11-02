@@ -1,0 +1,187 @@
+# W02 · Day 4 实测快照 · Lambda
+# 生成时间：2026-11-02
+# 环境：java version "17.0.12" 2024-07-16 LTS  / Windows
+
+########## 1/5  FunctionalShape · 函数式接口的四种形态 ##########
+
+========== A · 四种形态 ==========
+A1 Function<Order,Integer>      打八折      -> 160
+A2 BiFunction<Order,Integer,..> 再减 30     -> 170
+   [log] A001 金额 200
+A4 Supplier<Order>              用时才创建  -> MOCK-1
+A5 Predicate<Order>             是否 VIP    -> true
+A6 UnaryOperator/BinaryOperator/IntUnaryOperator = 42 / 9 / 42
+A7 判定口诀：进 1 出 1 -> Function；进 2 出 1 -> BiFunction；进 1 出 0 -> Consumer；进 0 出 1 -> Supplier；出 boolean -> Predicate
+A7 同一形状换个类型参数就是新接口，所以 JDK 有 43 个函数式接口，真正不同的只有 5 种形状
+
+========== B · Predicate：唯一能组合的形态 ==========
+B1 三层 and 组合，对 A001 求值：
+   [check1] 金额 > 0
+   [check2] 有库存（这里故意返回 false）
+B1 结果 = false
+B1 注意 [check3] 没打印 —— and 是**短路**的，check2 为 false 就不再往下走
+   [check1] 金额 > 0
+   [check1] 金额 > 0
+   [check1] 金额 > 0
+   [check1] 金额 > 0
+B2 negate()：金额<=0 的订单 -> [A004]
+B3 or() 同样短路；这跟 && / || 的行为完全一致 —— Predicate 的 and/or 就是给「条件」用的 && ||
+B4 所以 Predicate 必须单独存在：Function<Order,Boolean> 也能返回布尔，但它没有 and/or，而且语义是「算出一个值」，不是「判断一件事」
+
+========== C · andThen 与 compose 的顺序是反的 ==========
+C1 addOne.andThen(timesTen).apply(2) = 30   （(2+1)*10）
+C2 addOne.compose(timesTen).apply(2) = 21   （2*10+1）
+C3 Comparator 链（VIP 优先、金额从高到低）= [A001:200, A003:500, A002:80, A004:0]
+C3 thenComparing 就是 andThen 的专用版：前一个比较器相等时才用后一个
+C4 identity() 在导出 / 分组里的作用是「这一列不做转换」，避免为了凑签名再写一个 o -> o
+C4 注意它必须写成 Function.<Order>identity()：identity() 的 T 从参数推不出来，只能显式给（跟 lambda 缺目标类型是同一类问题）
+C4 记忆：andThen 从左往右读，compose 从右往左读；业务代码 95% 用 andThen
+
+========== D · 装箱代价：Function<Integer,Integer> vs IntUnaryOperator ==========
+D1 不逃逸：装箱版 Function<Integer,Integer>   10.6 ms
+D1 不逃逸：基本类型版 IntUnaryOperator         5.0 ms
+D1 不逃逸：裸循环（没有 lambda 调用）         5.0 ms
+D1 装箱 / 基本类型 = 2.1 倍 —— 比想象中低，因为 Integer 没逃逸，
+D1   标量替换（Escape Analysis）把每次 new Integer 都消掉了，这就是「别背结论，要量」的原因
+D2 逃逸：  装箱版   25.7 ms / 基本类型版    0.7 ms
+D2 逃逸时装箱 / 基本类型 = 36.3 倍 —— 这才是装箱的真实账单（2000000 个 Integer 对象）
+D3 结论：装箱贵不贵，取决于**逃没逃逸**，不取决于「有没有装箱」。不逃逸时 JIT 直接消掉，逃逸时每个都是一次分配 + 一次 GC 压力
+D4 业务里真正逃逸的场景：结果进 List/Map、当 key、被 lambda 捕获到别的线程、返回给上层 —— 这些地方才是该换 Int/Long/Double 特化版的地方
+D5 但也别急着全换：一次 lambda 调用在几十纳秒级，接口一次 IO 是毫秒级；只有热路径（循环内、流里百万级元素）才值得换
+
+========== E · 什么时候必须自己写函数式接口 ==========
+E1 自定义 OrderRule 组合后，命中订单 = [A001]
+E2 抽象方法计数（反射数一下）：OrderRule 的抽象方法 = 1 个，default 方法 = 1 个
+E3 这就是 Comparator 在 Java 8 里能一口气加 reversed/thenComparing 的原因 —— 加的是 default 方法，已编译的 lambda 和实现类一个都不用改
+E4 反过来说：给函数式接口加第二个抽象方法 = 破坏性变更，所有 lambda 写法立刻编译不过（见 compile-errors/LambdaLimits.java 第 1 条）
+
+========== F · lambda 没有目标类型就存不下来 ==========
+F1 IntUnaryOperator ok = x -> x * 3;   -> ok.applyAsInt(7) = 21
+F2 var bad = x -> x * 3;  编译不过 —— var 只是「省略类型」，不提供目标类型
+F3 Object o = x -> x * 3;  也编译不过 —— Object 没有唯一抽象方法，构不成 lambda 的目标类型
+F4 收到了 com.newt.java48.w02.day4.FunctionalShape$$Lambda$56/0x0000029312010d80
+F4 要传 Object 形参，得先转成函数式接口再向上转型（上面这行就是这么写的）
+F5 结论：lambda 不是「一个值」，是「一个实现某个接口的写法」。没有接口就没有 lambda —— 它靠目标类型确定签名和方法体该长什么样
+
+========== 收尾 ==========
+函数式接口不用背名字，先问两件事：进几个？出不出？
+Predicate 之所以独立，是因为只有 boolean 能 and / or / negate —— 这是「可组合」的前提。
+
+########## 2/5  LambdaCapture · 方法引用 / 捕获 / 字节码 ##########
+
+========== A · 方法引用五种写法 ==========
+A1 静态    Integer::parseInt            -> 42
+A2 未绑定  String::length (1 个参数)     -> 6
+A3 绑定    str::length    (0 个参数)     -> 8   ← 同一个 length()，绑不绑定差一个参数
+A4 构造    ArrayList::new               -> ArrayList
+A5 数组    int[]::new                   -> 5 长度的 int[]
+A6 String::valueOf 两个目标类型 -> 3.14 / 99
+A6 所以方法引用不是「缩写」，它同样靠目标类型做重载决议 —— 目标类型写错不会报错，会选中另一个重载
+
+========== B · 捕获的是值拷贝 ==========
+B1 x -> x + base（base=10）-> 15
+B2 本类全部合成方法：
+     lambda$capturing$11[int, int]  static=true
+     lambda$nonCapturing$10[int]  static=true
+     lambda$sectionA$0[int]  static=true
+     lambda$sectionB$1[int, int]  static=true
+     lambda$sectionB$2[class java.lang.reflect.Method]  static=true
+     lambda$sectionB$3[class java.lang.reflect.Method]  static=true
+     lambda$sectionB$4[class java.lang.reflect.Method]  static=true
+     lambda$sectionB$5[int]  static=false
+     lambda$sectionB$6[class [I, int]  static=true
+     lambda$sectionC$7[int]  static=true
+     lambda$sectionC$8[class [I]  static=true
+     lambda$sectionD$9[]  static=false
+     lambda$sectionF$12[int]  static=true
+     lambda$sectionF$13[interface java.nio.file.Path]  static=true
+     lambda$sectionF$14[class java.lang.String]  static=true
+B2 上面那句 x -> x + base 对应 lambda$sectionB$1[int, int]：第一个 int 是 x，**第二个 int 就是 base** —— 捕获 = 把它当实参传进去，所以拿到的是副本
+B2 再看两个规律：捕获局部变量 -> 合成方法是 static + 多一个形参；捕获 this（读写字段）-> 合成方法不是 static，this 隐式传入
+B2 唯一的 lambda$sectionA$0(int) 是个例外：它来自 A 段的 int[]::new —— 数组没有构造器，方法引用也无从链接，只能生成一个合成方法
+B2 既然方法体里用的是副本，外面再改 base 就会分叉，编译器干脆禁止改 —— effectively final 的来源就是这个
+B3 lambda 读字段 delta：改之前 = 6，把 delta 改成 100 之后 = 105   ← 同一个 lambda，结果变了
+B4 用 int[] 绕过：改之前 = 15，box[0]=100 之后 = 105   ← 拷的是**引用**，引用指向的数组是共享的
+B4 所以「不能改局部变量」准确说是「不能让引用指向别处」，引用指向的对象内部照样能改 —— 这也是这段代码能编译的原因
+
+========== C · 循环变量陷阱 ==========
+C1 for (int i = 0; ...) 里捕获 i -> 编译错
+C1 原因不是「循环有毒」，而是 i 从头到尾只有一个变量，还在被 i++ 改
+C2 for-each 捕获 -> [1, 2, 3]   ← 三个 lambda 各自拿到自己的副本
+C3 用 int[] 绕过 -> [3, 3, 3]   ← 全是 3，因为它们共享同一个盒子
+C3 这个坑在「循环里注册回调 / 监听器」时最容易踩：你以为注册了 3 个不同值的回调，实际注册了 3 个读同一个变量的
+C4 正解排序：① 用 for-each（最干净）② 循环里 `int snapshot = i;` 再捕获 snapshot ③ 实在不行才用数组，并且注释写清为什么
+
+========== D · this 到底是谁 ==========
+D1 匿名内部类里的 this -> com.newt.java48.w02.day4.LambdaCapture$1
+D2 lambda 里的 this       -> com.newt.java48.w02.day4.LambdaCapture
+D3 实测两者不是同一个东西：lambda 没有自己的 this，它词法上就长在 run() 里，所以 this 直接继承外面的
+D4 这条的实际影响：lambda 里写 this.delta 指的是 LambdaCapture.delta，不是「lambda 的字段」—— lambda 本身没有字段
+D5 想在 lambda 里调外部类的方法不用写 Outer.this.xxx()，直接写就行；匿名内部类反而经常需要 Outer.this 来区分
+
+========== E · 同一行 lambda 是同一个对象吗 ==========
+E1 非捕获 nonCapturing() == nonCapturing() -> true   ← 同一个单例，热路径上不产生对象
+E2 捕获   capturing(1) == capturing(1)       -> false   ← 每次调用都新建一个实例
+E3 c.equals(d) = false，HashMap 里会当成两个不同的 key
+E3 别拿 lambda 做 Map key / Set 元素 / 缓存键 —— 它既没有 equals，对象身份也不稳定
+E4 反过来也值得记：非捕获 lambda 比匿名内部类**更轻**（单例 + 无 .class 文件），只有捕获时才多一次对象分配
+
+========== F · 字节码：invokedynamic + 隐藏类 ==========
+F1 lambda 的运行时类名 -> com.newt.java48.w02.day4.LambdaCapture$$Lambda$31/0x000002bd8100d5e0
+F1 匿名类的运行时类名   -> com.newt.java48.w02.day4.LambdaCapture$2
+F2 lambda 类是否隐藏（JDK 15+）-> true；匿名类 -> false
+F3 lambda 的接口实现 -> [interface java.util.function.IntUnaryOperator]
+F4 day4 目录下 LambdaCapture 相关的 .class 文件：[LambdaCapture$1.class, LambdaCapture$2.class, LambdaCapture.class]
+F4 本类里写了十几处 lambda，磁盘上却找不到一个 $$Lambda 文件 —— lambda 的类在运行时由 LambdaMetafactory 动态生成，而且是隐藏类，不落盘
+F4 上面列出的 $$Lambda$24 里的数字也会变（取决于运行时链接顺序），所以任何时候都不要拿 lambda 的类名做判断
+F5 匿名类相反：编译期就生成 LambdaCapture$1.class，数量随写法线性增长
+F6 javap -c 能看到的是 `invokedynamic #xx // InvokeDynamic #0:apply:()...IntUnaryOperator;`，不是 new + 匿名类（完整反汇编见 day4-bytecode.txt）
+
+========== 收尾 ==========
+lambda 捕获的是**值拷贝**，不是变量本身 —— 这就是 effectively final 这条规定的真正原因。
+它不是语法洁癖，而是「拷贝之后两个副本会分叉」这个物理事实的必然结果。
+
+########## 3/5  compile-errors/LambdaLimits.java · 五个编译期拒绝（attribution 阶段）##########
+
+$ javac -J-Duser.language=en -encoding UTF-8 -d ../out-errors LambdaLimits.java
+LambdaLimits.java:41: error: Unexpected @FunctionalInterface annotation
+    @FunctionalInterface
+    ^
+  BadRule is not a functional interface
+    multiple non-overriding abstract methods found in interface BadRule
+LambdaLimits.java:52: error: cannot infer type for local variable f
+        var f = x -> x + 1;
+            ^
+  (lambda expression needs an explicit target-type)
+LambdaLimits.java:58: error: incompatible types: Object is not a functional interface
+        Object o = () -> System.out.println("hi");
+                   ^
+LambdaLimits.java:69: error: incompatible types: BadEq is not a functional interface
+        BadEq eq = x -> true;
+                   ^
+    no abstract method found in interface BadEq
+LambdaLimits.java:90: error: reference to f is ambiguous
+        f(x -> x + 1);                    // A or B? javac refuses to guess
+        ^
+  both method f(A) in LambdaLimits and method f(B) in LambdaLimits match
+5 errors
+
+########## 4/5  compile-errors/LambdaLimits2.java · break / return 值（lambda 体不是循环、run 是 void）##########
+
+$ javac -J-Duser.language=en -encoding UTF-8 -d ../out-errors LambdaLimits2.java
+LambdaLimits2.java:40: error: break outside switch or loop
+                break;                    // a lambda body is not a loop: cannot break the outer for
+                ^
+LambdaLimits2.java:50: error: incompatible types: bad return type in lambda expression
+            return 42;                    // Runnable's run() is void
+                   ^
+    unexpected return value
+2 errors
+
+########## 5/5  compile-errors/LambdaLimits3.java · effectively final（必须单独一个文件）##########
+
+$ javac -J-Duser.language=en -encoding UTF-8 -d ../out-errors LambdaLimits3.java
+LambdaLimits3.java:30: error: local variables referenced from a lambda expression must be final or effectively final
+        IntUnaryOperator f = x -> x + base;
+                                      ^
+1 error

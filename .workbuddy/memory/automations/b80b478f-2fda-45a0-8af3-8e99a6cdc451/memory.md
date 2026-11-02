@@ -30,3 +30,18 @@
 - 下次起点：`00-plan/today.md` 的「下一个时间盒」= W02 Day 4 Lambda。
 - 新增经验（已写进 MEMORY.md）：手动编译要刷新 `sources.txt`；微基准必须多轮取最小值（单轮差 6 倍）；
   TWR 里 catch 子类不够，资源 `close()` 的 IOException 会提升到语句上。
+
+## 2026-11-02（第四次执行）
+- 开工回归：全量重编 + 跑 7 个入口，全部 exit=0，无回归，没有中断的代码。
+  扫 `01-notes` 未勾项与 `02-code` 空目录，确认无孤儿待办（剩余未勾项都是未解锁里程碑）。
+- 推进 M1 Day 4：Lambda。新建 `day4/FunctionalShape`（六段）+ `day4/LambdaCapture`（六段），
+  `compile-errors/LambdaLimits{,2,3}`（8 条报错原文），产出 `day4-result.txt` + `day4-bytecode.txt`。
+  题库 18 → 20（Q19 捕获/匿名类对比，Q20 装箱逃逸）。
+- 同步：`W02` 笔记（知识点勾 Lambda + Day 4 整节 + 踩坑 3 条 + 面试 8 条 + 参考要点 Q7/Q8 + 打卡）、
+  `today.md`、`MILESTONES.md`、工程 `README.md`。
+- 下次起点：**W02 Day 5 Stream**（惰性求值 / 短路 / 一个流只能用一次 / flatMap vs map），
+  时间盒已写进 `00-plan/today.md`。
+- 新增经验（已写进 MEMORY.md）：**javac 分阶段** —— attribution 报错会让 FLOW 分析整个跳过，
+  `effectively final` 错误不出现，故意收集多个编译错误要按阶段拆文件；
+  `javap` 输出里的中文字符串常量是 GBK 乱码（不影响读方法句柄）；
+  `Function.identity()` 无入参推不出 `T`，要写 `Function.<X>identity()`。

@@ -1,7 +1,7 @@
 # W02 · Java 泛型 · 异常 · Optional · Stream
 
 > **第一阶段 · 打基础（W01–W12）** ｜ 预计投入 ≈ 7 小时（每天 60 分钟）
-> 状态：🟨 进行中（Day 1 / Day 2 / Day 3 完成）　｜　开始日期：2026-10-28　｜　完成日期：____-__-__
+> 状态：🟨 进行中（Day 1 / Day 2 / Day 3 / Day 4 完成）　｜　开始日期：2026-10-28　｜　完成日期：____-__-__
 
 > 💡 周六练习：给一个 List<User>，完成 过滤 → 排序 → 分组 → 统计。
 
@@ -12,7 +12,7 @@
 - [x] 泛型
 - [x] 异常体系
 - [x] Optional
-- [ ] Lambda
+- [x] Lambda
 - [ ] Stream
 - [ ] 过滤 / 排序 / 分组 / 统计
 
@@ -24,6 +24,8 @@
 4. `finally` 里的 `return` 和 `throw` 分别会怎样处理 `try` 里正在冒泡的异常？为什么 `try-with-resources` 要专门发明 `addSuppressed`？
 5. 说 `throw new RuntimeException(e)` 会「丢栈」，这句话哪里不准确？什么样的写法才是真的丢栈？
 6. `isPresent() + get()` 和 `orElse` 都是「有值取值、没值兜底」，为什么前者是反模式？`orElse` 又在什么情况下会白算一次、甚至算出负数？
+7. 「lambda 里不能改外部局部变量」这条规定，真实的物理原因是什么？怎么用字节码证明它捕获的是值拷贝？
+8. `Function<Integer,Integer>` 一定比 `IntUnaryOperator` 慢吗？为什么「装箱很贵」这个结论有时量出来只有 2 倍，有时是 36 倍？
 
 > 自己先答一遍，再翻文末「参考要点」，别倒着来。
 
@@ -38,7 +40,7 @@ Day 1 补（已完成 10-29）通配符捕获：capture 报错原文 + helper �
 Day 2（已完成 10-29）  异常体系：TWR 关闭与 suppressed / finally 吞异常 / 包装丢栈真相 / sneakyThrow
 Day 2 补（已完成 10-30）异常开销：fillInStackTrace 才是账单，-XX:-StackTraceInThrowable 对照实测
 Day 3（已完成 10-30）  Optional：三个反模式 + 五个陷阱 + 一条 map/flatMap/filter 链
-Day 4（待做）          Lambda：函数式接口 + 方法引用 + 变量捕获（ effectively final ）
+Day 4（已完成 11-02）  Lambda：函数式接口五形态 + 方法引用五连 + 变量捕获（值拷贝）+ invokedynamic
 Day 5（待做）          Stream：中间/终止操作、惰性求值、短路
 Day 6（待做）          List<User> 过滤 → 排序 → 分组 → 统计
 ```
@@ -510,6 +512,168 @@ int pay = findCoupon(code)
 
 ---
 
+### Day 4 · 2026-11-02（周一）· Lambda
+
+| 时间 | 做什么 | 产出 |
+| -: | :--- | :--- |
+| 10 分钟 | 复述 Day 3：`orElse` 为什么白算 / Optional 为什么不能做字段 | 口头过，卡住回看 Day 3 |
+| 20 分钟 | 函数式接口五种形状（`Function` / `BiFunction` / `Consumer` / `Supplier` / `Predicate`）+ 自定义接口与 default 方法 | `day4/FunctionalShape` A / B / C / E 段 |
+| 20 分钟 | 方法引用五种写法 + 变量捕获与 effectively final：为什么只能读不能改 | `day4/LambdaCapture` A / B / C / D 段 |
+| 10 分钟 | 输出：`lambda` 在字节码里是一次 `invokedynamic`，不是匿名内部类 | `day4-bytecode.txt` + 本节第 7 小节 |
+
+实测快照：`w02-generics-stream/day4-result.txt`（JDK 17.0.12，含 8 条报错原文）
+字节码证据：`w02-generics-stream/day4-bytecode.txt`（javap -p / -c / -v 三段）
+
+#### 1. 形状比名字重要：五种形态决定一切
+
+同一份「订单」数据，五种接口各配一个业务例子：
+
+| 形状 | 接口 | 业务里长什么样 | 关键点 |
+| :--- | :--- | :--- | :--- |
+| 进 1 出 1 | `Function<T,R>` | `o -> o.amount() * 80 / 100` | 变换 |
+| 进 2 出 1 | `BiFunction<T,U,R>` | `(o, off) -> o.amount() - off` | 二元变换；三元就没有标准接口了，得自己写 |
+| 进 1 出 0 | `Consumer<T>` | `o -> log.info(...)` | 只有副作用，所以链尾不能再用它取结果 |
+| 进 0 出 1 | `Supplier<T>` | `() -> new Order("MOCK-1", ...)` | **唯一的价值是延迟**：调用时才创建 |
+| 进 1 出 boolean | `Predicate<T>` | `Order::vip` | 出的不是值，是判断 —— 所以能布尔组合 |
+
+`UnaryOperator` / `BinaryOperator` 只是把类型参数捏成同一个（`Function<T,T>` / `BiFunction<T,T,T>`），
+`IntUnaryOperator` 这类是把类型写死成基本类型以省掉装箱。**形状没变，只是特化。**
+
+> `java.util.function` 包里 43 个接口，真正不同的形状只有 5 种。所以不用背名字，
+> 遇到不认识的接口先看它有几个参数、返不返回值，答案就出来了。
+
+#### 2. 为什么 `Predicate` 必须单独存在
+
+`Function<Order, Boolean>` 也能返回布尔，但它没有 `and` / `or` / `negate`。
+实测三层 `and` 组合，第二个条件返回 `false` 时**第三个条件根本没执行** —— `and` 是短路的，
+和 `&&` 语义完全一致。这就是「校验链」能写成一行、且不打无效远程调用的原因：
+
+```java
+Predicate<Order> allPass = paid.and(stocked).and(notBlacklisted);
+```
+
+所以两者的区别不是「返回值类型不同」这么表面，而是：`Function<T,Boolean>` 的语义是
+**算出一个值**（这个值恰好是布尔），`Predicate<T>` 的语义是**判断一件事**，而判断可以组合。
+
+#### 3. 方法引用五种写法：绑定与未绑定差一个参数
+
+| 写法 | 例 | 形参个数 |
+| :--- | :--- | :--- |
+| 静态 | `Integer::parseInt` | 与目标方法一致 |
+| 未绑定实例 | `String::length` | 目标方法 + 1（第一个参数当接收者） |
+| 绑定实例 | `str::length` | 与目标方法一致（接收者已定死） |
+| 构造器 | `ArrayList::new` | 与构造器一致 |
+| 数组构造 | `int[]::new` | 取长度，返回数组 |
+
+实测同一个 `length()`：`String::length` 当 `ToIntFunction<String>` 用（1 个参数），
+`fixed::length` 当 `IntSupplier` 用（0 个参数）。**「未绑定」三个字说的就是接收者还没定。**
+
+两条容易忽略的：
+
+- 方法引用**同样靠目标类型做重载决议**。`String::valueOf` 有 9 个重载，
+  写成 `Function<Object,String>` 和 `Function<Integer,String>` 会选中不同的那个。
+  选错不报错，只是行为不同。
+- 只有数组构造引用 `int[]::new` 会被编译成一个合成方法（`lambda$sectionA$0(int)`）——
+  数组没有构造器，方法引用无从链接，只能生成。
+
+#### 4. 捕获是值拷贝：合成方法的形参就是铁证
+
+```java
+int base = 10;
+IntUnaryOperator f = x -> x + base;
+// base = 20;   // 编译错：must be final or effectively final
+```
+
+`javap -p` 能看到 javac 生成了 `lambda$sectionB$1(int, int)`：第一个 `int` 是 `x`，
+**第二个 `int` 就是 `base`**。也就是说「捕获」在字节码层面的真实动作是
+**把变量当实参传进一个静态方法**，方法体里拿到的是副本。
+
+副本一旦和原变量分叉，语义就说不清了，所以编译器直接禁止第二次赋值 ——
+`effectively final` 不是语法洁癖，是这个物理事实的必然结果。
+
+再看两条规律，正好解释了为什么「字段能改、局部变量不能改」：
+
+| 捕获的东西 | 合成方法 | 为什么 |
+| :--- | :--- | :--- |
+| 局部变量 | `static`，多一个形参 | 值拷贝进来 |
+| `this`（读字段） | **非** static，`this` 隐式传入 | 拿到的是引用，字段值在堆上，两边看同一份 |
+
+实测把字段 `delta` 从 1 改成 100，同一个 lambda 的返回值从 `6` 变成 `105`；
+而局部变量靠着 `int[] box = {10}` 也能绕过限制（`box[0] = 100` 之后结果跟着变），
+因为拷的是**引用**，引用指向的数组是共享的。
+
+> 所以准确的说法不是「lambda 里不能改局部变量」，而是
+> **「不能让被捕获的引用指向别处」**。指向的对象内部随便改。
+
+#### 5. 循环变量：`for` 不行、`for-each` 行、数组会踩坑
+
+| 写法 | 结果 | 原因 |
+| :--- | :--- | :--- |
+| `for (int i = 0; ...) { s = () -> i; }` | **编译错** | `i` 从头到尾只有一个变量，还在被 `i++` 改 |
+| `for (int v : list) { s = () -> v; }` | `[1, 2, 3]` 各取各的 | `for-each` 的循环变量**每次迭代是新变量** |
+| `int[] idx = {0}` 绕过 | `[3, 3, 3]` 全是最后的值 | 三个 lambda 共享同一个盒子 |
+
+第三行是最容易出线上事故的：**循环里注册回调 / 监听器**时，你以为注册了三个不同值的回调，
+实际注册了三个读同一个变量的。正解排序：`for-each` → 循环内 `int snapshot = i` 再捕获 → 数组（并写注释）。
+
+#### 6. `this` 与实例：非捕获 lambda 是单例
+
+- `this` 的归属：匿名内部类里 `this.getClass()` 是 `LambdaCapture$1`，
+  lambda 里是 `LambdaCapture` —— **lambda 没有自己的 this**，它词法上就长在外层方法里。
+- 实例的复用：`nonCapturing() == nonCapturing()` 实测 **true**（`invokedynamic` 只链接一次，
+  非捕获 lambda 复用同一个实例），`capturing(1) == capturing(1)` 实测 **false**（每次新建）。
+
+两个推论，方向相反但都对：
+
+1. 「lambda 一定比匿名类多创建对象」是**错的** —— 非捕获时它比匿名类更轻（单例 + 不落盘的类）。
+2. **别拿 lambda 做 Map key / Set 元素 / 缓存键** —— 它没有 `equals`，对象身份还不稳定，
+   `capturing(1).equals(capturing(1))` 是 `false`。
+
+#### 7. 字节码：一次 `invokedynamic` + 一个隐藏类
+
+`day4-bytecode.txt` 里三段证据连起来看：
+
+1. `day4/` 目录下只有 6 个 `.class`，**没有一个是 `$$Lambda`** —— lambda 的类不落盘。
+2. `javap -c` 里创建 lambda 的指令是 `invokedynamic #161 // InvokeDynamic #13:applyAsInt:(I)...`，
+   不是 `new` + `invokespecial <init>`。匿名类在同样的位置会是后者。
+3. `javap -v` 的 `BootstrapMethods` 表里，引导方法写着
+   `LambdaMetafactory.metafactory`，第三个参数正是第 2 节那个 `lambda$xxx` 私有方法的方法句柄。
+
+运行时 `getClass()` 拿到的是 `LambdaCapture$$Lambda$24/0x0000028c...`，
+`isHidden()` 返回 **true**（JDK 15+ 的隐藏类），`getInterfaces()` 只有
+`[interface java.util.function.IntUnaryOperator]`。
+
+> 顺带看清了方法引用和 lambda 的关系：`Integer::parseInt` 的 `BootstrapMethods` 条目
+> 直接指向 `REF_invokeStatic java/lang/Integer.parseInt`，**没有中间那层合成方法**；
+> 而 `str::length` 是 `REF_invokeVirtual java/lang/String.length` + 一个捕获的接收者。
+> 所以方法引用不是「lambda 的简写」，它是更直接的链接方式。
+
+#### 8. 装箱：2 倍还是 36 倍，取决于逃没逃逸
+
+`Function<Integer,Integer>` 与 `IntUnaryOperator` 做同一件事（`x + 1`），每用例 7 轮取最小值：
+
+| 场景 | 装箱版 | 基本类型版 | 倍数 |
+| :--- | ---: | ---: | ---: |
+| 不逃逸（结果立刻拆箱求和） | 10.0 ms | 4.9 ms | **2.0 倍** |
+| 逃逸（结果写进 `Integer[]`） | 23.7 ms | 0.7 ms | **36 倍** |
+| 裸循环（没有 lambda 调用） | — | 5.0 ms | — |
+
+结论有点反直觉：**「装箱很贵」这个说法只有一半对，贵的是「逃逸的装箱」。**
+不逃逸时标量替换（Escape Analysis）把每次 `new Integer` 都消掉了，差距只有 2 倍；
+一旦结果要进集合、进 Map、跨线程传出去，每个 `Integer` 都是一次真实分配 + 一份 GC 压力，立刻变 36 倍。
+
+> 这正是 Day 2 §10 那条规矩的再次应用：**别背结论，要量**。
+> 而且这类倍数完全依赖 JIT 优化，换台机器、换个 `-Xmx` 都可能不一样。
+
+#### 9. 遗留
+
+- ⬜ `@FunctionalInterface` 与 `Object` 方法的关系只做了反射计数（抽象方法 1 个 / default 1 个），
+  没做「接口里声明 `equals` 算不算抽象方法」的反例 —— 反例在
+  `compile-errors/LambdaLimits.java` 第 4 条里报了，但还没有正向的最小复现程序，等写 Stream 时顺手补。
+- ⬜ `MethodHandle` / `VarHandle` 没碰，属于 W13 之后的内容（反射与动态调用那条线）。
+
+---
+
 ## 四、踩坑与 Bug 复盘
 
 | 现象 | 原因 | 排查过程 | 解决 | 底层原理 |
@@ -523,6 +687,9 @@ int pay = findCoupon(code)
 | 新建 `ExceptionCost.java` 后 `java -cp out ...ExceptionCost` 报 `ClassNotFoundException` | `javac @sources.txt` 只编清单里列出的文件，清单是之前 `find` 生成的 | 看 `sources.txt` 里根本没有新文件 | 重新 `find src/main/java -name "*.java" > sources.txt` 再编 | `run.bat` 每次都会重新 `dir /s /b`，手动编译时容易漏这一步 |
 | 同一段异常代码，两次测量读出 `44 ns` 和 `295 ns`，差了 6 倍，差点当成「JVM 参数没生效」 | 只测了一轮，且当时 JIT 还停在 C1 / 解释执行；`-XX:-StackTraceInThrowable` 本身是生效的（栈帧数确实是 0） | 把「栈深 1 抓到的帧数」一起打出来，确认参数生效，怀疑对象转向测量方法 | 改成每用例 5 轮 × 10 万次**取最小值**，数字立刻稳定（418 / 447 / 510 ns） | JIT 分层编译让「一次测量」毫无意义；微基准要么取最小值，要么用 JMH |
 | 想看 NPE 的 helpful message 里显示变量名，结果打出 `because "<parameter1>" is null` | javac 默认只生成 `-g:source,lines`，**不含局部变量表** | 对照 `javap -l` 看 LocalVariableTable 是空的 | 知道即可（加 `-g` 能显示 `s`，但 class 体积涨 10%~20%） | helpful message 靠局部变量表还原名字，没有就退化成 `<parameter1>` |
+| `Function.identity()` 放进 `Map<String, Function<Order, Object>>` 报「不兼容的类型：推断类型不符合等式约束」 | `identity()` 的 `T` **没有入参可推**，只能落到 `Object`，于是推出 `Function<Object,Object>` | 报错里写着「T 扩展自 Object」，说明它没从上下文拿到 `Order` | 显式写成 `Function.<Order>identity()`，Map 的值类型改成 `Function<Order, ?>` | 泛型方法的类型参数只从**入参**推断；`identity()` 无入参，必须显式给 —— 跟 lambda 缺目标类型是同一类问题 |
+| 把 `sectionB()` 写成 `static` 却在里面用 `this.delta`，报「无法从静态上下文引用非静态变量 this」 | 要演示「字段能改」就必须有实例，静态方法里没有 `this` | 三处报错都指向 `this` | 把 `sectionB` / `sectionD` 改成实例方法，`main` 里 `new LambdaCapture().run()` 串起来 | 这正是第 6 小节要讲的：lambda 里的 `this` 就是它所在方法的 `this`，方法静态则 lambda 也拿不到 `this` |
+| 一个文件里放了 6 个 lambda 编译错误，javac 只报了 **5 个**，`effectively final` 那条凭空消失 | javac 先做 attribution（类型/重载/目标类型），再做 FLOW 分析；`effectively final` 属于后者，attribution 一失败就**根本不会跑** flow | 对着行号数，发现少的正好是 `base = 20` 那条；把它单独放一个文件就报出来了 | 拆成 `LambdaLimits`（5 条 attr）/ `LambdaLimits2`（break、return 值）/ `LambdaLimits3`（effectively final，单独一条） | 编译器是分阶段的，前面的阶段报错会掩盖后面阶段的错误 —— 这解释了「为什么补上一个错，又冒出来三个」 |
 
 ---
 
@@ -548,8 +715,15 @@ int pay = findCoupon(code)
 - `orElse` 和 `orElseGet` 有什么区别？实际线上会出什么问题？（eager 求值，命中缓存时白打一次远程）
 - 为什么 `Optional` 不该做字段？（没实现 `Serializable`，序列化直接炸；官方立场是「给返回值用」）
 - `Optional.map` 里返回 `null` 会怎样？`flatMap` 呢？（前者静默变 empty，后者 NPE）
+- 为什么 lambda 里改不了外部局部变量？（捕获值拷贝，合成方法的形参为证；字段能改是因为捕获的是 `this`）
+- lambda 和匿名内部类有什么区别？（`this` 归属 / 是否生成 `.class` / 实例是否复用 / 能否序列化）
+- lambda 每次都 new 一个对象吗？（非捕获复用单例，`==` 为 true；捕获的每次新建）
+- `Predicate<T>` 和 `Function<T,Boolean>` 有什么不一样？（只有前者能 `and/or/negate`，且短路）
+- `andThen` 和 `compose` 的顺序？（前者 g(f(x))，后者 f(g(x))；`thenComparing` 是 `andThen` 的专用版）
+- `String::length` 和 `str::length` 为什么参数个数差一个？（未绑定 vs 绑定接收者）
+- `Function<Integer,Integer>` 一定比 `IntUnaryOperator` 慢吗？（不逃逸 2 倍，逃逸 36 倍；差别在标量替换）
 
-> 对应的口述版答案在 `04-interview/question-bank/Java基础.md`（M1 要求 +3 道，现已 17 道）。
+> 对应的口述版答案在 `04-interview/question-bank/Java基础.md`（M1 要求 +3 道，现已 20 道）。
 
 ## 六、一句话总结
 
@@ -564,6 +738,7 @@ int pay = findCoupon(code)
 | 2026-10-28 | 三 | 类型擦除六个实验 + PECS 五个实验 + 四类编译期报错原文 | 60 min | `ErasureProof` / `PecsDemo` / `GenericLimits` / `day1-result.txt` | ✅ |
 | 2026-10-29 | 四 | 补 Day 1 遗留（GenericLimits2 + WildcardCapture / B2 崩溃修复）+ Day 2 异常体系十段实验 | 60 min | `WildcardCapture` / `TryWithResourcesProbe` / `ExceptionChainProbe` / `day2-result.txt` | ✅ |
 | 2026-10-30 | 五 | Day 3 Optional（三反模式 + 五陷阱 + 一条链）+ 补 Day 2 遗留「异常开销」 | 60 min | `OptionalAntiPatterns` / `OptionalChain` / `ExceptionCost` / `day3-result.txt` | ✅ |
+| 2026-11-02 | 一 | Day 4 Lambda（五形态 + 方法引用五连 + 值捕获 + invokedynamic + 装箱逃逸） | 60 min | `FunctionalShape` / `LambdaCapture` / `LambdaLimits`×3 / `day4-result.txt` / `day4-bytecode.txt` | ✅ |
 |  | 一 |  |  |  |  |
 |  | 二 |  |  |  |  |
 |  | 三 |  |  |  |  |
@@ -650,3 +825,43 @@ int pay = findCoupon(code)
 还有一个更隐蔽的坑：`orElse` 返回类型是 `T`，所以能写 `orElse(null)` —— 当场把 Optional 的契约破坏掉；
 以及 `filter` 不能省：订单 200 元的券减 500，不 `filter(c -> c.off() <= amount)` 会算出 **−300**。
 **Optional 只管「有没有」，不管「值合不合法」。**
+
+**Q7 · lambda 为什么改不了外部局部变量**
+
+不是「规定如此」，而是**捕获的是值拷贝**，两个副本一旦分叉语义就不成立，所以干脆禁止第二次赋值。
+证据在字节码层面：`int base = 10; IntUnaryOperator f = x -> x + base;` 编译后
+`javap -p` 能看到 javac 生成的合成方法 `lambda$sectionB$1(int, int)` —— **第一个 `int` 是 `x`，
+第二个 `int` 就是 `base`**。所谓「捕获」，真实动作是把它当实参传进一个静态方法。
+
+由此能推出三条现象，全部实测过：
+
+1. **字段为什么能改**：字段不是被捕获的，被捕获的是 `this`；那种 lambda 的合成方法**不是 static**，
+   `this` 隐式传入。所以把 `delta` 从 1 改成 100，同一个 lambda 的返回值从 `6` 变成 `105`。
+2. **`int[] box` 为什么能绕过**：拷的是引用，引用指向的数组在堆上，两边共享。
+   所以准确说法是「不能让被捕获的引用指向别处」，不是「不能改局部变量」。
+3. **`for` 与 `for-each` 的差别**：`for (int i...)` 里 `i` 是**整个循环共用的一个变量**，还在被改，
+   所以编译错；`for-each` 的循环变量**每次迭代都是新变量**，每个 lambda 捕获到各自的副本，
+   实测得到 `[1, 2, 3]`。用 `int[] idx` 绕过的写法反而会全变 `[3, 3, 3]` —— 三个 lambda 共享一个盒子。
+
+最后一条边界：`javac` 的分阶段编译会让这条错误「消失」—— 同一个文件里只要有任何 attribution 错误
+（比如 lambda 缺目标类型、`break` 出现在 lambda 里），FLOW 分析就被跳过，
+`effectively final` 这条**根本不会报**。这就是「补上一个错又冒出来三个」的原因。
+
+**Q8 · 装箱一定慢吗**
+
+不一定，取决于**逃没逃逸**。同一个 `x + 1`，`Function<Integer,Integer>` vs `IntUnaryOperator`，
+每用例 7 轮取最小值（JDK 17.0.12）：
+
+| 场景 | 装箱版 | 基本类型版 | 倍数 |
+| :--- | ---: | ---: | ---: |
+| 不逃逸（结果立刻拆箱求和） | 10.0 ms | 4.9 ms | 2.0 倍 |
+| 逃逸（结果写进 `Integer[]`） | 23.7 ms | 0.7 ms | 36 倍 |
+
+原因是不逃逸时 JIT 的**标量替换**（Escape Analysis 的一部分）把每次 `new Integer` 直接消掉了 ——
+对象根本没被创建，自然没有分配成本。一旦结果要进 `List`/`Map`、当 key、跨线程传出去，
+每个 `Integer` 都是真实分配，再加上 GC 压力，差距立刻拉到几十倍。
+
+所以工程上的判断标准不是「有没有装箱」，而是「这个装箱会不会逃逸」：
+循环内求和、聚合统计基本可以不管；要放进集合或用 `Stream` 收集成 `List<Integer>`，才值得换
+`IntStream` / `IntUnaryOperator` 这类特化版本。而且在一次 IO 是毫秒级的接口里，
+省几十纳秒没有意义 —— **只有热路径才需要这一层优化**。

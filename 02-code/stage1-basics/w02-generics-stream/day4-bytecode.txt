@@ -1,0 +1,93 @@
+# W02 · Day 4 字节码证据 · lambda 不是匿名内部类
+# 生成时间：2026-11-02  /  JDK 17.0.12  /  Windows
+# 注：javap 不受 -Dfile.encoding 影响，常量池里的中文字符串在快照里是 GBK 乱码，
+#     只看方法句柄那几行即可。
+
+########## 1  day4 包下的 .class 文件：没有任何 $$Lambda ##########
+
+FunctionalShape$Order.class
+FunctionalShape$OrderRule.class
+FunctionalShape.class
+LambdaCapture$1.class
+LambdaCapture$2.class
+LambdaCapture.class
+
+########## 2  javap -p：每个 lambda 都是一个私有合成方法 ##########
+# 观察点：捕获局部变量的 -> static + 多一个形参；捕获 this 的 -> 非 static
+
+Compiled from "LambdaCapture.java"
+public class com.newt.java48.w02.day4.LambdaCapture {
+  private int delta;
+  public com.newt.java48.w02.day4.LambdaCapture();
+  public static void main(java.lang.String[]);
+  private void run();
+  private static void sectionA();
+  private void sectionB();
+  private static void sectionC();
+  private void sectionD();
+  private static java.util.function.IntUnaryOperator nonCapturing();
+  private static java.util.function.IntUnaryOperator capturing(int);
+  private static void sectionE();
+  private static void sectionF();
+  private static boolean lambda$sectionF$14(java.lang.String);
+  private static java.lang.String lambda$sectionF$13(java.nio.file.Path);
+  private static int lambda$sectionF$12(int);
+  private static int lambda$capturing$11(int, int);
+  private static int lambda$nonCapturing$10(int);
+  private void lambda$sectionD$9();
+  private static java.lang.Integer lambda$sectionC$8(int[]);
+  private static java.lang.Integer lambda$sectionC$7(int);
+  private static int lambda$sectionB$6(int[], int);
+  private int lambda$sectionB$5(int);
+  private static boolean lambda$sectionB$4(java.lang.reflect.Method);
+  private static boolean lambda$sectionB$3(java.lang.reflect.Method);
+  private static void lambda$sectionB$2(java.lang.reflect.Method);
+  private static int lambda$sectionB$1(int, int);
+  private static int[] lambda$sectionA$0(int);
+}
+
+########## 3  sectionB 字节码：创建 lambda 的全是 invokedynamic ##########
+# 对比：匿名类在这里会是 new LambdaCapture$1 + invokespecial <init>
+
+  private void sectionB();
+    Code:
+       0: getstatic     #35                 // Field java/lang/System.out:Ljava/io/PrintStream;
+       3: ldc           #159                // String ========== B �� �������ֵ���� ==========
+       5: invokevirtual #43                 // Method java/io/PrintStream.println:(Ljava/lang/String;)V
+       8: bipush        10
+      10: istore_1
+      11: iload_1
+      12: invokedynamic #161,  0            // InvokeDynamic #13:applyAsInt:(I)Ljava/util/function/IntUnaryOperator;
+      17: astore_2
+      18: getstatic     #35                 // Field java/lang/System.out:Ljava/io/PrintStream;
+      21: aload_2
+      22: iconst_5
+      23: invokeinterface #164,  2          // InterfaceMethod java/util/function/IntUnaryOperator.applyAsInt:(I)I
+      28: invokedynamic #169,  0            // InvokeDynamic #14:makeConcatWithConstants:(I)Ljava/lang/String;
+      33: invokevirtual #43                 // Method java/io/PrintStream.println:(Ljava/lang/String;)V
+      36: getstatic     #35                 // Field java/lang/System.out:Ljava/io/PrintStream;
+      39: ldc           #170                // String B2 ����ȫ���ϳɷ�����
+      41: invokevirtual #43                 // Method java/io/PrintStream.println:(Ljava/lang/String;)V
+      44: ldc           #8                  // class com/newt/java48/w02/day4/LambdaCapture
+      46: invokevirtual #172                // Method java/lang/Class.getDeclaredMethods:()[Ljava/lang/reflect/Method;
+      49: invokestatic  #176                // Method java/util/Arrays.stream:([Ljava/lang/Object;)Ljava/util/stream/Stream;
+
+########## 4  BootstrapMethods 前三条：引导方法 = LambdaMetafactory.metafactory ##########
+# 每条都有三段：接口方法签名 / 实现用的 MethodHandle / 实例化后的签名
+# 第 0 条指向 Integer.parseInt（静态方法引用），第 2 条指向 String.length（未绑定实例引用）
+# 绑定实例 str::length 则是 REF_invokeVirtual + 一个捕获的接收者 —— 同一个 length，两种链接方式
+
+BootstrapMethods:
+  0: #517 REF_invokeStatic java/lang/invoke/LambdaMetafactory.metafactory:(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;
+    Method arguments:
+      #524 (Ljava/lang/Object;)Ljava/lang/Object;
+      #525 REF_invokeStatic java/lang/Integer.parseInt:(Ljava/lang/String;)I
+      #530 (Ljava/lang/String;)Ljava/lang/Integer;
+  1: #532 REF_invokeStatic java/lang/invoke/StringConcatFactory.makeConcatWithConstants:(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;
+    Method arguments:
+      #538 A1 ��̬    Integer::parseInt            -> \u0001
+  2: #517 REF_invokeStatic java/lang/invoke/LambdaMetafactory.metafactory:(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;
+    Method arguments:
+      #540 (Ljava/lang/Object;)I
+      #541 REF_invokeVirtual java/lang/String.length:()I
+      #545 (Ljava/lang/String;)I

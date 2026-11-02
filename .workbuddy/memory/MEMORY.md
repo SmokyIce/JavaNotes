@@ -38,8 +38,12 @@
 - **M1 Day 3（10-30）Optional**（`day3/` 11 段实验：三反模式 + 五陷阱 + 一条链）
   + 补 Day 2 遗留「异常开销」（`ExceptionCost`，447 ns → 关栈 31 ns，15 倍）✅
   题库 17 → **18 题**（Optional 1 道）
+- **M1 Day 4（11-02）Lambda**（`day4/` 12 段实验：五形态 + Predicate 短路 + andThen/compose +
+  装箱逃逸 + 自定义函数式接口 + 方法引用五连 + 值捕获 + 循环变量 + this 归属 + 实例复用 + invokedynamic）
+  + `compile-errors/LambdaLimits{,2,3}` 8 条报错原文 + `day4-bytecode.txt`（javap 三段证据）✅
+  题库 18 → **20 题**（Lambda 2 道）
 
-**下一步**：W02 Day 4 = Lambda（函数式接口四形态 + 方法引用四种写法 + 变量捕获 effectively final），
+**下一步**：W02 Day 5 = Stream（惰性求值 / 短路 / 一个流只能用一次 + flatMap vs map），
 时间盒在 `00-plan/today.md`。
 
 **W02 最值钱的三条（讲课直接用）**
@@ -51,6 +55,10 @@
 3. **`new RuntimeException(e)` 不丢栈，是把栈切成两段**（实测包装栈深度 3 / cause 5）；
    真丢栈是只传 message（`getCause() = null`）。**`finally` 里的 `return` 才是真的把异常变没**
    （方法返回 42，异常无影无踪，javac 不报错）—— 这就是 TWR 与 `addSuppressed` 存在的理由。
+4. **「lambda 捕获值拷贝」不用背 `effectively final`，看合成方法就懂**：
+   `javap -p` 里 `lambda$sectionB$1(int, int)`，第二个形参就是被捕获的局部变量；
+   捕获 `this` 的合成方法**不是 static**（所以字段能改），`int[] box` 能"绕过"是因为拷的是引用。
+   这条与擦除、sneakyThrow 同属「编译器骗得过类型系统，骗不过内存布局」。
 
 **踩过的工具坑**：`Class.getMethod()` 只找 public，包私有方法要用 `getDeclaredMethod`（且不含继承）；
 抓 `capture of ?` 细节要加 `-Xdiags:verbose`；`compile-errors/` 下的注释必须写英文，
@@ -58,6 +66,11 @@
 手动编译前必须刷新 `find src/main/java -name "*.java" > sources.txt`，
 否则新建的类报 `ClassNotFoundException`（`run.bat` 每次都会重扫，手动走容易漏）；
 **微基准只测一轮会差 6 倍**（44 ns vs 295 ns，JIT 分层编译），必须多轮 × 大样本取最小值。
+**javac 分阶段**：attribution（类型/重载/目标类型）先跑，FLOW 分析后跑；attribution 一报错，
+flow 就整个跳过 —— `effectively final` 这类错误会**凭空消失**。故意收集多个编译错误时，
+attr 错和 flow 错要放不同文件（`LambdaLimits` / `LambdaLimits2` / `LambdaLimits3` 就是这么来的）。
+`javap` 不受 `-Dfile.encoding` 影响，常量池里的中文字符串在快照里是 GBK 乱码，不影响读方法句柄。
+`Function.identity()` 无入参推不出 `T`，放进 `Map<String,Function<X,?>>` 要写 `Function.<X>identity()`。
 
 **W01 最值钱的一条实测结论（以后讲集合必用）**：
 「链表到 8 个就转红黑树」缺两个前提 —— **容量 ≥ 64** 且 **key 能比较大小**。
