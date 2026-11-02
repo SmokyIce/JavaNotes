@@ -42,9 +42,14 @@
   装箱逃逸 + 自定义函数式接口 + 方法引用五连 + 值捕获 + 循环变量 + this 归属 + 实例复用 + invokedynamic）
   + `compile-errors/LambdaLimits{,2,3}` 8 条报错原文 + `day4-bytecode.txt`（javap 三段证据）✅
   题库 18 → **20 题**（Lambda 2 道）
+- **M1 Day 5（11-02）Stream**（`day5/` 三个 Demo：惰性求值打印顺序 / 短路探测计数 / 屏障 /
+  `peek` 与 `count` / 流只能用一次 / map vs flatMap / parallel 代价 / 函数式接口抽象方法计数）
+  + `day5-result.txt`；顺带补完 Day 4 遗留 ✅
+  题库 20 → **22 题**（Stream 2 道）
 
-**下一步**：W02 Day 5 = Stream（惰性求值 / 短路 / 一个流只能用一次 + flatMap vs map），
-时间盒在 `00-plan/today.md`。
+**下一步**：W02 Day 6 = `List<User>` 过滤→排序→分组→统计（`groupingBy` 三参 + 下游收集器、
+`toMap` 重复 key、`teeing`、`Collectors.toList()` vs `Stream.toList()` 可变性），
+时间盒在 `00-plan/today.md`。做完 W02 封板 → W03 并发。
 
 **W02 最值钱的三条（讲课直接用）**
 
@@ -71,6 +76,13 @@ flow 就整个跳过 —— `effectively final` 这类错误会**凭空消失**�
 attr 错和 flow 错要放不同文件（`LambdaLimits` / `LambdaLimits2` / `LambdaLimits3` 就是这么来的）。
 `javap` 不受 `-Dfile.encoding` 影响，常量池里的中文字符串在快照里是 GBK 乱码，不影响读方法句柄。
 `Function.identity()` 无入参推不出 `T`，放进 `Map<String,Function<X,?>>` 要写 `Function.<X>identity()`。
+**Stream 三条**：① `sorted()` 不一定是屏障 —— 上游 spliterator 带 `SORTED` 特征（`IntStream.rangeClosed` 就有）
+时 `SortedOps.opWrapSink` 直接 `return sink`，是空操作（实测探测 1 个 vs 换无序源 5 个）；
+② JDK 9+ `count()` 在 `SIZED` 流上走快速路径，**整条管道连 `peek` 一起跳过**（日志 0 条），
+所以 `peek` 只能调试；③ 演示「顺序」的 parallel 实验要 `forEachOrdered` 对照，
+且小数据量（1k×30 轮）parallel 反而慢 2~5 倍。
+**微基准重复踩坑**：活太轻会被 JIT 向量化/常量折叠（5M 平方和读出 1 ms vs 0 ms），
+要挑「算不出答案」的重活 + 两档数据量，否则数字接近 0 就是测量事故。
 
 **W01 最值钱的一条实测结论（以后讲集合必用）**：
 「链表到 8 个就转红黑树」缺两个前提 —— **容量 ≥ 64** 且 **key 能比较大小**。

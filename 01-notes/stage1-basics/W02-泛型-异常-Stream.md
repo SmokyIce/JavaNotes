@@ -1,7 +1,7 @@
 # W02 · Java 泛型 · 异常 · Optional · Stream
 
 > **第一阶段 · 打基础（W01–W12）** ｜ 预计投入 ≈ 7 小时（每天 60 分钟）
-> 状态：🟨 进行中（Day 1 / Day 2 / Day 3 / Day 4 完成）　｜　开始日期：2026-10-28　｜　完成日期：____-__-__
+> 状态：🟨 进行中（Day 1 / Day 2 / Day 3 / Day 4 / Day 5 完成）　｜　开始日期：2026-10-28　｜　完成日期：____-__-__
 
 > 💡 周六练习：给一个 List<User>，完成 过滤 → 排序 → 分组 → 统计。
 
@@ -13,7 +13,7 @@
 - [x] 异常体系
 - [x] Optional
 - [x] Lambda
-- [ ] Stream
+- [x] Stream
 - [ ] 过滤 / 排序 / 分组 / 统计
 
 ## 二、核心问题（能用自己的话脱稿讲出来，才算学会）
@@ -26,6 +26,8 @@
 6. `isPresent() + get()` 和 `orElse` 都是「有值取值、没值兜底」，为什么前者是反模式？`orElse` 又在什么情况下会白算一次、甚至算出负数？
 7. 「lambda 里不能改外部局部变量」这条规定，真实的物理原因是什么？怎么用字节码证明它捕获的是值拷贝？
 8. `Function<Integer,Integer>` 一定比 `IntUnaryOperator` 慢吗？为什么「装箱很贵」这个结论有时量出来只有 2 倍，有时是 36 倍？
+9. `stream().filter(...).map(...)` 写完不接终止操作会怎样？为什么加了 `sorted()` 之后打印顺序会变？怎么判断一行代码是中间操作还是终止操作？
+10. 一个 `Stream` 为什么只能用一次？`parallel()` 在什么情况下反而更慢？
 
 > 自己先答一遍，再翻文末「参考要点」，别倒着来。
 
@@ -41,7 +43,7 @@ Day 2（已完成 10-29）  异常体系：TWR 关闭与 suppressed / finally �
 Day 2 补（已完成 10-30）异常开销：fillInStackTrace 才是账单，-XX:-StackTraceInThrowable 对照实测
 Day 3（已完成 10-30）  Optional：三个反模式 + 五个陷阱 + 一条 map/flatMap/filter 链
 Day 4（已完成 11-02）  Lambda：函数式接口五形态 + 方法引用五连 + 变量捕获（值拷贝）+ invokedynamic
-Day 5（待做）          Stream：中间/终止操作、惰性求值、短路
+Day 5（已完成 11-02）  Stream：惰性求值 / 短路 / 屏障 / peek + 流只能用一次 + map vs flatMap + parallel
 Day 6（待做）          List<User> 过滤 → 排序 → 分组 → 统计
 ```
 
@@ -667,10 +669,191 @@ IntUnaryOperator f = x -> x + base;
 
 #### 9. 遗留
 
-- ⬜ `@FunctionalInterface` 与 `Object` 方法的关系只做了反射计数（抽象方法 1 个 / default 1 个），
-  没做「接口里声明 `equals` 算不算抽象方法」的反例 —— 反例在
-  `compile-errors/LambdaLimits.java` 第 4 条里报了，但还没有正向的最小复现程序，等写 Stream 时顺手补。
+- ✅ `@FunctionalInterface` 与 `Object` 方法的关系只做了反射计数（抽象方法 1 个 / default 1 个），
+  没做「接口里声明 `equals` 算不算抽象方法」的正向最小复现 —— **2026-11-02 已补**，
+  见 Day 5 的 `day5/FuncInterfaceRule`（反射数出 4 个 abstract，编译器只算 1 个）。
 - ⬜ `MethodHandle` / `VarHandle` 没碰，属于 W13 之后的内容（反射与动态调用那条线）。
+
+---
+
+### Day 5 · 2026-11-02（周一）· Stream
+
+| 时间 | 做什么 | 产出 |
+| -: | :--- | :--- |
+| 10 分钟 | 复述 Day 4：捕获为什么是值拷贝 / 非捕获 lambda 为什么是单例 | 口头过，卡住回看 Day 4 |
+| 25 分钟 | 惰性求值：中间操作只「记账」，终止操作才真跑；用打印顺序证明 | `day5/StreamLazy` A 段 |
+| 15 分钟 | 短路：`findFirst` / `anyMatch` / `limit` 在无限流上能停；对照 `sorted` / `count` | `day5/StreamLazy` B / C 段 |
+| 10 分钟 | 一个流只能用一次 + `flatMap` vs `map` + parallel 的代价 | `day5/StreamOnce` + 本节第 5~7 小节 |
+
+实测快照：`w02-generics-stream/day5-result.txt`（三个入口的完整输出）
+顺带补完 Day 4 遗留：`day5/FuncInterfaceRule`（函数式接口的抽象方法到底怎么数）
+
+#### 1. 中间操作只记账，终止操作才真跑
+
+同一段链路，先在没接终止操作时看日志：
+
+```java
+Stream<String> pipeline = Stream.of("a", "b", "c")
+        .filter(x -> { LOG.add("filter " + x); return true; })
+        .map(x -> { LOG.add("map " + x); return x.toUpperCase(); });
+// 此时 LOG.size() == 0 —— filter / map 那一行一次都没跑
+List<String> out = pipeline.collect(Collectors.toList());
+// 之后 LOG = [filter a, map a, filter b, map b, filter c, map c]
+```
+
+两个结论，第二个比第一个值钱：
+
+1. **中间操作只是往流水线上挂节点**，不接终止操作就什么都不发生（连一行日志都没有）。
+2. 真跑起来之后是 **一个元素走完全链才轮到下一个**，不是「先全部 filter 再全部 map」。
+   这就是 Stream 和「两遍 for 循环」最本质的差别 —— 后者要遍历两次，前者只遍历一次。
+
+判断一行是中间还是终止，不用背 API 表：**看返回值**。返回 `Stream` 的是中间操作，
+返回 `void` / `long` / `Optional` / 集合 / 数组的是终止操作。中间操作可以有 0 到 N 个，
+终止操作必须有且只有 1 个。
+
+#### 2. 屏障：`sorted()` 会把「提前收工」作废 —— 但 `rangeClosed` 是例外
+
+前面说过只有终止操作才真跑，但终止操作不一定要把所有元素跑完（下一节讲短路）。
+`sorted` 是有状态中间操作，它必须看到全部元素才能排序，于是把「流式」切成两段、
+也让所有提前收工失效。实测（`peek` 里数探测个数）：
+
+| 链路 | 探测个数 | 说明 |
+| :--- | ---: | :--- |
+| `rangeClosed(1,5).findFirst()` | 1 | 正常短路 |
+| `rangeClosed(1,5).sorted().findFirst()` | **1** | 居然没变多！ |
+| `of(5,3,1,4,2).sorted().findFirst()` | 5 | 这次吃满了 |
+| `of(1,2,2,3,3,3).distinct().count()` | 6 | `distinct` 必须记住见过的所有值 |
+
+第二行反直觉：`sorted()` 竟然没吃掉全部 5 个。翻 JDK 源码才明白 ——
+`IntStream.rangeClosed` 的 spliterator **本身就带 `SORTED` 特征**（`Streams.java:119`），
+而 `SortedOps` 的 `opWrapSink` 第一件事就是：
+
+> `// If the input is already naturally sorted and this operation also naturally sorted then this is a no-op`
+> `if (StreamOpFlag.SORTED.isKnown(flags) && isNaturalSort) return sink;`（`SortedOps.java:136`）
+
+也就是说 **`rangeClosed(...).sorted()` 是空操作**，编译器直接把你挂的节点摘了。
+换成真没排序的源（`of(5,3,1,4,2)`）立刻就吃满 —— 那时它才是屏障。
+
+> 这条值得单独记：**「`sorted` 一定全量」和「`sorted` 一定便宜」都是错的**，
+> 结论取决于上游 spliterator 有没有 `SORTED` 特征。凭印象猜，这一项会差 5 倍。
+
+再看真实成本（100 万条 `Integer`，3 轮取最小值）：
+
+| 写法 | 耗时 | 语义 |
+| :--- | ---: | :--- |
+| `sorted(reverseOrder()).limit(3)` | 25 ms | 全局最大的 3 个 |
+| `limit(3).sorted(reverseOrder())` | < 1 ms | 前 3 个里最大的 |
+
+差一个数量级以上，但**两者语义不同，不能随手换位置**。要全局 top-K 又不想全排，
+正解是自己维护一个大小为 K 的堆（`PriorityQueue`），而不是把 `limit` 挪到前面假装优化。
+
+#### 3. 短路：终止操作要的答案越少，越能提前收工
+
+| 链路 | 探测个数 | 结论 |
+| :--- | ---: | :--- |
+| 100 万个数 `anyMatch(i == 3)` | 3 | 命中即停 |
+| **无限流** `iterate(1, i+1).filter(i % 7 == 0).findFirst()` | 7 | 无限流也能停 |
+| `iterate(1, i+1).limit(3)` | 3 | `limit` 是短路中间操作 |
+| 100 万个数 `filter(...).count()` | 1 000 000 | `count` 不短路 |
+
+短路家族：`anyMatch` / `allMatch` / `noneMatch` / `findFirst` / `findAny` / `limit`。
+非短路：`count` / `sum` / `average` / `max` / `min` / `collect` / `forEach`。
+
+判断标准只有一句：**这个终止操作拿到的答案，是不是「一个元素就够」**。
+`anyMatch` 是（找到了就 true），`count` 不是（必须数完）。
+
+> 无限流只能配短路终止操作。`Stream.iterate(...).count()` 不是「慢」，是**永远跑不完**。
+> 另外，只要链路里挡着一个真屏障（`sorted` / `distinct`），下面这些「只探测 3 个」就全部不成立。
+
+#### 4. `peek` 的两个坑：`count()` 会让它静默消失
+
+```java
+Stream.of("a","b","c").peek(x -> LOG.add("peek " + x)).count();          // count=3，LOG 里 0 条
+Stream.of("a","b","c").filter(x -> true).peek(...).count();              // count=3，LOG 里 3 条
+```
+
+同一段代码，加了个 `filter` 就从「一条不打印」变成「三条都打印」。原因：JDK 9+ 的 `count()`
+在**元素个数能直接算出来**（源是 `SIZED`、中间没有会改变数量的操作）时会走快速路径，
+**整条管道连同 `peek` 一起被跳过**。
+
+推论：`peek` 只能用来调试，绝不能放业务逻辑 —— 它会静默不执行，连日志都不留。
+要保证逐元素执行，用 `forEach` / `collect` 这类必须真消费的终止操作兜底。
+
+#### 5. 一个流只能用一次
+
+```text
+java.lang.IllegalStateException: stream has already been operated upon or closed
+```
+
+四种场景实测：
+
+| 场景 | 结果 | 说明 |
+| :--- | :--- | :--- |
+| 局部变量 `s.count()` 两次 | 第二次 ISE | 流是一次性游标 |
+| **字段**缓存流，调用两次 | 第二次 ISE | API 设计事故：调用方看不出它已经烧掉 |
+| 方法返回 `Stream`（每次 new） | 正常 | 每次调用都是一个新游标 |
+| `Supplier<Stream>` 取两次 | 正常 | 复用「工厂」而不是「流」 |
+
+最容易写出来的一种是「先看看几条，再 collect」：
+
+```java
+long n = once.count();                 // 日志里打印「共 n 条」
+List<Order> list = once.collect(...);  // 挂了：ISE
+```
+
+**Stream 是游标，不是集合。要复用就复用数据（`List`）或工厂（`Supplier<Stream>`）。**
+
+#### 6. `map` 换形状，`flatMap` 拆开铺平
+
+3 个订单，共 6 件商品：
+
+| 写法 | 结果 |
+| :--- | :--- |
+| `map(Order::items)` | 3 个元素，每个还是 `List<Item>` |
+| `flatMap(o -> o.items().stream())` | 6 个元素，`Item` 平铺 |
+
+一句话记法：`map` 是 `T → R`，`flatMap` 是 `T → Stream<R>` 再把所有流**拍平成一条**。
+签名上就写着：`flatMap` 的入参必须返回 `Stream`，所以 `chars()`（`IntStream`）要先
+`mapToObj` 装箱才能拼字符串。
+
+一个顺手的用法，接的是 Day 3 那条「Optional 别塞进集合」：
+`List<Optional<String>>` 拿 `flatMap(Optional::stream)` 一步展平，比
+`filter(Optional::isPresent).map(Optional::get)` 干净得多。
+
+#### 7. `parallel` 不是「更快」，是「用核数换单次耗时」
+
+顺序问题先看清楚的：
+
+| 写法 | 结果 |
+| :--- | :--- |
+| 串行 `forEach` | `[0..11]` 严格有序 |
+| `parallel().forEach` | `[7, 8, 6, 10, 11, 9, 3, 1, 5, 4, 2, 0]` 乱序（每次不同） |
+| `parallel().forEachOrdered` | `[0..11]` 保序（代价是汇合等待） |
+
+性能（本机 12 核，3 轮取最小值）：
+
+| 场景 | 串行 | parallel | 结论 |
+| :--- | ---: | ---: | :--- |
+| 2000 万个数求和（每元素几乎不做事） | 20 ms | 6 ms | 3.3 倍，但被内存带宽卡住，拿不到 12 倍 |
+| 1000 个元素 × 30 轮计算 | 21 µs | 49 µs | **反向慢 2~5 倍** |
+| 200 万个元素 × 30 轮计算 | 34 ms | 5 ms | 6~7 倍 |
+
+（数字取自 `day5-result.txt`；并行计时同机重跑浮动能到 2 倍，只看量级别记绝对值。）
+
+所以「小数据量开 parallel」是真的会变慢：拆任务 + 合并结果的开销比干活本身还大。
+四条都满足才考虑 parallel：**数据量 ≥ 1 万 / 每元素计算够重 / 无共享可变状态 / 不依赖顺序**。
+任一条不满足，老老实实写 for。
+
+#### 8. 遗留
+
+- ⬜ **Day 6**：`List<User>` 过滤 → 排序 → 分组 → 统计，重点是 `Collectors.groupingBy`
+  的三参数重载、`toMap` 的重复 key 会抛 `IllegalStateException`、`teeing` 一次算两个聚合。
+- ⬜ `Collectors.toList()` 与 JDK 16 的 `Stream.toList()` 返回值一个可变一个不可变，
+  这个差异要放到 Day 6 用代码撞一次 `UnsupportedOperationException`。
+- ⬜ `Files.lines()` / `BufferedReader.lines()` 返回的流**持有文件句柄**，必须 TWR 包住；
+  这条和 Day 2 的 TWR 是同一件事，等 W08 读文件 / 读大 CSV 时再实测。
+- ⬜ `parallel()` 默认共用 `ForkJoinPool.commonPool()`，容器里 `availableProcessors()` 可能只报 1，
+  属于 W04 线程池那条线，先记一笔。
 
 ---
 
@@ -690,6 +873,10 @@ IntUnaryOperator f = x -> x + base;
 | `Function.identity()` 放进 `Map<String, Function<Order, Object>>` 报「不兼容的类型：推断类型不符合等式约束」 | `identity()` 的 `T` **没有入参可推**，只能落到 `Object`，于是推出 `Function<Object,Object>` | 报错里写着「T 扩展自 Object」，说明它没从上下文拿到 `Order` | 显式写成 `Function.<Order>identity()`，Map 的值类型改成 `Function<Order, ?>` | 泛型方法的类型参数只从**入参**推断；`identity()` 无入参，必须显式给 —— 跟 lambda 缺目标类型是同一类问题 |
 | 把 `sectionB()` 写成 `static` 却在里面用 `this.delta`，报「无法从静态上下文引用非静态变量 this」 | 要演示「字段能改」就必须有实例，静态方法里没有 `this` | 三处报错都指向 `this` | 把 `sectionB` / `sectionD` 改成实例方法，`main` 里 `new LambdaCapture().run()` 串起来 | 这正是第 6 小节要讲的：lambda 里的 `this` 就是它所在方法的 `this`，方法静态则 lambda 也拿不到 `this` |
 | 一个文件里放了 6 个 lambda 编译错误，javac 只报了 **5 个**，`effectively final` 那条凭空消失 | javac 先做 attribution（类型/重载/目标类型），再做 FLOW 分析；`effectively final` 属于后者，attribution 一失败就**根本不会跑** flow | 对着行号数，发现少的正好是 `base = 20` 那条；把它单独放一个文件就报出来了 | 拆成 `LambdaLimits`（5 条 attr）/ `LambdaLimits2`（break、return 值）/ `LambdaLimits3`（effectively final，单独一条） | 编译器是分阶段的，前面的阶段报错会掩盖后面阶段的错误 —— 这解释了「为什么补上一个错，又冒出来三个」 |
+| 想证明「`sorted` 是屏障、会把短路作废」，结果 `rangeClosed(1,5).sorted().findFirst()` 只探测了 **1 个**，跟不加 `sorted` 一样 | `IntStream.rangeClosed` 的 spliterator 自带 `SORTED` 特征，`SortedOps` 看到上游已有序就把节点直接摘掉（空操作） | 用 `peek` 数探测个数 → 只有 1；换 `IntStream.of(5,3,1,4,2)` 立刻变 5 | 结论改写成「屏障成立的前提是上游真的无序」，并补第 3 个实验做对照 | `Streams.java:119` 的 `characteristics()` 带 `Spliterator.SORTED`；`SortedOps.java:136` 的 `if (SORTED.isKnown(flags) && isNaturalSort) return sink;` |
+| 测 parallel 收益，500 万个数平方和读出「串行 1 ms / parallel 0 ms」，数字完全不能用 | 活太轻，JIT 把整个 `sum` 向量化甚至常量折叠了，测到的是「循环被消掉」的时间 | 两个数都接近 0，明显是测量问题，不是 JVM 太强 | 换成「算不出答案」的重活（每元素 30 轮乘加）+ 2000 万 / 200 万两档数据量，再补一个小数据量对照（1k 元素反而慢 2~5 倍） | 微基准老规矩（Day 2 已踩过一次）：**数字接近 0 或两档差距离谱时，先怀疑 JIT 把活消掉了** |
+| `peek` 里加的日志一条都没打印，以为流没执行（甚至怀疑代码没编译进去） | JDK 9+ 的 `count()` 在源是 `SIZED`、中间没有改数量的操作时走快速路径，**整条管道包括 `peek` 一起跳过** | 在 `peek` 前加一个 `filter(x -> true)`，日志立刻出现 3 条，而 `count()` 结果不变 | 调试一律用 `forEach` / `collect` 兜底；业务逻辑绝不写进 `peek` | 「终止操作」不等于「逐元素执行」；`count` 只要个数，`SIZED` 流能直接算出来 |
+| 用反射数 `Named` 接口的 abstract 方法得到 **4 个**，可编译器认为它只有 1 个 | JLS 9.8：与 `Object` 的 public 方法签名相同的接口方法（`equals` / `hashCode` / `toString`）**不计入**抽象方法 | 手写 `isObjectMethod()` 过滤后数量从 4 变 1，同时 lambda 能正常赋值 | 计数逻辑抽成工具方法，快照里同时打印「反射数」和「编译器数」 | 反射只反映「声明了什么」，函数式接口判定是编译器另一套规则 —— 又一个双视角问题（同 Day 1 的 `getParameterTypes` vs `toGenericString`） |
 
 ---
 
@@ -722,8 +909,15 @@ IntUnaryOperator f = x -> x + base;
 - `andThen` 和 `compose` 的顺序？（前者 g(f(x))，后者 f(g(x))；`thenComparing` 是 `andThen` 的专用版）
 - `String::length` 和 `str::length` 为什么参数个数差一个？（未绑定 vs 绑定接收者）
 - `Function<Integer,Integer>` 一定比 `IntUnaryOperator` 慢吗？（不逃逸 2 倍，逃逸 36 倍；差别在标量替换）
+- 中间操作和终止操作怎么区分？（看返回值是不是 `Stream`；不接终止操作一行都不执行）
+- 「`filter` 写了没生效」怎么排查？（先数链尾有没有终止操作；再怀疑 `sorted`/`distinct` 屏障、或者 `count()` 走快速路径跳过整条管道）
+- `sorted()` 一定很贵吗？（不一定：上游 spliterator 带 `SORTED` 特征时它是空操作，实测 `rangeClosed(...).sorted()` 探测数没变）
+- 一个 Stream 为什么只能用一次？（一次性游标，第二次终止操作抛 `stream has already been operated upon or closed`；要复用给 `Supplier<Stream>`）
+- 无限流怎么停下来？（只能配短路终止操作：`findFirst` / `anyMatch` / `limit`；`count()` 永远跑不完）
+- `map` 和 `flatMap` 有什么区别？（`T→R` vs `T→Stream<R>` 再拍平；`Optional::stream` 是展平 `List<Optional<T>>` 的顺手写法）
+- `parallel()` 一定更快吗？（小数据量反而慢 2~5 倍；四条标准：量 ≥ 1 万 / 计算够重 / 无共享可变状态 / 不依赖顺序）
 
-> 对应的口述版答案在 `04-interview/question-bank/Java基础.md`（M1 要求 +3 道，现已 20 道）。
+> 对应的口述版答案在 `04-interview/question-bank/Java基础.md`（M1 要求 +3 道，现已 22 道）。
 
 ## 六、一句话总结
 
@@ -739,6 +933,7 @@ IntUnaryOperator f = x -> x + base;
 | 2026-10-29 | 四 | 补 Day 1 遗留（GenericLimits2 + WildcardCapture / B2 崩溃修复）+ Day 2 异常体系十段实验 | 60 min | `WildcardCapture` / `TryWithResourcesProbe` / `ExceptionChainProbe` / `day2-result.txt` | ✅ |
 | 2026-10-30 | 五 | Day 3 Optional（三反模式 + 五陷阱 + 一条链）+ 补 Day 2 遗留「异常开销」 | 60 min | `OptionalAntiPatterns` / `OptionalChain` / `ExceptionCost` / `day3-result.txt` | ✅ |
 | 2026-11-02 | 一 | Day 4 Lambda（五形态 + 方法引用五连 + 值捕获 + invokedynamic + 装箱逃逸） | 60 min | `FunctionalShape` / `LambdaCapture` / `LambdaLimits`×3 / `day4-result.txt` / `day4-bytecode.txt` | ✅ |
+| 2026-11-02 | 一 | Day 5 Stream（惰性求值 + 短路 + 屏障 + peek 坑 + 流只能用一次 + map/flatMap + parallel）+ 补 Day 4 遗留 | 60 min | `StreamLazy` / `StreamOnce` / `FuncInterfaceRule` / `day5-result.txt` | ✅ |
 |  | 一 |  |  |  |  |
 |  | 二 |  |  |  |  |
 |  | 三 |  |  |  |  |
@@ -865,3 +1060,57 @@ IntUnaryOperator f = x -> x + base;
 循环内求和、聚合统计基本可以不管；要放进集合或用 `Stream` 收集成 `List<Integer>`，才值得换
 `IntStream` / `IntUnaryOperator` 这类特化版本。而且在一次 IO 是毫秒级的接口里，
 省几十纳秒没有意义 —— **只有热路径才需要这一层优化**。
+
+**Q9 · Stream 什么时候才真正执行，`filter` 为什么「没生效」**
+
+先给结论：**中间操作只是记账，终止操作才让整条链跑起来**。区分方法看返回值 ——
+返回 `Stream` 的是中间操作，返回 `void` / `long` / `Optional` / 集合的是终止操作。
+
+证据是打印顺序，不是概念。`Stream.of("a","b","c").filter(打印).map(打印)` 这种链，
+不接 `collect` 时日志条数是 **0**；接上之后日志是
+`filter a, map a, filter b, map b, filter c, map c` —— **一个元素走完全链才轮到下一个**，
+不是「先全部 filter 再全部 map」。这也是 Stream 和「两遍 for 循环」的本质差别：只遍历一次。
+
+那「明明写了 filter 却没生效」有三种可能，按排查顺序：
+
+1. **链尾没终止操作** —— 最常见，日志一条都没有。
+2. **被屏障挡住** —— `sorted` / `distinct` 必须吃满全部元素，会把你以为的「提前收工」作废。
+3. **终止操作走了快速路径** —— `count()` 在源是 `SIZED` 时能直接算出个数，整条管道连 `peek` 一起跳过。
+   实测 `Stream.of("a","b","c").peek(log).count()` 里 `peek` 执行了 **0 次**，前面加一个
+   `filter(x -> true)` 才变成 3 次。
+
+最后一个坑值得单独记：**「有终止操作」不等于「每个元素都执行」**。所以 `peek` 只能调试，
+不能放业务逻辑 —— 它会静默不执行，连日志都不留。
+
+顺带一个反直觉的：`sorted()` 不一定是屏障。`rangeClosed(1,5).sorted().findFirst()` 实测只探测
+**1 个**元素，跟不加 `sorted` 一样。因为 `IntStream.rangeClosed` 的 spliterator 自带 `SORTED` 特征，
+`SortedOps` 里有一句 `if (SORTED.isKnown(flags) && isNaturalSort) return sink;` —— 节点被直接摘掉。
+换成 `IntStream.of(5,3,1,4,2)` 立刻吃满 5 个。
+
+**Q10 · 一个流为什么只能用一次，`parallel` 什么时候更慢**
+
+`Stream` 不是集合，是**一次性游标**：它内部只有一个「已经消费到哪」的位置，第二次接终止操作就抛
+`IllegalStateException: stream has already been operated upon or closed`。
+三种案发现场，后两种最容易上线：
+
+1. 局部变量 `s.count()` 两次 —— 一眼能看出来。
+2. **把流缓存成字段 / 当返回值** —— 调用方看到的是 `Stream`，不知道它已经烧掉了。
+3. **「先看看几条，再 collect」** —— 日志里加一句 `count()`，业务就挂了。
+
+正解是复用**数据**或**工厂**：要么每次 `list.stream()`，要么拿 `Supplier<Stream<T>>` 每次 `get()`。
+方法返回 `Stream`（方法体内每次 new 一个）是安全的，缓存成字段是不安全的 ——
+区别只在「游标是不是每次新建」。
+
+`parallel()` 方面，先纠正一个说法：它不是「更快」，是**用核数换单次耗时**，代价是 CPU 占用和可读性。
+实测（12 核，3 轮取最小值）：
+
+| 场景 | 串行 | parallel |
+| :--- | ---: | ---: |
+| 2000 万个数求和（每元素几乎不做事） | 20 ms | 6 ms |
+| 1000 个元素 × 30 轮计算 | 21 µs | 49 µs（**更慢**） |
+| 200 万个元素 × 30 轮计算 | 34 ms | 5 ms |
+
+小数据量下拆任务 + 合并结果的开销比干活本身还大，所以慢了 2~5 倍。
+四条都满足才考虑并行：**数据量 ≥ 1 万 / 每元素计算够重 / 无共享可变状态 / 不依赖顺序**。
+顺序那条还要注意两个坑：`forEach` 在 parallel 下**不保序**（实测 `[7,8,6,10,11,...]`），
+要顺序必须 `forEachOrdered`；而且往 `ArrayList` 里并发 `add` 本身就不安全。

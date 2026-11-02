@@ -1,0 +1,136 @@
+# W02 · Day 5 实测快照 · Stream
+# 生成时间：2026-11-02
+# 环境：java version "17.0.12" 2024-07-16 LTS  / Windows / 12 核
+
+########## 1/3  StreamLazy · 惰性求值 / 短路 / 屏障 / peek ##########
+
+========== A · 中间操作只记账，终止操作才真跑 ==========
+A1 只构造链路、没接终止操作 -> 日志条数 = 0，内容 = []
+A1 filter / map 那一行一次都没执行，它们只是往流水线上挂了个节点
+A2 接上 collect 之后 -> 结果 [A, B, C]
+A2 日志顺序 = [filter a, map a, filter b, map b, filter c, map c]
+A2 是 filter a → map a → filter b → map b，**一个元素走完全链才轮到下一个**
+A2 不是「先全部 filter 再全部 map」—— 这是 Stream 与「两遍 for 循环」最本质的差别
+A3 中间插一个 sorted 之后 -> 结果 [A, B, C]
+A3 日志顺序 = [filter c, filter a, filter b, map a, map b, map c]
+A3 变成 filter 全跑完才开始 map —— sorted 是**屏障（barrier）**，它必须看到全部元素才能排序
+A3 所以「Stream 一定是流式的」也不对：有状态操作会把管道切成几段，段内才是流式
+
+========== B · 短路：无限流也能停下来 ==========
+B1 100 万个数里 anyMatch(i == 3) -> true，实际只探测了 3 个
+B2 **无限流** iterate(1, i -> i + 1).filter(i % 7 == 0).findFirst() -> 7，只探测了 7 个
+B2 无限流能停下来，靠的就是 findFirst 是**短路**终止操作；换成 count() 会跑到内存耗尽
+B3 iterate(...).limit(3) -> [1, 2, 3]，探测了 3 个
+B3 limit 是**短路中间操作**：它不参与求值，只是往上游说「够了」
+B4 反例：同样 100 万个数，count() -> 142857，探测了 1000000 个
+B4 count 不短路 —— 它要的是总数。短路的前提是「这个终止操作只要一个答案就够了」
+B4 短路家族：anyMatch / allMatch / noneMatch / findFirst / findAny / limit
+B4 非短路：count / sum / average / max / min / collect / forEach
+
+========== C · 屏障：sorted / distinct 会把短路全部作废 ==========
+C1 rangeClosed(1,5).findFirst() -> 1，探测 1 个
+C2 中间加一个 sorted() 之后 -> 1，探测 1 个
+C2 只探测了 1 个！sorted 居然没吃掉全部 —— 因为 rangeClosed 的 spliterator **自带 SORTED 特征**（Streams.java:119），SortedOps 看到上游已有序就直接穿透（SortedOps.java:136）
+C2 换句话说：rangeClosed / of(已排序) 上的 sorted() 是**空操作**，不是屏障
+C3 换成真的没排序的源 of(5,3,1,4,2).sorted().findFirst() -> 1，探测 5 个
+C3 这次吃满了 5 个 —— findFirst 本来只要 1 个，屏障毁掉一切短路
+C3 所以判断「sorted 贵不贵」要先看上游有没有 SORTED 特征，凭印象猜会差 5 倍
+C4 distinct() 同理，去重后 3 个，探测 6 个（去重必须记住见过的所有值）
+C5 100 万条 Integer，sorted→limit(3) = 28 ms；limit(3)→sorted = 0 ms（不到 1 ms）
+C5 差了一个数量级以上，但**两者语义不同**：前者是「全局最大的 3 个」，后者是「前 3 个里最大的」，不能随便换位置
+C5 想要全局 top-K 又不想全排，正解是拿一个大小为 K 的 PriorityQueue 手动收，或者先 collect 再 destructure
+
+========== D · peek 的两个坑 ==========
+D1 Stream.of(a,b,c).peek(log).count() = 3，但 peek 日志条数 = 0  内容 = []
+D2 前面加一个 filter 之后，同样 count() -> 日志条数 = 3 内容 = [peek a, peek b, peek c]
+D1/D2 对比说明：JDK 9+ 的 count() 在「元素个数能直接算出来」时会走快速路径，**整条管道包括 peek 一起被跳过**
+D3 所以 peek 只能用来调试，绝不能放业务逻辑 —— 它会静默不执行，连日志都不留
+D4 想看真实执行情况，用 forEach 或 collect 这类必须逐元素的终止操作兜底
+
+========== 收尾 ==========
+Stream 调试只有一个抓手：判断这一步是**中间**还是**终止**。
+中间操作没执行 -> 说明链尾缺终止操作，或者上游有屏障/短路提前收工。
+反过来，看到「明明写了 filter 却没生效」，先数一数链尾到底有没有终止操作。
+
+
+########## 2/3  StreamOnce · 流只能用一次 / map vs flatMap / parallel ##########
+
+========== A · 一个流只能用一次 ==========
+A1 第一次 count() -> 3
+A1 第二次 count() -> java.lang.IllegalStateException: stream has already been operated upon or closed
+A2 字段缓存流，第一次用 -> 1
+A2 第二次用 -> java.lang.IllegalStateException: stream has already been operated upon or closed
+A2 所以「把 Stream 当返回值 / 当字段」是 API 设计事故：调用方看到的是 Stream，却不知道它已经烧掉了
+A3 方法返回 Stream（每次都 new 一个）-> 2 / 2，两次都正常
+A3 区别在于：方法体里的 orders.stream() 每次调用都重新创建一个游标
+A4 Supplier<Stream> 两次 -> 2 / [A001, A003]
+A5 「先看看几条」-> 3 条
+A5 再 collect -> stream has already been operated upon or closed
+A5 这是最像人话、也最容易写出来的一种：日志里加了句 count，业务就挂了
+
+========== B · map 换形状，flatMap 拆开铺平 ==========
+B1 map(Order::items) -> 3 个元素，每个还是一个 List：
+   [书(59), 笔(8)]
+   [杯子(39)]
+   [键盘(299), 鼠标(129), 垫子(49)]
+B2 flatMap(o -> o.items().stream()) -> 6 个元素：[书(59), 笔(8), 杯子(39), 键盘(299), 鼠标(129), 垫子(49)]
+B2 map 是 1 个订单换 1 个 List；flatMap 是 1 个订单换 N 个元素再**合并成一条流**
+B3 订单总额（flatMap + mapToInt + sum）= 583，这里必须用 flatMap：直接 map 拿到的是 List，sum 无从下手
+B4 拆字符串：Stream.of("ab","cd").flatMap(w -> w.chars()...) -> a-b-c-d
+B4 flatMap 的入参必须返回 Stream：chars() 返回 IntStream，要 mapToObj 装箱成 Character 才能拼
+B5 List<Optional<String>>.flatMap(Optional::stream) -> [a@x.com, c@x.com]
+B5 这是 Day 3「Optional 不要塞进集合」那条的补救手段：真拿到了，flatMap(Optional::stream) 一步展平，比 filter(isPresent).map(get) 干净
+
+========== C · parallel：省了代码，别顺手把顺序也省了 ==========
+C1 串行 forEach        -> [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+C2 parallel forEach    -> [7, 8, 6, 10, 11, 9, 3, 1, 5, 4, 2, 0]
+C3 parallel forEachOrdered -> [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+C2 顺序不保证（多线程抢同一个 list，还得自己加同步）；C3 保序，但保序本身要付出汇合等待
+C4 2000 万个数求和（每元素几乎不做事）：串行 9 ms；parallel 4 ms，本机 12 核
+C5 1000 个元素、每元素 30 轮计算：串行 15 µs；parallel 83 µs
+C5 小数据量下 parallel **反而慢 5.5 倍** —— 拆任务 + 合并结果的开销比干活本身还大
+C6 200 万个元素 × 每元素 30 轮计算：串行 34 ms；parallel 5 ms（同样的活，前者单核跑满，后者摊到 12 核）
+C6 所以 parallel 不是「更快」，是「用核数换单次耗时」，代价是 CPU 占用和可读性
+C6 判断标准：数据量 ≥ 1 万、每元素计算够重、无共享可变状态、不依赖顺序 —— 四条都满足才考虑 parallel；任一条不满足，for 循环更划算
+
+========== D · 什么时候不该用 Stream ==========
+D1 需要 break / continue / return 中途退出 -> 用 for。Stream 没有 break，硬写 takeWhile 只在有序且可判定的场景成立
+D2 要修改外层局部变量 -> 用 for。lambda 只能读 effectively final 的副本（Day 4 结论）
+D3 需要下标 / 相邻元素比较（i 与 i-1）-> 用 for，Stream 没有索引概念
+D4 链超过 5 步、还要 try-catch -> 拆成几个有名字的方法，别写成 20 行不换行
+D5 反过来，下面这些用 Stream 明显更好：过滤+映射+收集、分组统计、「同一个集合连着做三件事」这类一次性遍历
+
+========== 收尾 ==========
+Stream 是一个「一次性的游标」，不是集合。
+要复用就复用**数据**（List）或**工厂**（Supplier<Stream>），绝不复用 Stream 本身。
+
+
+########## 3/3  FuncInterfaceRule · Day 4 遗留：抽象方法怎么数 ##########
+
+========== A · 两个视角，两个数字 ==========
+A1 Named 声明的全部方法：equals(), hashCode(), kind(), name(), toString(), upper()
+A2 反射数出的 abstract 方法 = 4
+A3 减掉 Object 方法后 = 1   ← 编译器用的就是这个数
+A4 所以「反射看不出来它是函数式接口」是真的：反射只说声明，判定规则在 JLS 9.8 里
+A5 OnlyEquals：反射数出 1 个，实际算 0 个 -> 0 个抽象方法，它不是函数式接口（反例原文在 compile-errors/LambdaLimits.java 第 4 条）
+
+========== B · 只剩 1 个真抽象方法，lambda 就成立 ==========
+B1 Named n = () -> "order-service"  -> n.name() = order-service
+B2 equals / toString / hashCode 都可以被重声明，但不占名额：n.equals(n) = true，n.toString() = com.newt.java48.w02.day5.FuncInterfaceRule$$Lambda$12/0x000001d6d00046d8@5f184fc6
+B3 注意 lambda 没重写 equals/toString —— 它用的是 Object 的实现，所以 lambda 的 toString 是一串 $$Lambda 地址，不能用来做业务标识
+B4 default 方法照常可用：n.upper() = ORDER-SERVICE；static 方法走接口名：Named.kind() = Named
+
+========== C · default / static 不抢名额 ==========
+C1 1 个抽象 + 1 个 default + 1 个 static，@FunctionalInterface 依然合法
+C2 positive.and(big)：100 -> true，50 -> false，-1 -> false
+C3 这就是 Predicate / Comparator / Function 都能链式的原因：它们靠 default 方法扩展，而不是靠加抽象方法
+C3 JDK 8 加函数式接口时正是这条规则救了全世界的实现类 —— 抽象方法一加，所有实现立刻编译失败
+
+========== D · 顺带看两个 JDK 自带的痕迹 ==========
+D1 Comparator 的真抽象方法：[compare]（equals 是重声明，减掉了；thenComparing 等全是 default）
+D2 三个内置接口的方法引用 / lambda 可以混着塞进同一个 List<String>：[a, b, true]
+D3 它们的抽象方法都是一个：apply / apply / test —— 形状相同就能互相替代，这也是 Day 4「形状比名字重要」的由来
+
+========== 收尾 ==========
+数抽象方法时要**先减掉 Object 的 public 方法**（equals / hashCode / toString），再减掉 default 和 static。
+反射只告诉你「声明了什么」，函数式接口的判定规则是编译器另外一套 —— 跟 Day 1「同一个方法两套签名」是同一类双视角问题。

@@ -632,3 +632,101 @@
 
 ---
 
+### 21. Stream 的中间操作和终止操作有什么区别？我的 `filter` 为什么没生效？
+
+**我的回答（自己的话）：**
+
+> 一句话：**中间操作只记账，终止操作才让整条链跑起来**。判断方法不用背 API 表，看返回值 ——
+> 返回 `Stream` 的是中间操作（`filter` / `map` / `flatMap` / `sorted` / `distinct` / `limit` / `peek`），
+> 返回 `void` / `long` / `Optional` / 集合 / 数组的是终止操作（`collect` / `forEach` / `count` /
+> `findFirst` / `anyMatch` / `reduce`）。中间操作 0 到 N 个，终止操作有且只有 1 个。
+>
+> 证据不是概念，是打印顺序。`Stream.of("a","b","c").filter(打印).map(打印)` 这条链，
+> 不接 `collect` 时日志条数是 **0**；接上之后是
+> `filter a, map a, filter b, map b, filter c, map c` —— **一个元素走完全链才轮到下一个**，
+> 不是「先全部 filter 再全部 map」。这也是 Stream 比「两遍 for 循环」快的地方：只遍历一次。
+>
+> 「`filter` 没生效」按三步排查：
+> ① **链尾没终止操作**（最常见，日志一条都没有）；
+> ② **被屏障挡住** —— `sorted` / `distinct` 必须吃满全部元素，会让「提前收工」失效；
+> ③ **终止操作走快速路径** —— `count()` 在源是 `SIZED` 时能直接算出个数，
+> 整条管道连 `peek` 一起被跳过（实测 `Stream.of("a","b","c").peek(log).count()` 里 `peek` 执行 0 次，
+> 前面加个 `filter(x -> true)` 才变成 3 次）。
+>
+> 还有一个反直觉的：`sorted()` 不一定是屏障。`IntStream.rangeClosed(1,5).sorted().findFirst()`
+> 实测只探测 1 个元素，跟不加 `sorted` 一模一样。原因是 `rangeClosed` 的 spliterator
+> 自带 `SORTED` 特征，`SortedOps.opWrapSink` 里有一句
+> `if (StreamOpFlag.SORTED.isKnown(flags) && isNaturalSort) return sink;` —— 节点直接被摘掉。
+> 换成 `IntStream.of(5,3,1,4,2)` 立刻吃满 5 个。
+
+**追问预判：**
+- 那 `limit` 算中间还是终止？（中间，但它是**短路**中间操作：往上游说「够了」，不参与求值）
+- 无限流怎么停下来？（只能配短路终止操作：`findFirst` / `anyMatch` / `limit`；
+  `Stream.iterate(...).count()` 不是慢，是**永远跑不完**）
+- `peek` 能当调试用吗？（能，但只能调试。它会因为 `count()` 的快速路径静默不执行，
+  所以绝不能把业务逻辑写进去；要看真实执行情况用 `forEach` / `collect` 兜底）
+- 为什么 `sorted` 之后打印顺序会变？（屏障把管道切成两段：屏障前全量执行，屏障后才恢复流式）
+- 那 `distinct` 呢？（也是全量，因为它必须记住见过的所有值；实测 6 个元素探测 6 次）
+
+**项目里的实际案例：**
+
+> 场景：一个导出接口里写了 `list.stream().filter(条件).map(转换)`，最后忘了接 `collect`，
+> 结果导出的文件是空的。查了半小时以为是权限或数据问题，其实是「没终止操作，一行都没跑」。
+> 后来团队约定：**Stream 链一定要在一行里写完并带上终止操作**，
+> 不要「先建个流存到变量，等下面再用」—— 那样既容易漏终止操作，也容易踩「一个流只能用一次」。
+
+---
+
+### 22. 一个 `Stream` 为什么只能用一次？`parallel()` 什么时候反而更慢？
+
+**我的回答（自己的话）：**
+
+> `Stream` 不是集合，是**一次性游标**：内部只有一个「消费到哪」的位置，
+> 第二次接终止操作会抛 `IllegalStateException: stream has already been operated upon or closed`。
+> 三种案发现场，后两种最容易上线：
+>
+> 1. 局部变量 `s.count()` 两次 —— 一眼能看出；
+> 2. **把流缓存成字段 / 当返回值** —— 调用方看到的是 `Stream`，根本不知道它已经烧掉了；
+> 3. **「先看看几条，再 collect」** —— 日志里多加一句 `count()`，业务就挂了。这是最像人话的一种。
+>
+> 正解是复用**数据**或**工厂**：每次 `list.stream()`，或者用 `Supplier<Stream<T>>` 每次 `get()`。
+> 「方法返回 `Stream`」是安全的（方法体内每次 new 一个游标），「字段缓存 `Stream`」是不安全的，
+> 区别只在游标是不是每次新建。
+>
+> `parallel()` 这边先纠正一个说法：它不是「更快」，是**用核数换单次耗时**，代价是 CPU 占用和可读性。
+> 实测（12 核，3 轮取最小值）：
+>
+> | 场景 | 串行 | parallel |
+> | :--- | ---: | ---: |
+> | 2000 万个数求和（每元素几乎不做事） | 20 ms | 6 ms |
+> | 1000 个元素 × 30 轮计算 | 21 µs | 49 µs（**更慢**） |
+> | 200 万个元素 × 30 轮计算 | 69 ms | 20 ms |
+>
+> 小数据量下拆任务 + 合并结果的开销比干活本身还大，所以慢 2~5 倍。
+> 四条都满足才考虑并行：**数据量 ≥ 1 万 / 每元素计算够重 / 无共享可变状态 / 不依赖顺序**。
+> 顺序那条还有两个坑：`parallel().forEach` **不保序**（实测 `[7,8,6,10,11,...]`），
+> 要顺序得用 `forEachOrdered`；而且往 `ArrayList` 里并发 `add` 本身就不安全，得自己加同步。
+
+**追问预判：**
+- 那「顺序流」和「并行流」的 `findFirst` 有区别吗？（有：`findFirst` 严格取第一个，
+  并行下必须等更靠前的分段；`findAny` 谁先到算谁，并行下更快、但结果不确定）
+- `parallel()` 用的哪个线程池？（默认 `ForkJoinPool.commonPool()`，全局共享；
+  容器里 `availableProcessors()` 可能只报 1，并行直接退化成串行 —— 这是 W04 那条线）
+- 并行流里能有共享可变状态吗？（不行。要么无状态，要么用 `collect` 的合并器，
+  绝不能在外层 `ArrayList` 上 `add`）
+- `Collectors.toList()` 和 `toMap()` 在并行下安全吗？（安全，collect 有 combiner；
+  但 `toMap` 遇到重复 key 会抛 `IllegalStateException`，得给合并函数）
+- 那什么时候干脆别用 Stream？（需要 `break` / `continue`、要改外层局部变量、
+  需要下标或相邻元素比较 —— 这三种老老实实写 for）
+
+**项目里的实际案例：**
+
+> 场景：报表服务里把 `stream()` 存成成员变量复用（想省一次创建），
+> 单线程测试全过，上线后并发调用立刻大面积 `IllegalStateException`。
+> 根因不是并发，而是「同一个流被第二次消费」—— 单测里每个用例都是新实例，掩盖了这个问题。
+> 修复方式是把字段改成 `Supplier<Stream<T>>`，或者干脆每次从 `List` 重新 `stream()`。
+> 这个 bug 的教训是：**`Stream` 不能出现在字段和返回值里**，它是方法内的临时对象，
+> 生命周期就该是「一行链」。
+
+---
+

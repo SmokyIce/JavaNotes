@@ -44,6 +44,7 @@ w02-generics-stream/
 ├── day3-result.txt                         Day 3 实测输出（Optional 反模式 + 链式正例）
 ├── day4-result.txt                         Day 4 实测输出（函数式接口 + 捕获 + 8 条报错原文）
 ├── day4-bytecode.txt                       Day 4 字节码证据（javap -p / -c / -v）
+├── day5-result.txt                         Day 5 实测输出（惰性 + 短路 + 屏障 + parallel）
 ├── compile-errors/
 │   ├── GenericLimits.java                  故意编译不过：擦除的四条硬限制
 │   ├── GenericLimits2.java                 故意编译不过：通配符的六种拒绝
@@ -62,9 +63,13 @@ w02-generics-stream/
     ├── day3/
     │   ├── OptionalAntiPatterns.java       五段：isPresent+get / orElse 白算 / 字段参数集合 / 五个陷阱 / 判定表
     │   └── OptionalChain.java              六段：null 检查对比 / map vs flatMap / filter / orElseGet vs orElseThrow / 消费侧 / 优惠券算价
-    └── day4/
-        ├── FunctionalShape.java            六段：五种形态 / Predicate 短路 / andThen vs compose / 装箱逃逸 / 自定义接口 / 目标类型
-        └── LambdaCapture.java              六段：方法引用五连 / 值捕获 / 循环变量 / this 归属 / 实例复用 / invokedynamic
+    ├── day4/
+    │   ├── FunctionalShape.java            六段：五种形态 / Predicate 短路 / andThen vs compose / 装箱逃逸 / 自定义接口 / 目标类型
+    │   └── LambdaCapture.java              六段：方法引用五连 / 值捕获 / 循环变量 / this 归属 / 实例复用 / invokedynamic
+    └── day5/
+        ├── StreamLazy.java                 四段：惰性求值 / 短路 / 屏障 / peek 与 count
+        ├── StreamOnce.java                 四段：流只能用一次 / map vs flatMap / parallel 代价 / 何时不用
+        └── FuncInterfaceRule.java          四段：抽象方法怎么数（补 Day 4 遗留）
 ```
 
 > `compile-errors/` 不在 `src/main/java` 下，不会被 `run.bat` 编译 —— 否则整个工程编不过。
@@ -245,3 +250,42 @@ java -Dfile.encoding=UTF-8 -XX:-StackTraceInThrowable -cp out com.newt.java48.w0
    （捕获的是 `this`，合成方法非 static）、「数组能绕过」（拷的是引用）都有了同一个解释。
 2. **「装箱很贵」只有一半对，贵的是逃逸的装箱。** 不逃逸时标量替换把 `new Integer` 消掉，只差 2 倍；
    一逃逸立刻 36 倍。所以优化判断要落在「会不会进集合/跨线程」，不是「有没有装箱」。
+
+---
+
+## Day 5（Stream）实验清单
+
+| #  | 要验证的结论 | 命令 | 实测 |
+| :- | :--- | :--- | :--- |
+| 1 | 中间操作只记账，不接终止操作一行都不跑 | `run.bat day5.StreamLazy` | 构造完链路日志 **0 条**；接 `collect` 后才有 |
+| 2 | 一个元素走完全链才轮到下一个 | 同上 | 日志 `filter a, map a, filter b, map b, filter c, map c` |
+| 3 | `sorted` 是屏障，把管道切成两段 | 同上 | 日志变成 `filter c, filter a, filter b` 才轮到 `map` |
+| 4 | `sorted` 在上游已有序时是**空操作** | 同上 | `rangeClosed(1,5).sorted().findFirst()` 只探测 **1** 个；换 `of(5,3,1,4,2)` 变 **5** 个 |
+| 5 | `distinct` 一定全量 | 同上 | 6 个元素探测 6 个 |
+| 6 | 短路终止操作：100 万个数里找 3 | 同上 | `anyMatch` 只探测 **3** 个 |
+| 7 | 无限流也能停 | 同上 | `iterate(1, i+1).filter(i%7==0).findFirst()` → 7，探测 **7** 个 |
+| 8 | `count` 不短路 | 同上 | 100 万个数探测 **1 000 000** 个 |
+| 9 | `limit` 是短路中间操作 | 同上 | `iterate(...).limit(3)` → `[1,2,3]`，探测 3 个 |
+| 10 | `sorted` 前后的成本差一个数量级 | 同上 | 100 万条：`sorted→limit(3)` **25 ms** vs `limit(3)→sorted` **< 1 ms**（语义不同） |
+| 11 | `count()` 会把 `peek` 整条跳过 | 同上 | `peek(log).count()` 日志 **0** 条；前面加 `filter(x->true)` 变 **3** 条 |
+| 12 | 一个流只能用一次 | `run.bat day5.StreamOnce` | 第二次 `count()` → `IllegalStateException: stream has already been operated upon or closed` |
+| 13 | 字段缓存流 = API 设计事故 | 同上 | 调用两次第二次必挂；方法返回新流两次都正常 |
+| 14 | `Supplier<Stream>` 才是正解 | 同上 | 两次 `get()` 分别得到 `2` / `[A001, A003]` |
+| 15 | `map` 出嵌套，`flatMap` 出平铺 | 同上 | 3 个订单：`map` 得 3 个 `List`，`flatMap` 得 **6** 个 `Item` |
+| 16 | `Optional::stream` 展平集合 | 同上 | `[Optional(of a), empty, of c]` → `[a@x.com, c@x.com]` |
+| 17 | `parallel().forEach` 不保序 | 同上 | 实测 `[7,8,6,10,11,9,3,1,5,4,2,0]`（每次不同）；`forEachOrdered` 才 `[0..11]` |
+| 18 | 大数据量并行有收益，小数据量反而慢 | 同上 | 2000 万求和 20 → 6 ms；1000 元素 × 30 轮 21 → 49 µs（**更慢**）；200 万 × 30 轮 34 → 5 ms |
+| 19 | 函数式接口的抽象方法要减掉 Object 方法 | `run.bat day5.FuncInterfaceRule` | 反射数出 **4** 个，编译器只算 **1** 个 |
+| 20 | `Comparator` 只剩一个真抽象方法 | 同上 | `[compare]`（`equals` 是重声明，`thenComparing` 全是 default） |
+
+**本节最值钱的三个点**
+
+1. **「中间操作 / 终止操作」不是知识点，是排查工具。** 线上看到「filter 写了却没生效」，
+   按 ① 链尾缺终止操作 → ② 被 `sorted`/`distinct` 屏障挡住 → ③ `count()` 走快速路径跳过整条管道
+   三步走，比读十遍 API 文档快。
+2. **`sorted` 是不是屏障，取决于上游 spliterator 有没有 `SORTED` 特征。**
+   `IntStream.rangeClosed` 自带这个特征，`SortedOps.opWrapSink` 直接 `return sink` 把节点摘掉；
+   换成真无序的源才吃满。所以「`sorted` 一定全量」是错的 —— 结论要 fact-check，凭印象会差 5 倍。
+3. **`parallel` 不是「更快」，是「用核数换单次耗时」。** 实测量级：2000 万求和 3.3 倍收益，
+   1000 元素 × 30 轮 **反向慢 2~5 倍**。四条标准（量 ≥ 1 万 / 计算够重 / 无共享可变状态 / 不依赖顺序）
+   缺一条就别开。

@@ -45,3 +45,18 @@
   `effectively final` 错误不出现，故意收集多个编译错误要按阶段拆文件；
   `javap` 输出里的中文字符串常量是 GBK 乱码（不影响读方法句柄）；
   `Function.identity()` 无入参推不出 `T`，要写 `Function.<X>identity()`。
+
+## 2026-11-02（第五次执行 · 同日续做 Day 5）
+- 开工回归：清空 `out/` 重编 + 跑 9 个入口 + `ExceptionCost` 两遍参数，全 exit=0，无中断代码；
+  扫 `01-notes` 未勾项与 `02-code` 空目录，确认只剩 Day 6 与未解锁里程碑。
+- 补完 Day 4 遗留 1 项：`day5/FuncInterfaceRule`（反射数 4 个 abstract vs 编译器算 1 个，JLS 9.8）。
+- 推进 M1 Day 5：Stream。新建 `day5/StreamLazy`（惰性/短路/屏障/peek）、`day5/StreamOnce`
+  （流一次性/map vs flatMap/parallel/何时不用）、`day5-result.txt`；题库 20 → 22（Q21/Q22）。
+- 三个实测结论已进笔记与 README：`sorted()` 在上游带 `SORTED` 特征时是空操作（`SortedOps.java:136`）；
+  `count()` 会跳过整条管道连 `peek` 一起（0 条日志）；parallel 小数据量反向慢 2~5 倍。
+- 同步：`W02` 笔记（Day 5 整节 8 小节 + 踩坑 4 条 + 面试 8 条 + Q9/Q10 + 打卡）、
+  `today.md`、`MILESTONES.md`、工程 `README.md`（Day 5 清单 20 项）。
+- 下次起点：**W02 Day 6 = `List<User>` 过滤→排序→分组→统计**（`groupingBy` 三参 + 下游收集器、
+  `toMap` 重复 key、`teeing`、`Collectors.toList()` vs `Stream.toList()` 可变性）。
+- 经验：**「XX 一定很贵」也要 fact-check** —— 今天的 `sorted` 屏障假设就是被实测推翻后翻源码才说清的；
+  微基准第二次栽在「活太轻被 JIT 消掉」，数字接近 0 一律视为测量事故。

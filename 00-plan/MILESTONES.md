@@ -108,11 +108,11 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > | 2026-10-29 | **W02 Day 2 · 异常体系** + Day 1 三个遗留 | `day2/` 两个 Demo（10 段实验）+ `day1/WildcardCapture` + `compile-errors/GenericLimits2`（6 个错）+ `day2-result.txt`；修掉 `ErasureProof` B2 段的 `NoSuchMethodException`；笔记 Day 2 整节；`Java基础.md` 15 → **17 题** |
 > | 2026-10-30 | **W02 Day 3 · Optional** + Day 2 遗留「异常开销」 | `day3/` 两个 Demo（11 段实验）+ `day2/ExceptionCost`（两遍 JVM 参数对照）+ `day3-result.txt`；笔记 Day 3 整节 + Day 2 §10；`Java基础.md` 17 → **18 题** |
 > | 2026-11-02 | **W02 Day 4 · Lambda** | `day4/` 两个 Demo（12 段实验）+ `compile-errors/LambdaLimits{,2,3}`（8 条报错原文，拆三个文件）+ `day4-result.txt` + `day4-bytecode.txt`（javap 三段证据）；笔记 Day 4 整节 + 参考要点 Q7/Q8；`Java基础.md` 18 → **20 题** |
+> | 2026-11-02 | **W02 Day 5 · Stream** + Day 4 遗留 | `day5/` 三个 Demo（惰性 / 短路 / 屏障 / peek 坑 / 流一次性 / map vs flatMap / parallel）+ `day5-result.txt`；笔记 Day 5 整节（8 小节）+ 踩坑 4 条 + 参考要点 Q9/Q10；`Java基础.md` 20 → **22 题** |
 >
 > 题库这边已经超额：M1 只要 8 道，现在光是泛型 3 道 + 异常 3 道 + Optional 1 道 + Lambda 2 道
-> + W01 的 12 道集合题共 20 道。
-> 剩下 W02 的 Lambda / Stream，以及 W03 / W04 的并发部分。
-> 重点仍是 Stream 那个 `List<User>` 过滤→排序→分组→统计的练习。
+> + Stream 2 道 + W01 的 12 道集合题共 22 道。
+> 剩下 W02 只有 Day 6 的练习（`List<User>` 过滤→排序→分组→统计），然后进 W03 并发。
 
 > W02 的 Stream 练习（`List<User>` 过滤→排序→分组→统计）是**最能直接用在业务代码里**的一次练习，认真做。
 
