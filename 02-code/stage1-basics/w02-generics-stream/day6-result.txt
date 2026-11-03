@@ -1,0 +1,208 @@
+# W02 · Day 6 实测快照 · List<User> 过滤 → 排序 → 分组 → 统计
+# 生成时间：2026-11-03
+# 环境：java version "17.0.12" 2024-07-16 LTS  / Windows / 12 核
+# 数据：UserData 15 条，含 name=null 1 条、age=null 2 条、dept=null 1 条
+
+########## 1/3  UserReport · 过滤（A）+ 排序（B） ##########
+
+========== A · 过滤 ==========
+A1 在职 且 薪资≥20000 -> 9 人：
+   张伟(22000), 李娜(31000), 周涛(45000), 何静(22000), 刘洋(26000), 陈静(24000), 郑凯(33000), 孙浩(21000), 钱多(50000)
+A1 两个 filter 串联 == 一个 && ；拆开写的好处是每一步能单独注释、单独复用
+A2 研发 且 高薪 -> 4 人
+A2 研发 或 测试，且在职 -> isDev.or(isTest).and(active) = 6 人
+A2 同样想表达「研发 或 (测试且在职)」，写 isDev.or(isTest.and(active)) = 7 人
+A2   差 1 人。方法链是**左结合**：先算出 (isDev||isTest) 这个新 Predicate，再整体 && active，所以是 (a||b)&&c，不是按布尔优先级想的 a||(b&&c)
+A2   少的那个是离职的研发王强：按「研发就留下」他该在，按「先并集再筛在职」他不在 —— 按直觉写就会少人，而且不报错
+A2 非研发 -> 10 人（negate 把 null dept 也算进「非研发」，判空逻辑要自己保证）
+A2 复用价值：这四个 Predicate 可以按前端传参自由组合，不用为每种查询写一个方法 —— 但组合顺序必须照着实测结果写，别凭优先级猜
+A3 想找名字以「张」开头的人，直接写 u.name().startsWith("张")：
+A3   -> java.lang.NullPointerException: Cannot invoke "String.startsWith(String)" because the return value of "com.newt.java48.w02.day6.User.name()" is null
+A3   栈顶会指在 filter 的 lambda 里，但真凶是 U14 的 name=null
+A3 常见误解：加一句 filter(Objects::nonNull) 就能防住 -> 实际过滤后还是 15 条（一个都没去掉）
+A3   因为 Objects::nonNull 判的是**元素本身**为不为 null，判不了元素里的字段
+A3 修法一（前置判空，最直接）-> 1 人：张伟(22000)
+A3 修法二（Objects.toString 兜底成空串）-> 1 人
+A3 别用 u.name().equals("张") 这种写法来「常量在前」防 NPE —— equals 能这么写，startsWith / contains / length 都不能，字段本身为 null 时一样炸
+A4 findFirst 第一个研发 -> 张伟(22000)
+A4 anyMatch(有 40 岁以上) -> true；allMatch(都有部门) -> false；noneMatch(没有负薪资) -> true
+A4 三个 match + findFirst 都是短路的：拿到答案就停，不会遍历完 15 条；collect(toList) 则必须走完 —— 「只想知道有没有」时别用 collect
+
+========== B · 排序 ==========
+B1 薪资降序 -> 钱多(50000), 周涛(45000), 郑凯(33000), 李娜(31000), 刘洋(26000), 陈静(24000), 张伟(22000), 何静(22000), 孙浩(21000), 赵敏(19000), 王强(18000), 徐丽(17000), 吴磊(16000), <null>(15500), 杨帆(15000)
+B2 部门↑ → 薪资↓ → 年龄↑(null 最后)：
+   U08 郑凯(33000) 产品 36 上海 在职
+   U06 刘洋(26000) 产品 31 上海 在职
+   U07 陈静(24000) 产品 29 北京 在职
+   U13 徐丽(17000) 测试 null 上海 离职
+   U12 吴磊(16000) 测试 27 北京 在职
+   U14 <null>(15500) 测试 30 北京 在职
+   U04 周涛(45000) 研发 41 深圳 在职
+   U02 李娜(31000) 研发 34 北京 在职
+   U01 张伟(22000) 研发 28 北京 在职
+   U05 何静(22000) 研发 null 北京 在职
+   U03 王强(18000) 研发 25 上海 离职
+   U11 孙浩(21000) 运营 38 深圳 在职
+   U10 赵敏(19000) 运营 33 广州 在职
+   U09 杨帆(15000) 运营 26 广州 离职
+   U99 钱多(50000) null 45 北京 在职
+B2 thenComparing 是「前一键相等时才比下一键」，所以只有同部门的人才会走到薪资比较，同薪资的才走到年龄
+B3 写法一 comparing(dept).thenComparing(salary).reversed() -> 钱多(50000), 孙浩(21000), 赵敏(19000), 杨帆(15000), 周涛(45000) ...
+B3 写法二 comparing(dept).thenComparing(salary, reverseOrder()) -> 郑凯(33000), 刘洋(26000), 陈静(24000), 徐丽(17000), 吴磊(16000) ...
+B3 写法一把**整条链**反转了：部门也变成降序、null 从最后跑到最前；写法二只反转薪资那一级
+B3 规律：reversed() 作用在「它左边整个 Comparator」上，不是最近那一级
+B3 而且 reversed() 之后 nullsLast 也一起被反转成 nullsFirst —— 这两条叠在一起，是线上「排序结果和需求反了」的常见来源
+B4 直接 comparing(User::age)，不管 null：
+B4   -> java.lang.NullPointerException: Cannot invoke "java.lang.Comparable.compareTo(Object)" because the return value of "java.util.function.Function.apply(Object)" is null
+B4   comparing 的 keyExtractor 返回 null，紧接着就调 compareTo —— 拆箱前先炸
+B4 修法：comparing(User::age, nullsLast(Integer::compareTo)) -> 王强(18000), 杨帆(15000), 吴磊(16000), 张伟(22000), 陈静(24000), <null>(15500) ... 何静(22000), 徐丽(17000)（末尾两位 age=null）
+B4 注意 nullsLast 要包在「内层 Comparator」上：写成 comparing(User::age).nullsLast(...) 是编译不过的，nullsLast 是 Comparator 的静态方法
+B5 研发组先按薪资升序、再按部门排 -> 王强(18000), 张伟(22000), 何静(22000), 李娜(31000), 周涛(45000)
+B5 List.sort 用的是 TimSort（稳定），第二趟不会打乱第一趟的成果 —— 所以「多级排序」其实可以拆成多次单键排序，只要键的顺序从次要到主要倒着来
+B5 但这条契约只对**对象数组 / List** 成立：Arrays.sort 对基本类型数组用的是双轴快排，不稳定，别拿 int[] 做这事
+
+========== A/B 收尾 ==========
+过滤回答「哪些行」，排序回答「什么顺序」。
+这两件事的难点都不在 API，而在 null：15 条数据里 4 条带 null 字段，A/B/C/D 四段各炸一次。
+
+
+########## 2/3  GroupStats · 分组统计（C） ##########
+
+========== C1 · groupingBy 一参：key -> List ==========
+C1 分组结果：4 个部门
+   产品 (3 人) -> 刘洋(26000), 陈静(24000), 郑凯(33000)
+   研发 (5 人) -> 张伟(22000), 李娜(31000), 王强(18000), 周涛(45000), 何静(22000)
+   运营 (3 人) -> 杨帆(15000), 赵敏(19000), 孙浩(21000)
+   测试 (3 人) -> 吴磊(16000), 徐丽(17000), <null>(15500)
+C1 keySet 顺序 = [产品, 研发, 运营, 测试]
+C1 这个顺序来自 HashMap 的桶分布，**不是插入顺序、也不是字母序**；换个 JDK 版本或数据量变化就可能变，别在业务里依赖它
+
+========== C2 · 两参：classifier + 下游收集器 ==========
+C2a counting() -> {产品=3, 研发=5, 运营=3, 测试=3}
+C2b summingInt(salary) -> {产品=83000, 研发=138000, 运营=55000, 测试=48500}
+C2c averagingInt(User::age) 直接上：
+C2c   -> java.lang.NullPointerException，message = <空>
+C2c   Integer 是包装类型，ToIntFunction 要拆箱，null 拆不了
+C2c   连 message 都没有，是因为 User::age 是**方法引用**：拆箱发生在 lambda metafactory 生成的 MethodHandle 适配层，没有字节码位置可指
+C2c   对照：写成 lambda averagingInt(u -> u.age()) -> message = Cannot invoke "java.lang.Integer.intValue()" because the return value of "com.newt.java48.w02.day6.User.age()" is null
+C2c   同样是拆箱 NPE，lambda 版有 javac 插入的 intValue() 调用点，HotSpot 能甩出 helpful message；方法引用版什么都没有
+C2c 错误修法（null 当 0）-> {产品=32.0, 研发=25.6, 运营=32.333333333333336, 测试=19.0}
+C2c 正确修法（先滤掉 null 再算）-> {产品=32.0, 研发=32.0, 运营=32.333333333333336, 测试=28.5}
+C2c 差别：研发组 4 个人有年龄，把 null 当 0 之后分母变 5，均值被拉低 6.4 岁（25.6 vs 32.0）—— 「补个默认值」在统计场景里是错的，它改变了分母
+C2d mapping(name, joining("/")) -> {产品=刘洋/陈静/郑凯, 研发=张伟/李娜/王强/周涛/何静, 运营=杨帆/赵敏/孙浩, 测试=吴磊/徐丽/null}
+C2d 测试组里那个 null name 变成了字面量 "null"：joining 的 add(null) 不抛错，它会原样拼进去 —— 要干净就得自己 map 成 "" 或提前过滤
+C2e maxBy(comparingInt(salary)) -> 
+   产品 -> 郑凯(33000)
+   研发 -> 周涛(45000)
+   运营 -> 孙浩(21000)
+   测试 -> 徐丽(17000)
+C2e 值是 Optional<User>：分组一定非空（空组压根不会出现在 Map 里），所以这里的 Optional 理论上永远有值；嫌它烦就套 collectingAndThen 拆掉
+C2e collectingAndThen 拆掉 Optional -> {产品=郑凯(33000), 研发=周涛(45000), 运营=孙浩(21000), 测试=徐丽(17000)}
+C2f mapping(city, toSet()) -> {产品=[上海, 北京], 研发=[上海, 北京, 深圳], 运营=[广州, 深圳], 测试=[上海, 北京]}
+C2f 同一个下游思路换 toSet / toMap / joining，就是「每组去重」「每组转字典」「每组拼字符串」
+
+========== C3 · 三参：mapFactory 决定 key 的顺序 ==========
+C3 HashMap（默认）      -> [产品, 研发, 运营, 测试]
+C3 LinkedHashMap        -> [研发, 产品, 运营, 测试]（按首次出现顺序）
+C3 TreeMap              -> [产品, 测试, 研发, 运营]（按 key 自然序）
+C3 结论：要给前端「部门顺序稳定」的列表，就把第三个参数写成 TreeMap::new 或 LinkedHashMap::new；默认的 HashMap 顺序不可依赖
+C3 注意三参的签名是 (classifier, mapFactory, downstream) —— mapFactory 夹在中间，这是最容易记错位置的一个重载
+
+========== C4 · 多级分组：部门 -> 城市 -> 人数 ==========
+   产品 -> {上海=2, 北京=1}
+   研发 -> {上海=1, 深圳=1, 北京=3}
+   运营 -> {广州=2, 深圳=1}
+   测试 -> {上海=1, 北京=2}
+C4 多级就是下游再放一个 groupingBy，Map 的嵌套层数 = groupingBy 的嵌套层数；超过三层基本该考虑直接写 SQL 的 group by 了
+
+========== C5 · partitioningBy：空组不会消失 ==========
+C5 产品组 3 人，全部在职
+C5 partitioningBy(active) -> keySet=[false, true]，false 组 = 
+C5 groupingBy(active)     -> keySet=[true]，false 这个 key 根本不存在
+C5 所以取 false 组时：partitioningBy 给你空 List（可以直接 size()），groupingBy 给你 null（NPE 预备役）
+C5 判断标准：条件是布尔语义、且「不满足」的那组也要出现在报表里 -> 用 partitioningBy
+C5 partitioningBy 也支持下游 -> {false=3, true=11}（两个 key 一定都在）
+
+========== C6 · summarizingInt：五个指标一次遍历 ==========
+   产品 -> IntSummaryStatistics{count=3, sum=83000, min=24000, average=27666.666667, max=33000}
+   研发 -> IntSummaryStatistics{count=5, sum=138000, min=18000, average=27600.000000, max=45000}
+   运营 -> IntSummaryStatistics{count=3, sum=55000, min=15000, average=18333.333333, max=21000}
+   测试 -> IntSummaryStatistics{count=3, sum=48500, min=15500, average=16166.666667, max=17000}
+C6 toString 的顺序是 count / sum / min / average / max，一个收集器顶 count + sum + min + max + average 五个
+C6 它内部只遍历一遍：如果分成五次 count()/sum()/max()，就是五倍的工作量
+C6 全公司 -> IntSummaryStatistics{count=14, sum=324500, min=15000, average=23178.571429, max=45000}
+C6 average 是「总和 / count」，返回 double；要四舍五入得自己 format，或者套 collectingAndThen(s -> Math.round(s.getAverage()), ...)
+
+========== C 收尾 ==========
+groupingBy 的三层重载其实是三个问题：怎么分组 / 用什么 Map / 每组算出什么。
+业务里 90% 的「按 X 统计 Y」都能落在这三格的组合里。
+
+
+########## 3/3  CollectorTraps · 收集器六个陷阱（D） ##########
+
+========== D1 · toMap 的重复 key ==========
+D1 id 唯一时正常 -> 15 条，取 U01 = 张伟
+D1 换成以部门为 key（研发 5 人）：
+D1   -> java.lang.IllegalStateException: Duplicate key 研发 (attempted merging values 22000 and 31000)
+D1   注意它报在**收流那一刻**，栈里看不出是哪两条数据撞的 —— 这是 toMap 最难排查的地方
+D1 修法一 (a, b) -> a 保留先出现的 -> {产品=26000, 研发=22000, 运营=15000, 测试=16000}
+D1 修法二 Math::max 取最高 -> {产品=33000, 研发=45000, 运营=21000, 测试=17000}
+D1 两个修法的区别不是「哪个对」，而是「业务要哪个」—— 写 (a,b)->a 之前一定要能说出「为什么丢掉 b 是可以的」
+
+========== D2 · toMap 的 value 为 null ==========
+D2 HashMap.put 一个 null value -> {何静=null}，没抛异常，size=1
+D2 所以「HashMap 不能存 null」是错的 —— 它允许一个 null key + 任意多个 null value
+D2 但 toMap 的 value 为 null（何静 / 徐丽 的 age 是 null）：
+D2   -> java.lang.NullPointerException，message = <空>
+D2   连一句解释都没有，栈顶还落在 Collectors 内部，只能靠「我传了 null value」自己想到
+D2 原因：toMap 内部走的是 map.merge(key, value, mergeFunction)，而 HashMap.merge 第一句就是 if (value == null || remappingFunction == null) throw new NullPointerException()
+D2 换句话说：toMap 用的是 merge，不是 put；put 的宽松规则在 merge 这儿被收紧了
+D2 修法一：value 侧换成 String.valueOf(age)（null 变字面量 "null"）-> 15 条
+D2 修法二：提前 filter(u -> u.age() != null)，代价是「没年龄的人」整条消失
+D2 选哪个取决于语义：是「这个人不存在」还是「这个人存在但年龄未知」
+
+========== D3 · groupingBy 的 key 为 null ==========
+D3 全量 15 条里，U99 的 dept 是 null：
+D3   -> java.lang.NullPointerException: element cannot be mapped to a null key
+D3 groupingBy 内部对 classifier 的返回值做了 Objects.requireNonNull，所以它连一个「null 组」都不给你
+D3 三种应对：① filter 掉；② classifier 里映射成 "未分配"；③ 换成 groupingBy(u -> Optional.ofNullable(u.dept()), ...) —— 但这会把 Optional 塞进 Map 的 key 里，而 Optional 的 equals 是值语义，能当 key，只是可读性很差，不推荐
+D3 对比 D2：同一个「按 key 聚合」，两者的 null 政策居然不一样 —— 先看 toMap 拿 dept 当 key（含那条 null）：
+D3   toMap -> {null=50000}，没抛异常，null 成了一个正经的 key
+D3 因为 toMap 走 HashMap.merge，而 HashMap 允许一个 null key；groupingBy 则用 Objects.requireNonNull 把 null 挡在门外
+
+========== D4 · teeing：一次遍历算两个聚合 ==========
+D4 两遍流 -> 总额 374500，人数 15，人均 24966.7
+D4 teeing 一遍流 -> 人均 24966.7
+D4 teeing(downstream1, downstream2, merger)：两个下游并行喂同一个元素，最后 merger 把两个结果合成一个值
+D4 嵌套 teeing 一次拿三个指标 -> 总额 374500，人数 15，最高 50000
+D4 groupingBy + teeing（每组人均薪资）-> {产品=27667, 研发=27600, 运营=18333, 测试=16167}
+D4 teeing 是 JDK 12 新增，JDK 8 项目里只能用 collectingAndThen 套一个自定义累加器，或者老老实实跑两遍 —— 面试问「怎么一遍流求平均」就从这儿答
+
+========== D5 · 三种 toList 的可变性 ==========
+D5 Collectors.toList() -> java.util.ArrayList
+D5 Stream.toList()（JDK 16+）-> java.util.ImmutableCollections$ListN
+D5 Collectors.toUnmodifiableList() -> java.util.ImmutableCollections$ListN
+D5 依次尝试 add("X")：
+D5   Collectors.toList()        -> 成功（可变），size=16
+D5   Stream.toList()            -> UnsupportedOperationException
+D5   toUnmodifiableList()       -> UnsupportedOperationException
+D5 还有第三个差异：允许 null 元素吗（用一条含 null 的流去撞，而不是往结果里 add）
+D5   Collectors.toList()        -> 允许（size=2，实现 ArrayList）
+D5   Stream.toList()            -> 允许（size=2，实现 ListN）
+D5   Collectors.toUnmodifiableList() -> NullPointerException（拒绝 null 元素）
+D5   注意这里三选二不是一致的：Stream.toList() 和 toUnmodifiableList() 返回同一族不可变实现（ImmutableCollections$ListN），但前者**放行 null**、后者**拒绝 null**
+D5   原因在实现路径：Stream.toList() 走 listFromTrustedArrayNullsAllowed，toUnmodifiableList() 走 listFromTrustedArray —— 后者逐个 Objects.requireNonNull
+D5   而 List.of("a", null) 是 NPE：那是「多个固定实参」的重载，跟单传一个数组的行为不一样
+D5 结论：Collectors.toList() 只承诺「是个 List」，实现类和可变性都没承诺；JDK 16 的 Stream.toList() 明确不可变，但**不拒绝 null 元素**（这条最容易记反）
+D5 项目里混用过的典型事故：方法返回 Stream.toList() 的结果，调用方一句 .add() / .sort() 就 UnsupportedOperationException —— 而且**只在线上数据走到那行时**才炸
+
+========== D6 · 一对多：toMap 硬扛 vs groupingBy ==========
+D6 toMap + 合并函数 -> {产品=[刘洋(26000), 陈静(24000), 郑凯(33000)], 研发=[张伟(22000), 李娜(31000), 王强(18000), 周涛(45000), 何静(22000)], 运营=[杨帆(15000), 赵敏(19000), 孙浩(21000)], 测试=[吴磊(16000), 徐丽(17000), <null>(15500)]}
+D6 groupingBy + mapping -> {产品=[刘洋(26000), 陈静(24000), 郑凯(33000)], 研发=[张伟(22000), 李娜(31000), 王强(18000), 周涛(45000), 何静(22000)], 运营=[杨帆(15000), 赵敏(19000), 孙浩(21000)], 测试=[吴磊(16000), 徐丽(17000), <null>(15500)]}
+D6 结果一样，但 toMap 那版你得自己 new ArrayList、自己 addAll、还得担心合并顺序；groupingBy 一行就说完「按部门把 brief 收成 List」
+D6 判断口诀：key 唯一 -> toMap；key 会重复 -> groupingBy。用 toMap 处理重复 key，等于用手动合并函数重新实现一遍 groupingBy
+
+========== D 收尾 ==========
+这六条的共同点：**编译期一句都不报，全靠运行时**。
+toMap 用之前先问自己两句：key 会不会重复？value 会不会是 null？
+

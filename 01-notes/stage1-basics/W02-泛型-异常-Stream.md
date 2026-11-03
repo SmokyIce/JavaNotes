@@ -1,9 +1,9 @@
 # W02 · Java 泛型 · 异常 · Optional · Stream
 
 > **第一阶段 · 打基础（W01–W12）** ｜ 预计投入 ≈ 7 小时（每天 60 分钟）
-> 状态：🟨 进行中（Day 1 / Day 2 / Day 3 / Day 4 / Day 5 完成）　｜　开始日期：2026-10-28　｜　完成日期：____-__-__
+> 状态：🟩 已完成（Day 1 / Day 2 / Day 3 / Day 4 / Day 5 / Day 6 全部完成）　｜　开始日期：2026-10-28　｜　完成日期：2026-11-03
 
-> 💡 周六练习：给一个 List<User>，完成 过滤 → 排序 → 分组 → 统计。
+> 💡 周六练习：给一个 List<User>，完成 过滤 → 排序 → 分组 → 统计。（Day 6 已完成）
 
 ---
 
@@ -14,7 +14,7 @@
 - [x] Optional
 - [x] Lambda
 - [x] Stream
-- [ ] 过滤 / 排序 / 分组 / 统计
+- [x] 过滤 / 排序 / 分组 / 统计
 
 ## 二、核心问题（能用自己的话脱稿讲出来，才算学会）
 
@@ -28,6 +28,7 @@
 8. `Function<Integer,Integer>` 一定比 `IntUnaryOperator` 慢吗？为什么「装箱很贵」这个结论有时量出来只有 2 倍，有时是 36 倍？
 9. `stream().filter(...).map(...)` 写完不接终止操作会怎样？为什么加了 `sorted()` 之后打印顺序会变？怎么判断一行代码是中间操作还是终止操作？
 10. 一个 `Stream` 为什么只能用一次？`parallel()` 在什么情况下反而更慢？
+11. `groupingBy` 的三参数重载各解决什么问题？`toMap` 在什么情况下会抛异常？为什么它对 null 的容忍度和 `groupingBy` 不一样？
 
 > 自己先答一遍，再翻文末「参考要点」，别倒着来。
 
@@ -44,7 +45,7 @@ Day 2 补（已完成 10-30）异常开销：fillInStackTrace 才是账单，-XX
 Day 3（已完成 10-30）  Optional：三个反模式 + 五个陷阱 + 一条 map/flatMap/filter 链
 Day 4（已完成 11-02）  Lambda：函数式接口五形态 + 方法引用五连 + 变量捕获（值拷贝）+ invokedynamic
 Day 5（已完成 11-02）  Stream：惰性求值 / 短路 / 屏障 / peek + 流只能用一次 + map vs flatMap + parallel
-Day 6（待做）          List<User> 过滤 → 排序 → 分组 → 统计
+Day 6（已完成 11-03）  List<User> 报表：过滤（Predicate 组合）+ 多级排序（nullsLast）+ groupingBy 三层重载 + 收集器六个陷阱
 ```
 
 ### Day 1 · 2026-10-28（周三）· 类型擦除 + PECS
@@ -846,16 +847,230 @@ List<Order> list = once.collect(...);  // 挂了：ISE
 
 #### 8. 遗留
 
-- ⬜ **Day 6**：`List<User>` 过滤 → 排序 → 分组 → 统计，重点是 `Collectors.groupingBy`
-  的三参数重载、`toMap` 的重复 key 会抛 `IllegalStateException`、`teeing` 一次算两个聚合。
-- ⬜ `Collectors.toList()` 与 JDK 16 的 `Stream.toList()` 返回值一个可变一个不可变，
-  这个差异要放到 Day 6 用代码撞一次 `UnsupportedOperationException`。
+- ✅ **Day 6**（2026-11-03 已完成）：`List<User>` 过滤 → 排序 → 分组 → 统计，见下一节。
+- ✅ `Collectors.toList()` 与 JDK 16 的 `Stream.toList()` 的差异已实测（Day 6 §7），
+  结论比预想的多一条：**两者都是不可变，但 null 政策不一致**。
 - ⬜ `Files.lines()` / `BufferedReader.lines()` 返回的流**持有文件句柄**，必须 TWR 包住；
   这条和 Day 2 的 TWR 是同一件事，等 W08 读文件 / 读大 CSV 时再实测。
 - ⬜ `parallel()` 默认共用 `ForkJoinPool.commonPool()`，容器里 `availableProcessors()` 可能只报 1，
   属于 W04 线程池那条线，先记一笔。
 
 ---
+
+### Day 6 · 2026-11-03（周二）· `List<User>` 报表：过滤 → 排序 → 分组 → 统计
+
+> W02 的收尾，也是这一周里**最能直接搬进业务代码**的一次。
+> 代码在 `w02-generics-stream/src/main/java/.../w02/day6/`，实测快照 `day6-result.txt`。
+
+| 时间 | 做什么 | 产出 |
+| -: | :--- | :--- |
+| 10 分钟 | 复述 Day 5：中间/终止怎么分 / 屏障什么时候不成立 / 流为什么只能用一次 | 口头过 |
+| 15 分钟 | 过滤 + 多级排序（`comparing().thenComparing()`，含 null 排最后） | `UserReport` A / B 段 |
+| 20 分钟 | 分组：`groupingBy` 一参 / 两参 / 三参，`counting` / `summingInt` / `averagingInt` / `mapping` | `GroupStats` C 段 |
+| 10 分钟 | `toMap` 重复 key 撞一次、`teeing` 一次算两个聚合 | `CollectorTraps` D 段 |
+| 5 分钟 | 输出快照 + 笔记 + 勾掉「过滤 / 排序 / 分组 / 统计」 | `day6-result.txt` |
+
+数据是 15 条 `User`，**故意留了三个 null**：`name` 1 条、`age` 2 条、`dept` 1 条。
+它们分别对应 A / B / D 段各炸一次 —— 这不是凑数，是为了让「每个 API 的 null 政策」都留下实测证据。
+
+#### 1. 过滤：`Predicate` 的组合是**左结合**，不是布尔优先级
+
+写业务查询时常把条件拆成几个 `Predicate` 复用，拼的时候很容易按布尔运算的直觉来：
+
+```java
+Predicate<User> q1 = isDev.or(isTest).and(active);      // 实测 6 人
+Predicate<User> q2 = isDev.or(isTest.and(active));      // 实测 7 人
+```
+
+差的那 1 人是**离职的研发王强**。原因不是「`and` 优先级更高」，而是方法链**左结合**：
+
+- `isDev.or(isTest)` 先返回一个**新** Predicate（表示并集），
+- 再 `.and(active)` 是对这个并集整体做与 → `(a || b) && c`。
+
+想表达 `a || (b && c)` 必须自己加括号：`isDev.or(isTest.and(active))`。
+**这类错误不报编译错、不抛异常，只是少了几行数据**，是报表类需求最难发现的一种 bug。
+结论：条件拼装完一定拿两条「边界数据」验一遍人数。
+
+另一个常见误解是 `filter(Objects::nonNull)` 能防住 `name` 为 null ——
+它对 15 条数据过滤完**还是 15 条**，因为它判的是**元素本身**，判不了元素里的字段。
+真正的修法只有两种：`u.name() != null && u.name().startsWith(...)`，
+或者 `Objects.toString(u.name(), "").startsWith(...)`。
+
+> 顺带一条：`"常量".equals(x)` 这个防 NPE 的老技巧只对 `equals` 成立。
+> `startsWith` / `contains` / `length` 都是「接收者方法」，字段为 null 时照样炸。
+
+#### 2. 排序：`nullsLast` 和 `reversed()` 会互相拆台
+
+多级排序本身没难度，写清楚「部门↑ → 薪资↓ → 年龄↑」就行：
+
+```java
+Comparator.comparing(User::dept, Comparator.nullsLast(String::compareTo))
+          .thenComparing(Comparator.comparingInt(User::salary).reversed())
+          .thenComparing(User::age, Comparator.nullsLast(Integer::compareTo))
+```
+
+真正要记的是两个陷阱，都实测过：
+
+**① `reversed()` 作用在「它左边整条链」上，不是最近那一级。**
+
+```java
+// 写法一：整条链反转
+comparing(User::dept, nullsLast(...)).thenComparing(User::salary).reversed()
+// 结果：钱多(null dept 排到了最前), 孙浩, 赵敏, 杨帆, 周涛 ...
+
+// 写法二：只反转薪资这一级
+comparing(User::dept, nullsLast(...)).thenComparing(User::salary, Comparator.reverseOrder())
+// 结果：郑凯, 刘洋, 陈静, 徐丽, 吴磊 ...（部门仍是升序）
+```
+
+写法一有两个连带后果：**部门一起降序**，而且 **`nullsLast` 被反转成了 `nullsFirst`**。
+这两条叠起来就是线上「排序方向和要求反了」的常见来源。
+
+**② 键是包装类型且可能为 null 时，`comparing` 直接 NPE。**
+
+```
+java.lang.NullPointerException: Cannot invoke "java.lang.Comparable.compareTo(Object)"
+because the return value of "java.util.function.Function.apply(Object)" is null
+```
+
+`keyExtractor` 返回 null，下一句就调 `compareTo` —— 拆箱/调方法之前先炸。
+修法是把 `nullsLast` 包在**内层**比较器上：`comparing(User::age, nullsLast(Integer::compareTo))`。
+写成 `comparing(User::age).nullsLast(...)` 编译不过，因为 `nullsLast` 是 `Comparator` 的静态方法，
+不是实例方法。
+
+**③ 稳定性：`List.sort` 是 TimSort，稳定。** 所以「多级排序」可以拆成多次单键排序，
+只要键的顺序从次要到主要倒着来。实测：研发组先按薪资升序、再按部门排，
+同部门内的薪资顺序完整保留。但这条契约只对**对象数组 / List** 成立 ——
+`Arrays.sort` 对基本类型数组用双轴快排，**不稳定**，别拿 `int[]` 干这事。
+
+#### 3. `groupingBy` 的三层重载，其实是三个不同的问题
+
+| 重载 | 回答的问题 | 典型写法 |
+| :--- | :--- | :--- |
+| `groupingBy(classifier)` | 怎么分组 | `groupingBy(User::dept)` → `Map<String, List<User>>` |
+| `groupingBy(classifier, downstream)` | 每组算出什么 | `groupingBy(User::dept, counting())` |
+| `groupingBy(classifier, mapFactory, downstream)` | 用什么 Map 装 | `groupingBy(User::dept, TreeMap::new, counting())` |
+
+第三个重载的 `mapFactory` **夹在中间**，是最容易记错位置的一个。它解决的是「key 顺序」：
+
+```
+HashMap（默认）   -> [产品, 研发, 运营, 测试]   ← 桶分布，不可依赖
+LinkedHashMap    -> [研发, 产品, 运营, 测试]   ← 首次出现顺序
+TreeMap          -> [产品, 测试, 研发, 运营]   ← key 自然序
+```
+
+要给前端「部门顺序稳定」的列表，就把 `mapFactory` 写成 `TreeMap::new` 或 `LinkedHashMap::new`。
+默认 HashMap 的顺序换个 JDK 版本就可能变，**不能作为业务约定**。
+
+常用下游收集器（都实测过）：
+
+| 下游 | 作用 | 研发组结果 |
+| :--- | :--- | :--- |
+| `counting()` | 计数 | 5 |
+| `summingInt(User::salary)` | 求和 | 138000 |
+| `averagingInt(User::age)` | 平均 | 32.0（**必须先滤 null**） |
+| `mapping(User::name, joining("/"))` | 每组拼一行 | 张伟/李娜/王强/周涛/何静 |
+| `mapping(User::city, toSet())` | 每组去重 | [上海, 北京, 深圳] |
+| `maxBy(comparingInt(salary))` | 每组最大 | 周涛(45000)，值是 `Optional` |
+| `summarizingInt(User::salary)` | 五个指标一把抓 | count/sum/min/avg/max |
+
+两条踩出来的：
+
+- **`averagingInt` 遇 null 直接 NPE**（`ToIntFunction` 要拆箱），而且用 `User::age` 这个方法引用时
+  **报错 message 是空的**，栈顶还在 `Collectors` 内部，看不出是哪个字段。
+  同一个拆箱写成 lambda 就有 message，这是今天最值得记的一条对照：
+
+  | 写法 | message |
+  | :--- | :--- |
+  | `averagingInt(User::age)` | `<空>` |
+  | `averagingInt(u -> u.age())` | `Cannot invoke "Integer.intValue()" because the return value of "User.age()" is null` |
+
+  原因是**方法引用的拆箱发生在 lambda metafactory 生成的 MethodHandle 适配层**，
+  那里没有字节码位置可指；lambda 版有 javac 插入的 `intValue()` 调用点，HotSpot 才能甩出 helpful message。
+  所以「一个 NPE 什么都没说」不代表信息丢了，可能只是你用了方法引用。
+
+  修法不是「null 当 0」—— 实测研发组 null 当 0 得 25.6，先滤 null 得 32.0，**差 6.4 岁**，
+  因为分母从 4 变成了 5。统计场景里「补个默认值」等于改了分母，是错的。
+- **`joining` 会把 null 拼成字面量 `"null"`**（`add(null)` 不抛错）。
+  测试组那行变成 `吴磊/徐丽/null`，要干净就得自己 map 成 `""` 或提前过滤。
+
+#### 4. `partitioningBy`：空组不会消失
+
+这是它和 `groupingBy` 唯一但关键的差别。产品组 3 人全在职：
+
+```
+partitioningBy(active) -> keySet=[false, true]，false 组 = []      ← 空 List，能直接 size()
+groupingBy(active)     -> keySet=[true]，false 这个 key 不存在     ← 取到 null，NPE 预备役
+```
+
+判断标准：**条件是布尔语义、且「不满足」的那组也要出现在报表里**（比如「在职 / 离职」两栏都要有数），
+就用 `partitioningBy`；否则 `groupingBy`。
+
+#### 5. `toMap` 的两种爆炸方式
+
+```
+① 重复 key  -> IllegalStateException: Duplicate key 研发 (attempted merging values 22000 and 31000)
+② value 为 null -> NullPointerException，message 是空的
+```
+
+**①** 报在**收流那一刻**，栈里看不出是哪两条数据撞的，这是它最难排查的地方。
+两种修法对应两种业务语义：`(a, b) -> a` 保留先出现的、`Math::max` 取最高薪资。
+写 `(a,b)->a` 之前要能说出「为什么丢掉 b 是可以的」。
+
+**②** 更反直觉：`HashMap` 本身**允许** null value（`put` 没问题），但 `toMap` 内部走的是
+`map.merge(key, value, fn)`，而 `HashMap.merge` 第一句就是
+`if (value == null || remappingFunction == null) throw new NullPointerException()`。
+**换句话说：toMap 用的是 merge 不是 put，put 的宽松规则在 merge 这儿被收紧了。**
+
+同一个「按 key 聚合」，两者对 null 的政策还不一样：
+
+```
+groupingBy(User::dept)  -> NPE: element cannot be mapped to a null key
+toMap(User::dept, ...)  -> {null=50000}，没抛异常，null 成了一个正经的 key
+```
+
+因为 `groupingBy` 对 classifier 的返回值做了 `Objects.requireNonNull`，而 `toMap` 走 `HashMap.merge`
+（HashMap 允许一个 null key）。**记这条的正确方式不是背，是想清楚「它内部用的是什么容器方法」。**
+
+#### 6. `teeing`：一次遍历算两个聚合
+
+```java
+users.stream().collect(Collectors.teeing(
+        Collectors.summingInt(User::salary),
+        Collectors.counting(),
+        (sum, n) -> String.format("%.1f", sum * 1.0 / n)));   // 24966.7
+```
+
+两个下游并行喂同一个元素，最后 merger 把结果合成一个值。实测与「跑两遍流」结果一致
+（总额 374500 / 15 人 / 人均 24966.7），但只遍历一次。
+可以和 `groupingBy` 组合算「每组人均」，也能嵌套拿三个指标。
+`teeing` 是 **JDK 12** 新增，JDK 8 项目里只能 `collectingAndThen` 套自定义累加器或老实跑两遍 ——
+面试问「怎么一遍流求平均」就从这儿答。
+
+#### 7. 三种 toList：可变性 + null 政策，两条都不一样
+
+| 写法 | 实现类 | `add()` | 含 null 元素 |
+| :--- | :--- | :--- | :--- |
+| `Collectors.toList()` | `ArrayList` | ✅ 成功 | ✅ 允许 |
+| `Stream.toList()`（JDK 16+） | `ImmutableCollections$ListN` | ❌ UOE | ✅ **允许** |
+| `Collectors.toUnmodifiableList()` | `ImmutableCollections$ListN` | ❌ UOE | ❌ **NPE** |
+
+第三列是这次实测里最反直觉的一条，我原本以为「不可变 = 也不许 null」，写进代码后跑出来才发现错了：
+**同一个 `ListN` 实现，`Stream.toList()` 放行 null、`toUnmodifiableList()` 拒绝 null。**
+
+原因在实现路径：`Stream.toList()` 走 `listFromTrustedArrayNullsAllowed`，
+`toUnmodifiableList()` 走 `listFromTrustedArray`（逐个 `Objects.requireNonNull`）。
+而 `List.of("a", null)` 抛 NPE 又是另一回事 —— 那是「多个固定实参」的重载，跟单传一个数组的行为不一样。
+
+线上事故形态：方法返回 `Stream.toList()` 的结果，调用方一句 `.add()` / `.sort()` 就
+`UnsupportedOperationException`，而且**只在数据走到那行时**才炸。
+
+#### 8. 遗留
+
+- ⬜ `Collectors.toMap` 的 `mapFactory` 参数（四参重载）今天没碰，需要「保持顺序的 Map」时再用。
+- ⬜ `groupingBy` 的 `concurrentGroupingBy`（并行流版）留到 W04 讲线程池时对照。
+- ⬜ `Files.lines()` 的流持句柄那条仍在排队，等 W08。
+- ✅ W02 全部 6 天完成，可以封板 —— 进入 W03 并发。
 
 ## 四、踩坑与 Bug 复盘
 
@@ -877,6 +1092,12 @@ List<Order> list = once.collect(...);  // 挂了：ISE
 | 测 parallel 收益，500 万个数平方和读出「串行 1 ms / parallel 0 ms」，数字完全不能用 | 活太轻，JIT 把整个 `sum` 向量化甚至常量折叠了，测到的是「循环被消掉」的时间 | 两个数都接近 0，明显是测量问题，不是 JVM 太强 | 换成「算不出答案」的重活（每元素 30 轮乘加）+ 2000 万 / 200 万两档数据量，再补一个小数据量对照（1k 元素反而慢 2~5 倍） | 微基准老规矩（Day 2 已踩过一次）：**数字接近 0 或两档差距离谱时，先怀疑 JIT 把活消掉了** |
 | `peek` 里加的日志一条都没打印，以为流没执行（甚至怀疑代码没编译进去） | JDK 9+ 的 `count()` 在源是 `SIZED`、中间没有改数量的操作时走快速路径，**整条管道包括 `peek` 一起跳过** | 在 `peek` 前加一个 `filter(x -> true)`，日志立刻出现 3 条，而 `count()` 结果不变 | 调试一律用 `forEach` / `collect` 兜底；业务逻辑绝不写进 `peek` | 「终止操作」不等于「逐元素执行」；`count` 只要个数，`SIZED` 流能直接算出来 |
 | 用反射数 `Named` 接口的 abstract 方法得到 **4 个**，可编译器认为它只有 1 个 | JLS 9.8：与 `Object` 的 public 方法签名相同的接口方法（`equals` / `hashCode` / `toString`）**不计入**抽象方法 | 手写 `isObjectMethod()` 过滤后数量从 4 变 1，同时 lambda 能正常赋值 | 计数逻辑抽成工具方法，快照里同时打印「反射数」和「编译器数」 | 反射只反映「声明了什么」，函数式接口判定是编译器另一套规则 —— 又一个双视角问题（同 Day 1 的 `getParameterTypes` vs `toGenericString`） |
+| 笔记和代码注释里我先写了「`a.or(b).and(c)` 等价于 `a || (b && c)`」，跑出来人数对不上才发现写反了 | `Predicate` 的 `or` / `and` 是**方法链左结合**：`isDev.or(isTest)` 先返回一个表示并集的新 Predicate，再整体 `.and(active)` | 单独写一个最小用例，用 `"x"`（短、命中 x）当输入：`x.or(y).and(z)` 给 `false`，`x.or(y.and(z))` 给 `true` | 结论改成「等价于 `(a\|\|b)&&c`」，并在 `UserReport` A2 段把两种写法并列打印（6 人 vs 7 人） | 方法链没有运算符优先级，只有求值顺序；按布尔直觉读链式 Predicate 必错，而且**不报错、只少数据** |
+| 以为「`Stream.toList()` 不可变，所以也不许 null」，代码注释直接这么写了 | 想当然，把「不可变」和「null-hostile」当成同一件事 | 用 `Stream.of("a", null)` 分别喂给三种收集器，实测：`Stream.toList()` 允许（size=2），`toUnmodifiableList()` 抛 NPE | 结论改写成「可变性一个样、null 政策两个样」，并补上实现路径差异（`listFromTrustedArrayNullsAllowed` vs `listFromTrustedArray`） | 同样是 `ImmutableCollections$ListN`，但入口方法不同，校验强度就不同；**两个都是不可变 ≠ 两个行为一致** |
+| `groupingBy` 平均年龄直接 `averagingInt(User::age)` 抛 NPE，message 是空的，栈顶还在 `Collectors` 内部 | 两层原因：① `ToIntFunction` 要对 `Integer` 拆箱，null 拆不了；② **`User::age` 是方法引用**，拆箱发生在 lambda metafactory 生成的 MethodHandle 适配层，没有字节码位置可指，所以 HotSpot 甩不出 helpful message | 把 `age` 打出来定位到何静 / 徐丽两条 null；顺手把同一句改成 `averagingInt(u -> u.age())` 对照，message 立刻出现 | 先 `filter(u -> u.age() != null)` 再分组 | 同一个拆箱，**lambda 版有 message、方法引用版没有** —— 排查时「NPE 什么都没说」可能只是写法问题，不一定是信息丢了 |
+| 「修 NPE 就补个默认值」，把 null age 当 0 算平均 | 0 会进分母，`count` 从 4 变 5 | 两种写法并列打印：研发 25.6 vs 32.0，差 6.4 岁 | 改成先过滤再算 | 平均值 = 总和 / **有效样本数**；补默认值改变的是分母，不是「看起来更好看」的小事 |
+| 对全量 15 条直接 `groupingBy(User::dept)` 抛 NPE，一开始以为是数据里混进了空字符串 | `groupingBy` 对 classifier 返回值做 `Objects.requireNonNull`，null key 一律拒绝 | 报错原文就是 `element cannot be mapped to a null key`，很明确；再用 `toMap` 对同一份数据做对照，`{null=50000}` 竟然成功 | 业务侧决定「未分配」还是过滤掉，代码里显式写 | `groupingBy` 走 `requireNonNull`、`toMap` 走 `HashMap.merge`（允许一个 null key）—— 两个「按 key 聚合」的 null 政策不一致，只能靠记内部实现 |
+| `toMap(User::id, User::age)` 抛 NPE，可 `HashMap.put(id, null)` 明明没问题 | `toMap` 内部用的是 `map.merge(...)`，`HashMap.merge` 第一句就 `if (value == null) throw new NullPointerException()` | 先单测 `put` 证明容器允许，再看 `toMap` 无参重载的实现是 `toMap(k, v, throwingMerger(), HashMap::new)` | value 侧 `String.valueOf(age)` 兜底，或提前 filter | **toMap 用的是 merge 不是 put**；`put` 的宽松规则在 `merge` 这儿被收紧了，且这个 NPE 连 message 都没有 |
 
 ---
 
@@ -916,8 +1137,18 @@ List<Order> list = once.collect(...);  // 挂了：ISE
 - 无限流怎么停下来？（只能配短路终止操作：`findFirst` / `anyMatch` / `limit`；`count()` 永远跑不完）
 - `map` 和 `flatMap` 有什么区别？（`T→R` vs `T→Stream<R>` 再拍平；`Optional::stream` 是展平 `List<Optional<T>>` 的顺手写法）
 - `parallel()` 一定更快吗？（小数据量反而慢 2~5 倍；四条标准：量 ≥ 1 万 / 计算够重 / 无共享可变状态 / 不依赖顺序）
+- `groupingBy` 的三个重载分别解决什么问题？（怎么分组 / 每组算什么 / 用什么 Map 装；`mapFactory` 夹在中间最容易记错）
+- `groupingBy` 返回的 Map 顺序能依赖吗？（默认 HashMap 按桶分布；要稳定就传 `TreeMap::new` / `LinkedHashMap::new`）
+- `toMap` 什么时候会抛异常？（重复 key 抛 `IllegalStateException`；value 为 null 抛**无 message** 的 NPE）
+- 为什么 `HashMap.put(k, null)` 没事，`Collectors.toMap(k, v)` 就 NPE？（toMap 走 `HashMap.merge`，merge 第一句就拒绝 null value）
+- `groupingBy` 和 `toMap` 对 null key 的态度为什么不一样？（前者 `Objects.requireNonNull`，后者走 `HashMap.merge` 允许一个 null key）
+- `partitioningBy` 和 `groupingBy` 有什么区别？（前者一定返回 `true`/`false` 两个 key，空组给空 List；后者空组直接不存在）
+- `Stream.toList()` 和 `Collectors.toList()` 有什么区别？（可变性 + null 政策都不同：前者不可变但**放行 null**，后者可变；`toUnmodifiableList()` 才拒绝 null）
+- 一遍流怎么同时求总和和个数？（`Collectors.teeing`，JDK 12+；JDK 8 只能 `collectingAndThen` 或跑两遍）
+- `Comparator.comparing(...).reversed()` 之后再加 `thenComparing`，谁被反转了？（`reversed()` 作用于它左边**整条链**，`nullsLast` 也会一起变成 `nullsFirst`）
+- 多级排序能不能拆成多次单键排序？（能，`List.sort` 是 TimSort 稳定排序；但 `Arrays.sort` 对基本类型数组不稳定）
 
-> 对应的口述版答案在 `04-interview/question-bank/Java基础.md`（M1 要求 +3 道，现已 22 道）。
+> 对应的口述版答案在 `04-interview/question-bank/Java基础.md`（M1 要求 +3 道，现已 24 道）。
 
 ## 六、一句话总结
 
@@ -934,7 +1165,7 @@ List<Order> list = once.collect(...);  // 挂了：ISE
 | 2026-10-30 | 五 | Day 3 Optional（三反模式 + 五陷阱 + 一条链）+ 补 Day 2 遗留「异常开销」 | 60 min | `OptionalAntiPatterns` / `OptionalChain` / `ExceptionCost` / `day3-result.txt` | ✅ |
 | 2026-11-02 | 一 | Day 4 Lambda（五形态 + 方法引用五连 + 值捕获 + invokedynamic + 装箱逃逸） | 60 min | `FunctionalShape` / `LambdaCapture` / `LambdaLimits`×3 / `day4-result.txt` / `day4-bytecode.txt` | ✅ |
 | 2026-11-02 | 一 | Day 5 Stream（惰性求值 + 短路 + 屏障 + peek 坑 + 流只能用一次 + map/flatMap + parallel）+ 补 Day 4 遗留 | 60 min | `StreamLazy` / `StreamOnce` / `FuncInterfaceRule` / `day5-result.txt` | ✅ |
-|  | 一 |  |  |  |  |
+| 2026-11-03 | 二 | Day 6 报表：Predicate 左结合 + 多级排序（nullsLast / reversed 陷阱）+ groupingBy 三层重载 + 收集器六个陷阱 + teeing + 三种 toList 的 null 政策 | 60 min | `UserReport` / `GroupStats` / `CollectorTraps` / `User` / `UserData` / `day6-result.txt` | ✅ |
 |  | 二 |  |  |  |  |
 |  | 三 |  |  |  |  |
 |  | 四 |  |  |  |  |
@@ -1114,3 +1345,36 @@ List<Order> list = once.collect(...);  // 挂了：ISE
 四条都满足才考虑并行：**数据量 ≥ 1 万 / 每元素计算够重 / 无共享可变状态 / 不依赖顺序**。
 顺序那条还要注意两个坑：`forEach` 在 parallel 下**不保序**（实测 `[7,8,6,10,11,...]`），
 要顺序必须 `forEachOrdered`；而且往 `ArrayList` 里并发 `add` 本身就不安全。
+
+**Q11 · `groupingBy` 的三层重载 / `toMap` 什么时候炸 / 两者为什么对 null 态度不同**
+
+三层重载其实是三个独立问题，不是「同一个方法的三种写法」：
+
+1. `groupingBy(classifier)` —— **怎么分组**，返回 `Map<K, List<T>>`。
+2. `groupingBy(classifier, downstream)` —— **每组算出什么**。下游换成 `counting` / `summingInt` /
+   `averagingInt` / `mapping` / `maxBy` / `summarizingInt`，就是「每组计数 / 求和 / 平均 / 拼串 / 取最大 / 五个指标」。
+3. `groupingBy(classifier, mapFactory, downstream)` —— **用什么 Map 装**。注意 `mapFactory` 夹在中间，
+   这个位置最容易记错。默认 `HashMap` 的 key 顺序来自桶分布，**不可依赖**；
+   要稳定就传 `TreeMap::new`（自然序）或 `LinkedHashMap::new`（首次出现顺序）。
+
+`toMap` 的两条爆炸路径：
+
+- **重复 key** → `IllegalStateException: Duplicate key 研发 (attempted merging values 22000 and 31000)`。
+  报在收流那一刻，栈里看不出是哪两条撞的。修法是补合并函数 `(a,b) -> a` 或 `Math::max` ——
+  选哪个取决于业务语义，不是技术问题。
+- **value 为 null** → NPE，而且 **message 是空的**。这条最容易误判成「HashMap 不能存 null」，
+  但 `put(k, null)` 完全没问题。原因是 `toMap` 内部走 `map.merge(key, value, fn)`，
+  而 `HashMap.merge` 第一句就是 `if (value == null) throw new NullPointerException()`。
+  —— **toMap 用的是 merge，不是 put。**
+
+两者对 null key 的政策也不一样，这点最能说明「要理解 API 就得知道它内部调了什么」：
+
+| 写法 | null key | 原因 |
+| :--- | :--- | :--- |
+| `groupingBy(User::dept)` | NPE: `element cannot be mapped to a null key` | classifier 返回值过 `Objects.requireNonNull` |
+| `toMap(User::dept, ...)` | 允许，`{null=50000}` | 走 `HashMap.merge`，HashMap 允许一个 null key |
+
+另外两个配套结论：`partitioningBy` 一定返回 `true`/`false` 两个 key（空组给空 List，能直接 `size()`），
+`groupingBy` 的空组压根不存在（取到 null）；三种 toList 里 **可变性是「可变 / 不可变 / 不可变」，
+但 null 政策是「允许 / 允许 / 拒绝」** —— `Stream.toList()` 和 `toUnmodifiableList()` 是同一个
+`ImmutableCollections$ListN`，行为却不同，别把「不可变」和「不许 null」当成一回事。

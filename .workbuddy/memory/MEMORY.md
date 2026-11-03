@@ -46,10 +46,17 @@
   `peek` 与 `count` / 流只能用一次 / map vs flatMap / parallel 代价 / 函数式接口抽象方法计数）
   + `day5-result.txt`；顺带补完 Day 4 遗留 ✅
   题库 20 → **22 题**（Stream 2 道）
+- **M1 Day 6（11-03）`List<User>` 报表**（`day6/` 五个文件：`User`+`UserData` 15 条数据故意留
+  name/age/dept 三处 null、`UserReport` 过滤+多级排序、`GroupStats` groupingBy 三层重载、
+  `CollectorTraps` 六个陷阱）+ `day6-result.txt`（205 行）✅
+  题库 22 → **24 题**（groupingBy / toMap 各 1 道）
+- **W02 已封板（11-03）**，六天全部完成。笔记状态改 🟩，MILESTONES 进展表已补两行 + 封板小结。
 
-**下一步**：W02 Day 6 = `List<User>` 过滤→排序→分组→统计（`groupingBy` 三参 + 下游收集器、
-`toMap` 重复 key、`teeing`、`Collectors.toList()` vs `Stream.toList()` 可变性），
-时间盒在 `00-plan/today.md`。做完 W02 封板 → W03 并发。
+**下一步**：**W03 Day 1 = 线程基础**（`w03-concurrency-basics/` 目前只有 `.gitkeep`）。
+时间盒在 `00-plan/today.md`：`Thread`/`Runnable`/`Callable` 三种起线程方式 →
+`count++` 两万次 ×10 线程跑十轮统计「几次没到 20 万」（竞态复现）+ `javap -c` 看 `iinc` 与 `putfield` 之间的窗口 →
+`volatile` / `synchronized` / `AtomicInteger` 三条各撞一次。
+第一天只做「把共享可变状态撞出来」，不讲 API 清单。
 
 **W02 最值钱的三条（讲课直接用）**
 
@@ -83,6 +90,25 @@ attr 错和 flow 错要放不同文件（`LambdaLimits` / `LambdaLimits2` / `Lam
 且小数据量（1k×30 轮）parallel 反而慢 2~5 倍。
 **微基准重复踩坑**：活太轻会被 JIT 向量化/常量折叠（5M 平方和读出 1 ms vs 0 ms），
 要挑「算不出答案」的重活 + 两档数据量，否则数字接近 0 就是测量事故。
+**收集器四条（Day 6 实测，反直觉度最高）**：
+① **`Predicate` 的 `or().and()` 是左结合 `(a||b)&&c`**，不是布尔优先级的 `a||(b&&c)` ——
+`isDev.or(isTest).and(active)` 6 人 vs `isDev.or(isTest.and(active))` 7 人，**不报错、只少数据**；
+验证要用「短且命中」的输入才能区分两种语义。
+② **`Collectors.toMap` 走 `HashMap.merge` 不是 `put`**：value 为 null 抛**无 message** 的 NPE
+（而 `put(k,null)` 完全正常）；key 为 null 反而**允许**（`{null=50000}`）。
+`groupingBy` 则对 classifier 返回值 `requireNonNull`，null key 直接 NPE
+（`element cannot be mapped to a null key`）。两个「按 key 聚合」null 政策不一致。
+③ **「不可变」≠「不许 null」**：`Stream.toList()` 与 `toUnmodifiableList()` 返回同一个
+`ImmutableCollections$ListN`，但前者走 `listFromTrustedArrayNullsAllowed`（放行 null）、
+后者走 `listFromTrustedArray`（拒绝）。而 `List.of("a", null)` 抛 NPE 是「多固定实参」重载的另一回事。
+④ `reversed()` 作用于**左边整条链**，`nullsLast` 会被一起反转成 `nullsFirst`；
+排序 null 键要在内层 `comparing(key, nullsLast(...))` 上包，`comparing(...).nullsLast(...)` 编译不过。
+统计类下游（`averagingInt`）遇包装类型 null 拆箱 NPE，**不能补默认值 0** —— 0 进分母，
+研发组实测 25.6 vs 32.0，差 6.4 岁。
+⑤ **方法引用与 lambda 的 NPE 信息量不同**：`averagingInt(User::age)` 的拆箱 NPE **message 为空**
+（拆箱在 lambda metafactory 的 MethodHandle 适配层，无字节码位置），
+换成 `averagingInt(u -> u.age())` 立刻有 `Cannot invoke "Integer.intValue()" ...`。
+「NPE 什么都没说」可能只是写法问题，不一定是信息丢了。
 
 **W01 最值钱的一条实测结论（以后讲集合必用）**：
 「链表到 8 个就转红黑树」缺两个前提 —— **容量 ≥ 64** 且 **key 能比较大小**。

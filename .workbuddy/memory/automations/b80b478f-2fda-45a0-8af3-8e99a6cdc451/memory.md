@@ -60,3 +60,20 @@
   `toMap` 重复 key、`teeing`、`Collectors.toList()` vs `Stream.toList()` 可变性）。
 - 经验：**「XX 一定很贵」也要 fact-check** —— 今天的 `sorted` 屏障假设就是被实测推翻后翻源码才说清的；
   微基准第二次栽在「活太轻被 JIT 消掉」，数字接近 0 一律视为测量事故。
+
+## 2026-11-03（第六次执行 · W02 收尾封板）
+- 开工回归：清空 `out/` 重编 18 文件 + 跑全部 15 个入口（day1×3 / day2×2 / day3×2 / day4×2 / day5×3 / day6×3），
+  全 exit=0，无中断代码。扫 `01-notes` 未勾项：只剩 W02「过滤/排序/分组/统计」+ 未解锁里程碑；
+  `w03-concurrency-basics/` 只有 `.gitkeep`（明天的开工对象，按口径不算遗留、不动）。
+- 推进 M1 Day 6：新建 `day6/` 五个文件（`User` / `UserData` / `UserReport` / `GroupStats` / `CollectorTraps`）
+  + `day6-result.txt`（208 行）。题库 22 → 24（Q23 groupingBy / Q24 toMap）。
+- 同步：W02 笔记（Day 6 整节 8 小节 + 踩坑 7 条 + 面试 11 条 + 核心问题 Q11 + 参考要点 Q11 + 打卡 + 状态 🟩）、
+  `today.md`（下一个时间盒 = W03 Day 1 线程基础）、`MILESTONES.md`（进展表 + W02 封板 + 五条结论）、
+  工程 `README.md`（目录树 + Day 6 清单 31 行）。
+- **W02 已封板**，六天全部完成。下次起点：**W03 Day 1 = 线程基础**（`w03-concurrency-basics/` 需从 `.gitkeep` 建工程）。
+- 经验（已写进 MEMORY.md）：`Predicate` 的 `or().and()` 是左结合 `(a||b)&&c`；
+  `toMap` 走 `HashMap.merge` 而非 `put`（value 不许 null、key 允许 null）；
+  「不可变」≠「不许 null」（`Stream.toList()` 放行、`toUnmodifiableList()` 拒绝）；
+  **方法引用的拆箱 NPE 没有 message，lambda 有**。
+- 自查警告：本次先后三次「先写结论后验证」被自己抓回（Predicate 优先级、`Stream.toList()` 的 null 政策、
+  `averagingInt` 的 message），**都是靠实跑输出对不上才发现**。写注释里的「结论」前先跑一遍。

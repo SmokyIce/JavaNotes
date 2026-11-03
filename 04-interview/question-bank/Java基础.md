@@ -730,3 +730,101 @@
 
 ---
 
+
+### 23. `groupingBy` 的三个重载分别解决什么问题？返回的 Map 顺序能依赖吗？
+
+**我的回答（自己的话）：**
+
+> 三个重载不是「同一个方法的三种写法」，是三个独立问题：
+>
+> 1. `groupingBy(classifier)` —— **怎么分组**，返回 `Map<K, List<T>>`；
+> 2. `groupingBy(classifier, downstream)` —— **每组算出什么**。下游换成 `counting` / `summingInt` /
+>    `averagingInt` / `mapping` / `maxBy` / `summarizingInt`，就是「每组计数 / 求和 / 平均 / 拼串 / 取最大 / 五个指标一把抓」；
+> 3. `groupingBy(classifier, mapFactory, downstream)` —— **用什么 Map 装**。
+>    这个重载的 `mapFactory` 夹在中间，是最容易记错位置的一个。
+>
+> 顺序这条必须说清楚：默认返回 `HashMap`，key 顺序来自桶分布，**既不是插入顺序也不是字母序**，
+> 换 JDK 版本或数据量变化都可能变，绝不能当业务约定。要给前端「部门顺序稳定」的列表，
+> 就传 `TreeMap::new`（按 key 自然序）或 `LinkedHashMap::new`（按首次出现顺序）。
+> 我实测同一份数据：HashMap 出来是 `[产品, 研发, 运营, 测试]`，
+> LinkedHashMap 是 `[研发, 产品, 运营, 测试]`，TreeMap 是 `[产品, 测试, 研发, 运营]` —— 三种都不一样。
+>
+> 配套两个容易漏的点：`partitioningBy` 一定返回 `true`/`false` 两个 key（空组给空 List，能直接 `size()`），
+> `groupingBy` 的空组压根不存在（取到 null）。`averagingInt` 遇到包装类型为 null 会直接 NPE，
+> 而且用 `User::age` 这个方法引用时 **message 是空的**、栈顶还在 `Collectors` 内部 ——
+> 同一个拆箱写成 `u -> u.age()` 就会有 helpful message，因为方法引用的拆箱走 MethodHandle 适配层，
+> 没有字节码位置可指。修法必须是先 `filter` 掉，**不能补默认值 0** —— 0 会进分母，平均值就假了。
+
+**追问预判：**
+- 那 `groupingBy` 的 key 为 null 会怎样？（直接 NPE：`element cannot be mapped to a null key`，
+  内部对 classifier 返回值做了 `Objects.requireNonNull`）
+- 多级分组怎么写？（下游再放一个 `groupingBy`，Map 嵌套层数 = `groupingBy` 嵌套层数；
+  超过三层基本该考虑直接写 SQL 的 `group by`）
+- `summarizingInt` 有什么用？（一次遍历拿 count / sum / min / average / max 五个指标；
+  分成五次 `count()`/`sum()`/`max()` 就是五倍工作量）
+- `groupingBy` 和 `toMap` 都能「按 key 聚合」，什么时候用哪个？（key 唯一用 `toMap`，
+  key 会重复用 `groupingBy`；用 `toMap` 处理重复 key 等于拿合并函数重新实现一遍 `groupingBy`）
+- 并行流下有对应的收集器吗？（`groupingByConcurrent`，走 `ConcurrentHashMap`，
+  避免并行时每个线程各建一个 Map 再合并 —— 这是 W04 那条线）
+
+**项目里的实际案例：**
+
+> 场景：订单列表页要按「渠道」分组展示，前端反馈每次刷新渠道顺序都在跳，
+> 测试环境复现不了（数据量小，HashMap 桶分布刚好稳定）。
+> 根因是 `groupingBy(Order::channel)` 返回 `HashMap`，接口把 Map 的遍历顺序直接吐给了前端。
+> 改成 `groupingBy(Order::channel, TreeMap::new, toList())` 之后顺序固定。
+> 教训是：**接口里凡是「看起来有顺序」的列表，都要显式指定容器**，
+> 依赖 HashMap 顺序等于依赖实现细节。
+
+---
+
+### 24. `Collectors.toMap` 什么情况下会抛异常？为什么它和 `groupingBy` 对 null 的态度不一样？
+
+**我的回答（自己的话）：**
+
+> `toMap` 有两条爆炸路径，都是运行时的，编译期一句都不报：
+>
+> 1. **重复 key** → `IllegalStateException: Duplicate key 研发 (attempted merging values 22000 and 31000)`。
+>    它报在**收流那一刻**，栈里看不出是哪两条数据撞的，这是最难排查的地方。修法是补合并函数
+>    `(a, b) -> a`（保留先出现的）或 `Math::max`（取最大）—— 选哪个是业务语义问题，不是技术问题。
+>    写 `(a,b)->a` 之前要能说出「为什么丢掉 b 是可以的」。
+> 2. **value 为 null** → `NullPointerException`，而且 **message 是空的**。
+>
+> 第二条最容易被误判成「HashMap 不能存 null」。但 `HashMap.put(k, null)` 完全没问题。
+> 真正原因是 `toMap` 内部走 `map.merge(key, value, fn)`，而 `HashMap.merge` 第一句就是
+> `if (value == null || remappingFunction == null) throw new NullPointerException()`。
+> 一句话：**`toMap` 用的是 `merge`，不是 `put`**，`put` 的宽松规则在 `merge` 这儿被收紧了。
+>
+> 两者对 **null key** 的政策也不一样，这点最能说明「理解 API 得知道它内部调了什么」：
+> `groupingBy(User::dept)` 遇到 null 直接 NPE（`element cannot be mapped to a null key`），
+> 而 `toMap(User::dept, ...)` 对同一份数据能成功返回 `{null=50000}` ——
+> 因为前者对 classifier 返回值做了 `Objects.requireNonNull`，后者走 `HashMap.merge`，
+> 而 HashMap 是允许一个 null key 的。
+>
+> 顺带一个我实测才纠正的：`Stream.toList()` 和 `Collectors.toList()` 都是「一个有返回值」，但
+> **可变性是「可变 / 不可变 / 不可变」，null 政策却是「允许 / 允许 / 拒绝」**（第三列是 `toUnmodifiableList`）。
+> `Stream.toList()` 和 `toUnmodifiableList()` 返回同一个 `ImmutableCollections$ListN`，
+> 行为却不同 —— 别把「不可变」和「不许 null」当成一回事。
+
+**追问预判：**
+- 那 `toMap` 想保持顺序怎么办？（四参重载的 `mapFactory` 传 `LinkedHashMap::new`）
+- value 为 null 除了兜底还有别的做法吗？（提前 `filter` 掉，但要先想清楚语义：
+  是「这个人不存在」还是「这个人存在但字段未知」）
+- 一遍流怎么同时求总和和个数？（`Collectors.teeing`，JDK 12+；两个下游并行喂同一元素，
+  merger 合并结果。JDK 8 只能 `collectingAndThen` 套自定义累加器，或老实跑两遍）
+- `teeing` 和跑两遍差多少？（结果一样、只遍历一次；但 `teeing` 是 JDK 12 才有，
+  老项目用不了，别在 JDK 8 项目里答这个）
+- 那 `List.of("a", null)` 也允许吗？（不允许，NPE。它是「多个固定实参」的重载，
+  跟「单传一个数组」的行为不一样 —— 这里最容易记混）
+
+**项目里的实际案例：**
+
+> 场景：把用户列表转成 `Map<Long, Integer>`（id → 年龄）给下游做展示，
+> 本地数据都有年龄，测得好好的；上线后一部分老用户没填年龄（`age` 是 `Integer` 且为 null），
+> 接口直接 500，日志里只有一个没有 message 的 NPE，栈顶还在 `Collectors` 内部。
+> 定位方式是把 `age == null` 的条数打出来才确认。
+> 修复是把 value 侧改成 `String.valueOf(age)`（null 变字面量 `"null"`），
+> 并在返回体里显式区分「未知」和「0 岁」。
+> 教训是：**`toMap` 的两个输入函数都可能返回 null，而它只容忍 key 为 null、不容忍 value 为 null**。
+
+---

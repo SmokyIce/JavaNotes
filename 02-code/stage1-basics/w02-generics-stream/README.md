@@ -45,6 +45,7 @@ w02-generics-stream/
 ├── day4-result.txt                         Day 4 实测输出（函数式接口 + 捕获 + 8 条报错原文）
 ├── day4-bytecode.txt                       Day 4 字节码证据（javap -p / -c / -v）
 ├── day5-result.txt                         Day 5 实测输出（惰性 + 短路 + 屏障 + parallel）
+├── day6-result.txt                         Day 6 实测输出（过滤 + 排序 + 分组 + 六个收集器陷阱）
 ├── compile-errors/
 │   ├── GenericLimits.java                  故意编译不过：擦除的四条硬限制
 │   ├── GenericLimits2.java                 故意编译不过：通配符的六种拒绝
@@ -66,10 +67,16 @@ w02-generics-stream/
     ├── day4/
     │   ├── FunctionalShape.java            六段：五种形态 / Predicate 短路 / andThen vs compose / 装箱逃逸 / 自定义接口 / 目标类型
     │   └── LambdaCapture.java              六段：方法引用五连 / 值捕获 / 循环变量 / this 归属 / 实例复用 / invokedynamic
-    └── day5/
-        ├── StreamLazy.java                 四段：惰性求值 / 短路 / 屏障 / peek 与 count
-        ├── StreamOnce.java                 四段：流只能用一次 / map vs flatMap / parallel 代价 / 何时不用
-        └── FuncInterfaceRule.java          四段：抽象方法怎么数（补 Day 4 遗留）
+    ├── day5/
+    │   ├── StreamLazy.java                 四段：惰性求值 / 短路 / 屏障 / peek 与 count
+    │   ├── StreamOnce.java                 四段：流只能用一次 / map vs flatMap / parallel 代价 / 何时不用
+    │   └── FuncInterfaceRule.java          四段：抽象方法怎么数（补 Day 4 遗留）
+    └── day6/
+        ├── User.java                       15 条统一模型（故意留 name/age/dept 三个 null）
+        ├── UserData.java                   共用数据源
+        ├── UserReport.java                 A 过滤（Predicate 左结合 / null NPE / 短路）+ B 排序（多级 / reversed 陷阱 / 稳定性）
+        ├── GroupStats.java                 C 分组：groupingBy 一参/两参/三参 + 七个下游收集器 + 多级 + partitioningBy
+        └── CollectorTraps.java             D 六个陷阱：toMap 两种炸法 / groupingBy null key / teeing / 三种 toList
 ```
 
 > `compile-errors/` 不在 `src/main/java` 下，不会被 `run.bat` 编译 —— 否则整个工程编不过。
@@ -289,3 +296,58 @@ java -Dfile.encoding=UTF-8 -XX:-StackTraceInThrowable -cp out com.newt.java48.w0
 3. **`parallel` 不是「更快」，是「用核数换单次耗时」。** 实测量级：2000 万求和 3.3 倍收益，
    1000 元素 × 30 轮 **反向慢 2~5 倍**。四条标准（量 ≥ 1 万 / 计算够重 / 无共享可变状态 / 不依赖顺序）
    缺一条就别开。
+
+---
+
+## Day 6（`List<User>` 报表）实验清单
+
+数据：`UserData` 15 条，**故意留三个 null** —— `name` 1 条（U14）、`age` 2 条（何静 / 徐丽）、`dept` 1 条（U99）。
+所以每一段都会撞一次 NPE，这正是清单要留的证据。
+
+| #  | 要验证的结论 | 命令 | 实测 |
+| :- | :--- | :--- | :--- |
+| 1 | 两个 `filter` 串联等价于 `&&` | `run.bat day6.UserReport` | 在职且薪资≥20000 → **9 人** |
+| 2 | `isDev.or(isTest).and(active)` 是**左结合** | 同上 | `(a\|\|b)&&c` → **6 人**；`a\|\|(b&&c)` → **7 人**，差的是离职研发 |
+| 3 | `filter(Objects::nonNull)` 防不了字段 null | 同上 | 15 条过滤后**还是 15 条**，后面照样 NPE |
+| 4 | 名字判断撞 null 的报错原文 | 同上 | `Cannot invoke "String.startsWith(String)" because the return value of "...User.name()" is null` |
+| 5 | `findFirst` / `*Match` 短路 | 同上 | 只拿到第一个研发就停；`allMatch(都有部门)` → **false** |
+| 6 | 多级排序：部门↑ → 薪资↓ → 年龄↑ | 同上 | 研发组 45000/31000/22000/22000/18000；同薪的 22000 两人按年龄排，null 在后 |
+| 7 | **`reversed()` 反转的是整条链** | 同上 | 写法一 dept 降序且 **null 跑到最前**；写法二 dept 仍升序 |
+| 8 | `comparing(User::age)` 遇 null 直接 NPE | 同上 | `Cannot invoke "Comparable.compareTo(Object)" ... is null` |
+| 9 | `nullsLast` 必须包在内层 | 同上 | `comparing(User::age, nullsLast(Integer::compareTo))` 排完，末两位是 null |
+| 10 | `List.sort` 稳定（TimSort） | 同上 | 先按薪资升序、再按部门排，同部门内薪资顺序完整保留 |
+| 11 | `groupingBy` 一参 | `run.bat day6.GroupStats` | 4 个部门：产品 3 / 研发 5 / 运营 3 / 测试 3 |
+| 12 | 默认 `HashMap` 的 key 顺序不可依赖 | 同上 | `[产品, 研发, 运营, 测试]` —— 既非插入序也非字母序 |
+| 13 | `summingInt` 分组求和 | 同上 | `{产品=83000, 研发=138000, 运营=55000, 测试=48500}` |
+| 14 | `averagingInt(User::age)` 遇 null 拆箱 NPE，**message 为空** | 同上 | `NullPointerException，message = <空>` |
+| 14b | 同一拆箱换成 lambda 就**有** message | 同上 | `averagingInt(u -> u.age())` → `Cannot invoke "Integer.intValue()" because ... "User.age()" is null` |
+| 15 | 「补默认值 0」会改分母 | 同上 | 研发 25.6（null 当 0）vs **32.0**（先滤 null），**差 6.4 岁** |
+| 16 | `joining` 把 null 拼成字面量 | 同上 | 测试组 → `吴磊/徐丽/null` |
+| 17 | `maxBy` 的值是 `Optional` | 同上 | 研发 → 周涛(45000)；套 `collectingAndThen` 可拆掉 Optional |
+| 18 | 三参重载的 `mapFactory` 决定 key 顺序 | 同上 | HashMap `[产品,研发,运营,测试]` / LinkedHashMap `[研发,产品,运营,测试]` / TreeMap `[产品,测试,研发,运营]` |
+| 19 | 多级分组 | 同上 | 研发 → `{上海=1, 深圳=1, 北京=3}` |
+| 20 | `partitioningBy` 空组不消失 | 同上 | 产品组全在职：`partitioningBy` 的 `false` 组 = `[]`；`groupingBy` 压根没这个 key |
+| 21 | `summarizingInt` 一次拿五个指标 | 同上 | 研发 `count=5, sum=138000, min=18000, avg=27600, max=45000` |
+| 22 | `toMap` 重复 key | `run.bat day6.CollectorTraps` | `IllegalStateException: Duplicate key 研发 (attempted merging values 22000 and 31000)` |
+| 23 | `toMap` 的合并函数决定业务语义 | 同上 | `(a,b)->a` → `研发=22000`；`Math::max` → `研发=45000` |
+| 24 | **`HashMap.put(k, null)` 允许，`toMap` 的 null value 却 NPE** | 同上 | `put` 得到 `{何静=null}`；`toMap` 抛**无 message** 的 NPE（内部走 `merge`） |
+| 25 | `groupingBy` 拒绝 null key | 同上 | `element cannot be mapped to a null key` |
+| 26 | 同一份数据 `toMap` 却接受 null key | 同上 | `{null=50000}` —— 因为它走 `HashMap.merge` |
+| 27 | `teeing` 一次遍历算平均 | 同上 | 一遍与两遍结果一致：总额 374500 / 15 人 / 人均 24966.7 |
+| 28 | 三种 `toList` 的可变性 | 同上 | `ArrayList` 可 add；`ListN` 两个都抛 `UnsupportedOperationException` |
+| 29 | **三种 `toList` 的 null 政策不一致** | 同上 | `toList()` 允许 / `Stream.toList()` **允许** / `toUnmodifiableList()` **NPE** |
+| 30 | `toMap` 硬扛一对多是自找麻烦 | 同上 | `toMap + 合并函数` 与 `groupingBy + mapping` 结果相同，后者一行搞定 |
+
+**本节最值钱的三个点**
+
+1. **`Predicate` 的方法链是左结合，不是布尔优先级。** `isDev.or(isTest).and(active)` 是
+   `(a||b)&&c` 而不是 `a||(b&&c)`。这类错**不报编译错、不抛异常，只少几行数据** ——
+   条件拼装完必须拿两条边界数据验人数。
+2. **`reversed()` 作用于它左边整条链，连 `nullsLast` 也会一起反转成 `nullsFirst`。**
+   要只反转某一级，就把 `reverseOrder()` 传给那一级的 `comparing`，别在链尾按 `.reversed()`。
+3. **API 的 null 政策只能靠「它内部调了什么」推，不能凭名字猜。**
+   `toMap` 走 `HashMap.merge`（value 不许 null、key 可以 null）；
+   `groupingBy` 走 `Objects.requireNonNull`（key 不许 null）；
+   `Stream.toList()` 走 `listFromTrustedArrayNullsAllowed`（放行 null），
+   而 `toUnmodifiableList()` 走 `listFromTrustedArray`（拒绝 null）——
+   同一族 `ListN` 实现，行为却不同。

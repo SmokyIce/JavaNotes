@@ -109,12 +109,18 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > | 2026-10-30 | **W02 Day 3 · Optional** + Day 2 遗留「异常开销」 | `day3/` 两个 Demo（11 段实验）+ `day2/ExceptionCost`（两遍 JVM 参数对照）+ `day3-result.txt`；笔记 Day 3 整节 + Day 2 §10；`Java基础.md` 17 → **18 题** |
 > | 2026-11-02 | **W02 Day 4 · Lambda** | `day4/` 两个 Demo（12 段实验）+ `compile-errors/LambdaLimits{,2,3}`（8 条报错原文，拆三个文件）+ `day4-result.txt` + `day4-bytecode.txt`（javap 三段证据）；笔记 Day 4 整节 + 参考要点 Q7/Q8；`Java基础.md` 18 → **20 题** |
 > | 2026-11-02 | **W02 Day 5 · Stream** + Day 4 遗留 | `day5/` 三个 Demo（惰性 / 短路 / 屏障 / peek 坑 / 流一次性 / map vs flatMap / parallel）+ `day5-result.txt`；笔记 Day 5 整节（8 小节）+ 踩坑 4 条 + 参考要点 Q9/Q10；`Java基础.md` 20 → **22 题** |
+> | 2026-11-03 | **W02 Day 6 · `List<User>` 报表**，W02 封板 | `day6/` 三个 Demo + `User` / `UserData`（15 条含 3 种 null）+ `day6-result.txt`；笔记 Day 6 整节（8 小节）+ 踩坑 7 条 + 参考要点 Q11；`Java基础.md` 22 → **24 题** |
 >
-> 题库这边已经超额：M1 只要 8 道，现在光是泛型 3 道 + 异常 3 道 + Optional 1 道 + Lambda 2 道
-> + Stream 2 道 + W01 的 12 道集合题共 22 道。
-> 剩下 W02 只有 Day 6 的练习（`List<User>` 过滤→排序→分组→统计），然后进 W03 并发。
-
-> W02 的 Stream 练习（`List<User>` 过滤→排序→分组→统计）是**最能直接用在业务代码里**的一次练习，认真做。
+> **W02 已封板（2026-11-03）**，六天全部完成。题库 M1 只要 8 道，现在 24 道（W01 集合 12 + W02 十二道）。
+> 下一个里程碑内的主题是 **W03 并发**。
+>
+> W02 六天里最值钱的五条结论（讲课时直接能用，全部有实测数字）：
+>
+> 1. 擦除擦的是**实参**、留下的是**声明**；实参藏在子类 `Signature` 里（`getGenericSuperclass()`）。
+> 2. **CCE 抛在 `get` 那一行，不是 `add` 那一行**；`finally` 里的 `return` 才是真的把异常变没。
+> 3. **`new RuntimeException(e)` 不丢栈，是把栈切成两段**（实测 3 层 vs 5 层）；只传 message 才真丢。
+> 4. **`count()` 会跳过整条管道连 `peek` 一起**（日志 0 条）；`sorted()` 在上游带 `SORTED` 特征时是空操作。
+> 5. **`Predicate` 的 `or().and()` 是左结合 `(a||b)&&c`**，按布尔优先级写会静默少数据（实测 6 人 vs 7 人）。
 
 ---
 
