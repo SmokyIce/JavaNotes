@@ -52,11 +52,16 @@
   题库 22 → **24 题**（groupingBy / toMap 各 1 道）
 - **W02 已封板（11-03）**，六天全部完成。笔记状态改 🟩，MILESTONES 进展表已补两行 + 封板小结。
 
-**下一步**：**W03 Day 1 = 线程基础**（`w03-concurrency-basics/` 目前只有 `.gitkeep`）。
-时间盒在 `00-plan/today.md`：`Thread`/`Runnable`/`Callable` 三种起线程方式 →
-`count++` 两万次 ×10 线程跑十轮统计「几次没到 20 万」（竞态复现）+ `javap -c` 看 `iinc` 与 `putfield` 之间的窗口 →
-`volatile` / `synchronized` / `AtomicInteger` 三条各撞一次。
-第一天只做「把共享可变状态撞出来」，不讲 API 清单。
+- **W03 Day 1（11-04）线程基础**（`w03-concurrency-basics/` 从 `.gitkeep` 建工程：`day1/StartThread`
+  三种起线程 + run/start + daemon，`day1/RaceCondition` B0 基线 / B1 2 万 / B2 50 万 / C1 volatile /
+  C2 synchronized 方法级+同步块 / C3 Atomic / C4 可见性对照）+ `day1-result.txt`（147 行）
+  + `day1-bytecode.txt`（6 段 javap 证据）✅ 题库 `Java并发.md` 0 → **2 题**
+- **W02 已封板（11-03）**，六天全部完成。笔记状态改 🟩，MILESTONES 进展表已补两行 + 封板小结。
+
+**下一步**：**W03 Day 2 = `synchronized` 到底锁了谁**。时间盒在 `00-plan/today.md`：
+① 实例方法锁 `this` / 静态方法锁 `Class` / `synchronized(new Object())` 等于没锁；
+② 交叉拿锁复现死锁 + `jstack` 抓 `Found one Java-level deadlock` + `ThreadMXBean` 检测；
+③ 核对 JDK 17 偏向锁现状（JEP 374 默认关闭）；④ `day2-result.txt` + 笔记 Day 2 小节 + 勾 `synchronized`。
 
 **W02 最值钱的三条（讲课直接用）**
 
@@ -109,6 +114,19 @@ attr 错和 flow 错要放不同文件（`LambdaLimits` / `LambdaLimits2` / `Lam
 （拆箱在 lambda metafactory 的 MethodHandle 适配层，无字节码位置），
 换成 `averagingInt(u -> u.age())` 立刻有 `Cannot invoke "Integer.intValue()" ...`。
 「NPE 什么都没说」可能只是写法问题，不一定是信息丢了。
+
+**W03 Day 1 并发三条（讲线程必用）**：
+① **`count++` 是四条字节码**（`getfield` / `iconst_1` / `iadd` / `putfield`），窗口在 `iadd` 与 `putfield` 之间；
+`incVolatile` 与 `incPlain` 指令**完全相同**，差别只在字段 `flags: (0x0042) ACC_PRIVATE, ACC_VOLATILE`
+（ACC_VOLATILE 是给 getfield/putfield 加内存语义，不是多一条指令）。
+② **「本地跑不出来」有物理解释**：每线程 2 万 × 10 线程三次运行只丢 4/10、5/10、7/10，
+总耗时 30~50 ms —— JIT 预热后单线程几十微秒跑完，唤醒 10 个线程要上百微秒，**没重叠就没有竞态**。
+加量到 50 万才 10/10 轮稳定丢（最低 930367/5000000）。复现两要素 = 工作量够长 + `CountDownLatch` 同时起跑。
+③ **方法级 `synchronized` 没有 `monitorenter`**，只有 `flags: 0x0022 ACC_SYNCHRONIZED`；
+同步块才有 `monitorenter`/`monitorexit` + `Exception table` 两条 `any`（异常路径不漏锁的字节码依据）。
+④ 可见性实验两个必备：**线程握手**（`CountDownLatch` 确认已在自旋）+ **自旋上限远大于等待时间**
+（3 亿次 ≈ 200 ms，与 200 ms 等待同量级 → 连 volatile 都「没看见」，差点得出「volatile 没用」）。
+⑤ `Callable` 的异常包在 `ExecutionException.getCause()`；`start()` 二次调用抛**无 message** 的 `IllegalThreadStateException`。
 
 **W01 最值钱的一条实测结论（以后讲集合必用）**：
 「链表到 8 个就转红黑树」缺两个前提 —— **容量 ≥ 64** 且 **key 能比较大小**。

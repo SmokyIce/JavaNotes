@@ -1,119 +1,107 @@
 ---
 title: 今天做什么
-date: 2026-11-03
-weekday: 周二
+date: 2026-11-04
+weekday: 周三
 milestone: M1 · Java 地基
-task: W02 Day 6 — List<User> 过滤 → 排序 → 分组 → 统计（W02 封板）
+task: W03 Day 1 — 线程基础：把「丢更新」撞出来
 status: 已完成
 ---
 
-# 今天 · 2026-11-03（周二）· 已完成
+# 今天 · 2026-11-04（周三）· 已完成
 
-> W02 的收尾。今天这一节是整周里**最能直接搬进业务代码**的：
-> 过滤、排序、分组统计，写完之后项目里那种「三层 for 循环 + 好几个临时 Map」的代码就能删掉了。
+> 进并发。并发是 M1 里唯一「不实测就必然学错」的一块，
+> 所以今天只做一件事：**把共享可变状态用代码撞出来**，不讲 API 清单。
 > 开工第一步照旧：**回归编译 + 跑全部入口**。
 
 ## 一、先查的遗留
 
 | 检查项 | 结果 |
 | :--- | :--- |
-| 全量重编（清空 `out/`）+ 跑 12 个入口（day1×3 / day2×2 / day3×2 / day4×2 / day5×3） | ✅ 全部 exit=0，无回归，**没有中断的代码** |
-| `01-notes` 里的未勾项 | 只剩 W02 的「过滤 / 排序 / 分组 / 统计」这一条（今天做掉）+ W03 之后未解锁的里程碑，无孤儿待办 |
-| `02-code` 下的 `.gitkeep` 空目录 | `w03-concurrency-basics/` 只有 `.gitkeep`，属于**明天**的开工对象，不是遗留 |
-| Day 5 留下的两条遗留 | `sorted` 屏障 / `count` 快速路径已在 Day 5 结论化；`Files.lines()` 持句柄那条按计划留给 W08 |
+| 清空 `out/` 全量重编 w02（18 文件）+ 跑 16 个入口 | ✅ 全部 exit=0，无回归，**没有中断的代码** |
+| `01-notes` 里的未勾项 | W02 已全部勾完；W03 之后全是未解锁里程碑，无孤儿待办 |
+| w02 里剩下的「遗留」三条 | `toMap` 四参 `mapFactory`、`concurrentGroupingBy`、`Files.lines()` 持句柄 —— 分别等 W03 / W04 / W08，今天不动 |
+| `w03-concurrency-basics/` | 只有 `.gitkeep`，**今天从零建工程**（`.gitkeep` 已删） |
 
-## 二、今天的正题：`List<User>` 报表
+## 二、今天的正题：线程基础
 
-代码在 `02-code/stage1-basics/w02-generics-stream/src/main/java/com/newt/java48/w02/day6/`：
+代码在 `02-code/stage1-basics/w03-concurrency-basics/src/main/java/com/newt/java48/w03/day1/`：
 
 | 文件 | 内容 |
 | :--- | :--- |
-| `User.java` / `UserData.java` | 统一模型 + 一份 15 条的数据。**故意留三个 null**：`name` 1 条、`age` 2 条、`dept` 1 条 |
-| `UserReport.java` | A 过滤（Predicate 组合 / null 字段 NPE / 短路终止）+ B 排序（多级 / `reversed` 位置陷阱 / `nullsLast` / TimSort 稳定） |
-| `GroupStats.java` | C 分组：`groupingBy` 一参 / 两参 / 三参，七个下游收集器，多级分组，`partitioningBy` 空组，`summarizingInt` |
-| `CollectorTraps.java` | D 六个陷阱：`toMap` 重复 key / null value、`groupingBy` null key、`teeing`、三种 `toList` 的可变性与 null 政策 |
-| `day6-result.txt` | 三个入口的完整实测输出（205 行） |
-
-> 那三个 null 不是凑数：`name=null` 让 A 段炸一次，`age=null` 让 B 段和 C 段各炸一次，
-> `dept=null` 让 D 段炸一次。**每个 API 的 null 政策都留下了实测证据**，不是背来的。
+| `StartThread.java` | A~E：`extends Thread` / `Runnable` + lambda / `Callable` + `FutureTask` / `run()` vs `start()` / daemon |
+| `RaceCondition.java` | B0 基线 / B1 每线程 2 万（复现不稳）/ B2 50 万（稳定复现）/ C1 volatile / C2 synchronized（方法级 + 同步块各 5 轮）/ C3 `AtomicInteger` / C4 可见性对照 |
+| `day1-result.txt` | 两个入口的完整实测输出（147 行） |
+| `day1-bytecode.txt` | `javap` 六段证据：字段 flags / `incPlain` 四指令 / `incVolatile` 同指令 / `incSync` 只有 `ACC_SYNCHRONIZED` / `incSyncBlock` 才有 `monitorenter` + 异常路径 |
 
 ## 三、今天挖到的五个点
 
-1. **`Predicate` 的 `or().and()` 是左结合，不是布尔优先级。**
-   想表达「研发 或 (测试且在职)」，写 `isDev.or(isTest).and(active)` 得到 **6 人**，
-   写 `isDev.or(isTest.and(active))` 得到 **7 人**。差的是离职的研发王强：
-   前者先算出并集再整体 `&& active`，也就是 `(a||b)&&c`。
-   **这类错误不报编译错、不抛异常，只是少几行数据** —— 报表类需求最难发现的一种 bug。
-   （我第一版注释就写反了，跑出人数对不上才发现。）
+1. **`count++` 是四条字节码，窗口在 `iadd` 与 `putfield` 之间。**
+   `getfield` → `iconst_1` → `iadd` → `putfield`。两个线程都停在 `getfield` 读到 100，
+   各自算出 101、各自写回 —— 两次自增只多 1。
+   **能指着 `putfield` 说「窗口在这儿」，和只会背「count++ 不是原子操作」是两种水平。**
 
-2. **`reversed()` 作用在「它左边整条链」上，`nullsLast` 会被一起反转成 `nullsFirst`。**
-   同一个需求两种写法，结果完全不同：
-   `comparing(dept, nullsLast(...)).thenComparing(salary).reversed()` → 部门降序、null 跑到最前；
-   `comparing(dept, nullsLast(...)).thenComparing(salary, reverseOrder())` → 部门升序、只反转薪资。
-   这是线上「排序方向和要求反了」的常见来源。
+2. **「本地跑十遍都是对的」有物理解释，不是玄学。**
+   同一份代码，每线程 2 万次 × 10 线程 × 10 轮，今天三次运行分别丢 **4/10、5/10、7/10** ——
+   连丢几轮都不稳定；某一轮里的形状还是「前 4 轮丢 80%+ → 中间 3 轮整齐 200000 → 后面又小额丢」，
+   总耗时只有 30~50 ms。
+   原因：JIT 预热后 2 万次只要几十微秒，而唤醒 10 个线程要上百微秒，**第一个跑完第九个还没被调度**。
+   加量到每线程 50 万次，立刻 **10/10 轮丢**（最低 930367 / 5000000）。
+   → 复现竞态两个必需品：**工作量够长** + **同时起跑**（`CountDownLatch(1)`）。
 
-3. **`groupingBy` 的三层重载是三个问题**：怎么分组 / 每组算什么 / 用什么 Map 装。
-   第三个重载的 `mapFactory` **夹在中间**，最容易记错位置。实测同一份数据三种 Map 的 key 顺序：
-   `HashMap [产品, 研发, 运营, 测试]` / `LinkedHashMap [研发, 产品, 运营, 测试]` /
-   `TreeMap [产品, 测试, 研发, 运营]` —— **一个都不能当业务约定**，要稳定必须显式指定。
+3. **`volatile` 救不了 `count++`，但真的能救标志位 —— 同一天两个相反的实验。**
+   `volatile int vol; vol++` 10/10 轮丢（最低 1676548）；
+   而自旋等标志位：普通 `boolean` **20 亿次自旋始终没看见**，`volatile boolean` **1.98 亿次后看见**（51 ms）。
+   字节码上 `incVolatile()` 和 `incPlain()` 指令**一模一样**，差别只在字段 `flags: (0x0042) ACC_PRIVATE, ACC_VOLATILE`
+   —— **volatile 不是多一条指令，是给 `getfield`/`putfield` 加内存语义。**
 
-4. **统计场景里「补个默认值」是错的。** `averagingInt(User::age)` 遇 null 直接 NPE，
-   而且**方法引用版的 message 是空的**（换成 `u -> u.age()` 就有 `Cannot invoke "Integer.intValue()"`）——
-   拆箱走 MethodHandle 适配层，没有字节码位置可指。
-   但修法不能是「null 当 0」：研发组 null 当 0 得 **25.6**，先 filter 掉得 **32.0**，**差 6.4 岁** ——
-   因为 0 进了分母，分母从 4 变成 5。平均值 = 总和 / **有效样本数**，这条最容易被「让代码先跑起来」毁掉。
+4. **方法级 `synchronized` 压根没有 `monitorenter`。**（今天被 `javap` 打脸的一条）
+   方法级：`flags: (0x0022) ACC_PRIVATE, ACC_SYNCHRONIZED`，四条指令全是算术，**一条加锁指令都没有**；
+   同步块：才真的出现 `monitorenter` / `monitorexit`，而且带 `Exception table` 两条 `any` ——
+   这就是「同步块里抛异常也不会漏锁」的字节码依据。
+   两种写法实测都 0/10 轮丢。
 
-5. **`toMap` 用的是 `merge` 不是 `put`。** 这就解释了两件看起来矛盾的事：
-   `HashMap.put(k, null)` 完全没问题，但 `toMap` 的 value 为 null 直接 NPE 且**没有 message**；
-   `groupingBy` 遇 null key 抛 `element cannot be mapped to a null key`，而 `toMap` 对同一份数据
-   能成功返回 `{null=50000}`。**同样是「按 key 聚合」，null 政策不一样，只能靠记内部实现。**
-
-> 附带一条今天纠正的错误认知：我原以为「`Stream.toList()` 不可变，所以也不许 null」。
-> 实测是 **`Stream.toList()` 放行 null、`toUnmodifiableList()` 拒绝 null**，
-> 两者返回的却是同一个 `ImmutableCollections$ListN` —— 差别在入口方法
-> （`listFromTrustedArrayNullsAllowed` vs `listFromTrustedArray`）。
-> **「不可变」和「不许 null」是两件事**，别捆在一起记。
+5. **`Callable` 的异常不会直接冒泡。** `future.get()` 抛的是
+   `ExecutionException: java.lang.IllegalStateException: ...`，业务异常躺在 `getCause()` 里。
+   只 `catch (ExecutionException e)` 不打 cause，日志里就只剩一句包装异常 —— 跟丢了没区别。
+   顺带：`start()` 第二次调用抛 `IllegalThreadStateException`，**message 是 null**。
 
 ## 四、今天踩的坑
 
-- **先写结论、后写验证，被抓了一次。** A2 段的注释我先按布尔直觉写了「`a.or(b).and(c)` 等价于
-  `a || (b && c)`」，跑到人数对不上才发现是 `(a||b)&&c`。补了一个最小用例
-  （用 `"x"` 这种「短且命中」的输入才能区分两种语义）才定论。
-  —— 这已经是本周第三次「断言先于实测」了（前两次：`sorted` 一定是屏障、`average` 补默认值无害）。
-- **`averagingInt` 的空 message 极难定位。** NPE 没有 message、栈顶在 `Collectors` 内部，
-  只能靠「我把哪个字段传进去了」反推。以后看到 `Collectors` 内部的裸 NPE，第一反应查包装类型字段。
-- **`joining` 把 null 拼成字面量 `"null"`**，不抛错。测试组那行输出 `吴磊/徐丽/null`，
-  一眼看不出是脏数据还是真人叫 null。
-- **数据设计要留「同薪同部门」的样本。** 第一版数据里研发组薪资全不同，`thenComparing(age)`
-  那一级**从来没被执行过**，等于白写。把何静的薪资改成和张伟一样，年龄兜底才真正跑到。
+- **实验脚手架比被测代码更容易错。** 可见性实验第一版：主线程 `start()` 后直接 `sleep(20)` 就置位，
+  结果 reader 输出「自旋 0 次就看见了」—— 自相矛盾（没进循环怎么叫看见）。
+  加 `CountDownLatch` 握手（reader 进循环前 `countDown()`，主线程 `await()` 后再等 50 ms）才干净。
+- **自旋上限必须远大于等待时间，否则测的是「谁先到终点」。** 第二版上限设 3 亿次，
+  实测 3 亿次只要 200 ms，跟等待时间几乎相等 → 连 `volatile` 那条也「没看见」，
+  差一点得出「volatile 没用」的荒谬结论。改成上限 20 亿 / 等待 50 ms 才对上。
+- **写结论之前先跑一遍。** 字节码文件的标题我先写成「incSync 多出 monitorenter / monitorexit」，
+  `javap` 打出来一条都没有。这已经是连续第三天栽在「断言先于实测」上（W02：`sorted` 屏障、
+  `Predicate` 优先级、`toList` 的 null 政策）。低成本修法：**注释里的每个「所以」都配一条可复现命令**。
 
 ## 五、环境备忘
 
-- 跑 day6：`run.bat day6.UserReport` / `run.bat day6.GroupStats` / `run.bat day6.CollectorTraps`
-- 手动编译照旧先 `find src/main/java -name "*.java" > sources.txt`（今天 18 个文件）
-- `-Xlint:all` 会报 6 条警告，都是旧文件里**故意示范**的（rawtypes / serial / finally / try），不用管
-- 临时验证小用例记得加 `-encoding UTF-8`，否则中文注释直接编译失败（今天又踩一次）
+- 跑 day1：`run.bat`（默认 `StartThread`）/ `run.bat RaceCondition`
+- `RaceCondition` 全跑约 5 秒（C2 的 synchronized 最慢，5 轮 1890 ms）
+- 手动编译照旧先 `find src/main/java -name "*.java" > sources.txt`
+- C4 那两行「自旋 N 次」的数字每台机器都不同，**只对比「看见 / 没看见」，别对比次数**
 
 ---
 
 # 下一个时间盒（60 分钟）
 
-**W03 Day 1：线程基础 —— `Thread` / `Runnable` / 为什么会有线程安全问题**
+**W03 Day 2：`synchronized` 到底锁了谁**
 
-W02 封板，进并发。并发是 M1 里唯一「不实测就必然学错」的一块，
-所以第一天只做一件事：**把「共享可变状态」这件事用代码撞出来**，不讲 API 清单。
+今天已经证明「加锁能救」，但没回答「锁的是哪个对象」。明天只做这件事。
 
 | 时间 | 做什么 | 产出 |
 | -: | :--- | :--- |
-| 10 分钟 | 复述 W02：擦除留下什么 / `finally` 里的 return / `count()` 为什么跳过 `peek` | 口头过，卡住回看 W02 |
-| 15 分钟 | 建 `w03-concurrency-basics/` 工程（照 `w02` 的布局 + `run.bat`）；`Thread` / `Runnable` / `Callable` 三种起线程方式，各跑一次 | `day1/StartThread.java` A 段 |
-| 20 分钟 | **竞态复现**：`count++` 两万次 × 10 线程，跑十轮统计「有几次没到 20 万」；再用 `javap -c` 看 `iinc` 与 `putfield` 之间的窗口 | `day1/RaceCondition.java` B 段 |
-| 10 分钟 | 三条可见性/原子性各撞一次：`volatile` 能不能救 `count++`（不能）、`synchronized` 能不能（能）、`AtomicInteger` 能不能（能） | 同上 C 段 |
-| 5 分钟 | 输出 `day1-result.txt` + 笔记 W03 Day 1 小节 + 勾掉「Thread · Runnable」「为什么会有线程安全问题」 | 笔记 + 快照 |
+| 10 分钟 | 复述 Day 1：`count++` 的窗口在哪条指令之间 / 为什么 2 万次复现不了 / volatile 管哪件事 | 口头过，卡住回看 Day 1 |
+| 20 分钟 | **锁对象三连**：① 实例方法锁 `this`，两个实例互不影响；② 静态方法锁 `Class`，与实例锁互不影响；③ `synchronized(new Object())` 等于没锁 | `day2/LockTarget.java` A~C 段 |
+| 15 分钟 | **死锁复现**：两个线程交叉拿两把锁，统计「几秒内没跑完」；用 `jstack` 抓一次现场，再用 `ThreadMXBean.findDeadlockedThreads()` 程序化检测 | `day2/Deadlock.java` D 段 + `jstack` 快照 |
+| 10 分钟 | 锁升级的现状核对：JDK 17 里偏向锁已默认关闭（JEP 374），用 `-XX:+PrintFlagsFinal` 查 `UseBiasedLocking` 实际值，别背 JDK 8 的八股 | 同上 E 段 + 输出片段 |
+| 5 分钟 | 输出 `day2-result.txt` + 笔记 W03 Day 2 小节 + 勾掉 `synchronized` | 笔记 + 快照 |
 
-> 优先做第三个 20 分钟。**并发所有后续知识（`volatile` / `synchronized` / `Lock` / 线程池）
-> 都是在解释今天这个「没到 20 万」**。如果第三天讲 `volatile` 时还说不清它解决的是可见性还是原子性，
-> 那就是今天这一步没落地。
+> 优先做第二个 20 分钟。**「锁的是谁」答错，后面 `@Transactional` 失效、`@Async` 不生效、
+> 单例里的 `synchronized` 拦不住两个实例，全是同一个病根**（W07 会再撞一次）。
 >
-> 顺带把 W02 的两条结论带进并发：`parallel()` 共用 `ForkJoinPool.commonPool()`、
-> `ArrayList` 并发 `add` 不安全 —— 这两条正好是「共享可变状态」的第一批受害者。
+> 死锁那 15 分钟也别省：`jstack` 抓到的那段 `Found one Java-level deadlock` 是线上排查的原件，
+> 值得存进 `05-resources/cheatsheets/`。

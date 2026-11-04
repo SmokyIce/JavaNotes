@@ -110,9 +110,10 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > | 2026-11-02 | **W02 Day 4 · Lambda** | `day4/` 两个 Demo（12 段实验）+ `compile-errors/LambdaLimits{,2,3}`（8 条报错原文，拆三个文件）+ `day4-result.txt` + `day4-bytecode.txt`（javap 三段证据）；笔记 Day 4 整节 + 参考要点 Q7/Q8；`Java基础.md` 18 → **20 题** |
 > | 2026-11-02 | **W02 Day 5 · Stream** + Day 4 遗留 | `day5/` 三个 Demo（惰性 / 短路 / 屏障 / peek 坑 / 流一次性 / map vs flatMap / parallel）+ `day5-result.txt`；笔记 Day 5 整节（8 小节）+ 踩坑 4 条 + 参考要点 Q9/Q10；`Java基础.md` 20 → **22 题** |
 > | 2026-11-03 | **W02 Day 6 · `List<User>` 报表**，W02 封板 | `day6/` 三个 Demo + `User` / `UserData`（15 条含 3 种 null）+ `day6-result.txt`；笔记 Day 6 整节（8 小节）+ 踩坑 7 条 + 参考要点 Q11；`Java基础.md` 22 → **24 题** |
+> | 2026-11-04 | **W03 Day 1 · 线程基础**（`w03-concurrency-basics/` 从 `.gitkeep` 建工程） | `day1/StartThread`（三种起线程 + run/start + daemon）+ `day1/RaceCondition`（基线 / 2 万 vs 50 万对照 / volatile / synchronized 方法级与同步块 / Atomic / 可见性对照）+ `day1-result.txt`（147 行）+ `day1-bytecode.txt`（6 段 javap 证据）；笔记 Day 1 整节（8 小节）+ 踩坑 6 条 + 参考要点「为什么会有线程安全问题」；`Java并发.md` 0 → **2 题** |
 >
 > **W02 已封板（2026-11-03）**，六天全部完成。题库 M1 只要 8 道，现在 24 道（W01 集合 12 + W02 十二道）。
-> 下一个里程碑内的主题是 **W03 并发**。
+> 当前在 **W03 并发**，Day 1 已完成（2026-11-04），题库 `Java并发.md` 开了 2 道。
 >
 > W02 六天里最值钱的五条结论（讲课时直接能用，全部有实测数字）：
 >
@@ -186,7 +187,19 @@ lambda 缺目标类型 / 方法引用五连 / 值捕获 / 循环变量 / `this` 
 `compile-errors/LambdaLimits{,2,3}` 收 8 条报错原文 —— 必须拆三个文件，否则 attribution 阶段的报错
 会让 FLOW 分析整个跳过，`effectively final` 那条根本不出现。
 
-下一个时间盒（60 分钟）：**W02 Day 5 · Stream** —— 重点不是 API 列表，而是「谁在什么时候执行」：
-中间操作只是记账（惰性），终止操作才真跑；短路（`findFirst` / `anyMatch` / `limit`）能在无限流上停下来，
-而 `sorted` 必须消费全部；以及一个流只能用一次。
+**W03 Day 1 已完成（2026-11-04）**：线程基础。`w03-concurrency-basics/` 工程从零建起，
+`day1/StartThread`（三种起线程 + `run()` vs `start()` + daemon）+ `day1/RaceCondition`
+（B0 基线 / B1 每线程 2 万 / B2 50 万 / C1 volatile / C2 synchronized 方法级与同步块 / C3 Atomic / C4 可见性对照），
+产出 `day1-result.txt`（147 行）+ `day1-bytecode.txt`（6 段 `javap` 证据）。
+三条核心结论：① `count++` 是 `getfield`/`iconst_1`/`iadd`/`putfield` 四条指令，窗口在 `iadd` 与 `putfield` 之间；
+② 每线程 2 万次时三次运行只丢 4~7/10 轮（JIT 预热后单线程几十微秒跑完，10 个线程没重叠），
+加量到 50 万次才 10/10 轮稳定复现；③ 方法级 `synchronized` **没有** `monitorenter`，
+只有 `ACC_SYNCHRONIZED` 标志（原本以为有，被 `javap` 打脸），同步块才发指令并带异常路径。
+
+下一个时间盒（60 分钟）：**W03 Day 2 · `synchronized` 到底锁了谁** ——
+Day 1 已经证明「加锁能救丢更新」，但没回答「锁的是哪个对象」。明天做四件事：
+① 实例方法锁 `this`（两个实例互不影响）/ 静态方法锁 `Class`（与实例锁互不影响）/ `synchronized(new Object())` 等于没锁；
+② 交叉拿锁复现死锁，`jstack` 抓一次 `Found one Java-level deadlock` 现场 + `ThreadMXBean` 程序化检测；
+③ 核对 JDK 17 里偏向锁的现状（JEP 374 默认关闭），别背 JDK 8 的八股；
+④ 输出 `day2-result.txt` + 笔记 Day 2 小节。
 时间盒见 `00-plan/today.md`（每天开工前先打开它，收工时覆盖）。

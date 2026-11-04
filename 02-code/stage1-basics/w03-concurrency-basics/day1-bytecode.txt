@@ -1,0 +1,88 @@
+# Day 1 字节码证据 · javap（看「一个 ++ 到底被拆成几条指令」）
+# 生成时间：2026-11-04 09:51
+# 命令：javap -p -c / javap -v -p -cp out com.newt.java48.w03.day1.RaceCondition
+
+===== 1. 四个计数器字段（javap -p）=====
+  private int plain;
+  private volatile int vol;
+  private int sync;
+  private final java.util.concurrent.atomic.AtomicInteger atomic;
+
+===== 2. 字段 flags：plain 与 vol 的差别只有 ACC_VOLATILE（javap -v）=====
+  private int plain;
+    descriptor: I
+    flags: (0x0002) ACC_PRIVATE
+--
+  private volatile int vol;
+    descriptor: I
+    flags: (0x0042) ACC_PRIVATE, ACC_VOLATILE
+--
+  private int sync;
+    descriptor: I
+    flags: (0x0002) ACC_PRIVATE
+===== 3. incPlain：一个 ++  =  getfield / iconst_1 / iadd / putfield =====
+  private void incPlain();
+    Code:
+       0: aload_0
+       1: dup
+       2: getfield      #267                // Field plain:I
+       5: iconst_1
+       6: iadd
+       7: putfield      #267                // Field plain:I
+      10: return
+
+===== 4. incVolatile：指令一模一样，差别只在字段访问带 volatile 语义 =====
+  private void incVolatile();
+    Code:
+       0: aload_0
+       1: dup
+       2: getfield      #270                // Field vol:I
+       5: iconst_1
+       6: iadd
+       7: putfield      #270                // Field vol:I
+      10: return
+
+===== 5. incSync：方法级 synchronized —— 没有任何加锁指令，只有 flags 里的 ACC_SYNCHRONIZED =====
+  private synchronized void incSync();
+    descriptor: ()V
+    flags: (0x0022) ACC_PRIVATE, ACC_SYNCHRONIZED
+    Code:
+      stack=3, locals=1, args_size=1
+         0: aload_0
+         1: dup
+         2: getfield      #273                // Field sync:I
+         5: iconst_1
+         6: iadd
+         7: putfield      #273                // Field sync:I
+        10: return
+      LineNumberTable:
+        line 201: 0
+        line 202: 10
+
+===== 6. incSyncBlock：同步块 —— 这次真的出现 monitorenter / monitorexit（还有异常路径）=====
+  private void incSyncBlock();
+    Code:
+       0: aload_0
+       1: dup
+       2: astore_1
+       3: monitorenter
+       4: aload_0
+       5: dup
+       6: getfield      #273                // Field sync:I
+       9: iconst_1
+      10: iadd
+      11: putfield      #273                // Field sync:I
+      14: aload_1
+      15: monitorexit
+      16: goto          24
+      19: astore_2
+      20: aload_1
+      21: monitorexit
+      22: aload_2
+      23: athrow
+      24: return
+    Exception table:
+       from    to  target type
+           4    16    19   any
+          19    22    19   any
+

@@ -77,3 +77,17 @@
   **方法引用的拆箱 NPE 没有 message，lambda 有**。
 - 自查警告：本次先后三次「先写结论后验证」被自己抓回（Predicate 优先级、`Stream.toList()` 的 null 政策、
   `averagingInt` 的 message），**都是靠实跑输出对不上才发现**。写注释里的「结论」前先跑一遍。
+
+## 2026-11-04（第七次执行 · 开 W03 并发）
+- 开工回归：清空 `out/` 重编 w02（18 文件）+ 跑全部 16 个入口，全 exit=0，无中断代码；
+  扫 `01-notes` 未勾项：W02 已全勾，剩余都是未解锁里程碑；`w03-concurrency-basics/` 只有 `.gitkeep` → 今天从零建工程（已删 .gitkeep）。
+- 推进 W03 Day 1：新建 `day1/StartThread`（A~E：三种起线程 / run vs start / daemon）
+  + `day1/RaceCondition`（B0 基线 / B1 2 万 / B2 50 万 / C1 volatile / C2 方法级+同步块各 5 轮 /
+  C3 Atomic / C4 可见性对照）+ `run.bat` / `run.sh` / `README.md` + `day1-result.txt`（147 行）+ `day1-bytecode.txt`（88 行）。
+- 题库 `Java并发.md` 0 → 2 题（Q1 字节码窗口，Q2 volatile 边界）。
+- 同步：W03 笔记（Day 1 整节 8 小节 + 踩坑 6 条 + 面试 12 条 + 参考要点 + 打卡）、`today.md`、`MILESTONES.md`、工程 `README.md`。
+- 下次起点：**W03 Day 2 = `synchronized` 锁的是谁**（this / Class / 临时对象 + 死锁 + jstack + ThreadMXBean + JDK 17 偏向锁现状）。
+- 经验：**并发实验的脚手架比被测代码更容易错** —— 没有线程握手会测出「自旋 0 次就看见了」；
+  自旋上限必须远大于等待时间，否则测的是「谁先到终点」；复现竞态两要素 = 工作量够长 + CountDownLatch 同时起跑。
+  另外「方法级 synchronized 有 monitorenter」这个想当然又被 javap 打脸（只有 ACC_SYNCHRONIZED）——
+  连续第三天栽在「断言先于实测」。
