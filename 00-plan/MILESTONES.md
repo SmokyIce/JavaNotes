@@ -111,9 +111,10 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > | 2026-11-02 | **W02 Day 5 · Stream** + Day 4 遗留 | `day5/` 三个 Demo（惰性 / 短路 / 屏障 / peek 坑 / 流一次性 / map vs flatMap / parallel）+ `day5-result.txt`；笔记 Day 5 整节（8 小节）+ 踩坑 4 条 + 参考要点 Q9/Q10；`Java基础.md` 20 → **22 题** |
 > | 2026-11-03 | **W02 Day 6 · `List<User>` 报表**，W02 封板 | `day6/` 三个 Demo + `User` / `UserData`（15 条含 3 种 null）+ `day6-result.txt`；笔记 Day 6 整节（8 小节）+ 踩坑 7 条 + 参考要点 Q11；`Java基础.md` 22 → **24 题** |
 > | 2026-11-04 | **W03 Day 1 · 线程基础**（`w03-concurrency-basics/` 从 `.gitkeep` 建工程） | `day1/StartThread`（三种起线程 + run/start + daemon）+ `day1/RaceCondition`（基线 / 2 万 vs 50 万对照 / volatile / synchronized 方法级与同步块 / Atomic / 可见性对照）+ `day1-result.txt`（147 行）+ `day1-bytecode.txt`（6 段 javap 证据）；笔记 Day 1 整节（8 小节）+ 踩坑 6 条 + 参考要点「为什么会有线程安全问题」；`Java并发.md` 0 → **2 题** |
+> | 2026-11-05 | **W03 Day 2 · `synchronized` 锁的是谁** | `day2/LockTarget`（实例锁 this / 静态锁 Class / `new Object()` 等于没锁 / 字符串常量全局锁）+ `day2/Deadlock`（交叉死锁 + `ThreadMXBean` 检测 / 可重入 / 活锁 4/5 + 随机退避 + 全局定序）+ `day2-result.txt`（116 行）+ `day2-deadlock-jstack.txt`（jstack 原件 142 行）；笔记 Day 2 整节（8 小节）+ 踩坑 5 条 + 参考要点「锁的是谁」「死锁怎么排查」；`Java并发.md` 2 → **4 题**；`cheatsheets/JVM排查命令.md` 补「死锁」小节 |
 >
-> **W02 已封板（2026-11-03）**，六天全部完成。题库 M1 只要 8 道，现在 24 道（W01 集合 12 + W02 十二道）。
-> 当前在 **W03 并发**，Day 1 已完成（2026-11-04），题库 `Java并发.md` 开了 2 道。
+> **W02 已封板（2026-11-03）**，六天全部完成。题库 M1 只要 8 道，现在 24 + 4 道。
+> 当前在 **W03 并发**，Day 1（11-04）、Day 2（11-05）已完成，`synchronized` 已勾，题库 `Java并发.md` 4 道。
 >
 > W02 六天里最值钱的五条结论（讲课时直接能用，全部有实测数字）：
 >
@@ -196,10 +197,21 @@ lambda 缺目标类型 / 方法引用五连 / 值捕获 / 循环变量 / `this` 
 加量到 50 万次才 10/10 轮稳定复现；③ 方法级 `synchronized` **没有** `monitorenter`，
 只有 `ACC_SYNCHRONIZED` 标志（原本以为有，被 `javap` 打脸），同步块才发指令并带异常路径。
 
-下一个时间盒（60 分钟）：**W03 Day 2 · `synchronized` 到底锁了谁** ——
-Day 1 已经证明「加锁能救丢更新」，但没回答「锁的是哪个对象」。明天做四件事：
-① 实例方法锁 `this`（两个实例互不影响）/ 静态方法锁 `Class`（与实例锁互不影响）/ `synchronized(new Object())` 等于没锁；
-② 交叉拿锁复现死锁，`jstack` 抓一次 `Found one Java-level deadlock` 现场 + `ThreadMXBean` 程序化检测；
-③ 核对 JDK 17 里偏向锁的现状（JEP 374 默认关闭），别背 JDK 8 的八股；
-④ 输出 `day2-result.txt` + 笔记 Day 2 小节。
+**W03 Day 2 已完成（2026-11-05）**：`synchronized` 到底锁了谁。
+`day2/LockTarget`（A 实例方法锁 `this`：同实例第二个排队 414 ms / 两实例都 0 ms / 与 `synchronized(this)` 抢同一 monitor，
+排队 340 ms；B 静态方法锁 `Class`：排队 400 ms、`holdsLock(ClassLock.class)=true`、与实例锁并行 412 ms；
+C `synchronized(new Object())` 丢 2846644/5000000 且耗时仅 46 ms vs 真锁 339 ms，外加字符串常量的跨类全局锁）
++ `day2/Deadlock`（D1 交叉死锁 + `findDeadlockedThreads()`；D2 可重入持计数；D3a 活锁 4/5、D3b 随机退避、
+D3c 全局定序 4000/4000 零重试）。产出 `day2-result.txt`（116 行）+ `day2-deadlock-jstack.txt`（jstack 原件 142 行）。
+
+四条核心结论：① 三种写法三把锁，证据用 `Thread.holdsLock()` + 「排队时长」，**总耗时会骗人**；
+② `static synchronized` 保护不了实例字段（并行实测 412 ms）—— `@Transactional` 失效那一类 bug 的病根；
+③ **「加了锁反而变快」几乎一定是锁没生效**（`new Object()` 46 ms vs 真锁 339 ms）；
+④ 死锁的发现（`ThreadMXBean`）/ 确认（`jstack` 三样）/ 破解（全局定序）是三件事；活锁是概率的，死锁是确定的。
+
+下一个时间盒（60 分钟）：**W03 Day 3 · `volatile` 内存语义 + happens-before + DCL** ——
+① happens-before 八条里挑四条能实测的，每条写一个「去掉就错」的最小 Demo；
+② DCL 单例不加 volatile 到底会拿到什么，用「构造里 sleep + 字段赋值」放大窗口跑 100 轮统计；
+③ `javap` 看 volatile 字段读写的屏障落点；④ 输出 `day3-result.txt` + 勾掉 `volatile`。
+`Lock` / AQS / `wait-notify` 排 Day 4。
 时间盒见 `00-plan/today.md`（每天开工前先打开它，收工时覆盖）。

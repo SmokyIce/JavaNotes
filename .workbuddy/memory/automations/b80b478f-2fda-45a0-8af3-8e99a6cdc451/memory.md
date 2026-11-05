@@ -91,3 +91,17 @@
   自旋上限必须远大于等待时间，否则测的是「谁先到终点」；复现竞态两要素 = 工作量够长 + CountDownLatch 同时起跑。
   另外「方法级 synchronized 有 monitorenter」这个想当然又被 javap 打脸（只有 ACC_SYNCHRONIZED）——
   连续第三天栽在「断言先于实测」。
+
+## 2026-11-05（第八次执行 · W03 Day 2）
+- 开工回归：清空 `out/` 重编 w03（4 文件）+ 跑 day1 两个入口，全 exit=0，无中断代码；
+  `01-notes` 未勾项只剩 W03 的 `synchronized`/`volatile`/`Lock`，其余是未解锁里程碑；`02-code` 无空目录 → **无遗留需补**。
+- 推进 W03 Day 2：新建 `day2/LockTarget`（A 实例锁 this / B 静态锁 Class / C new Object() 等于没锁 + 字符串常量）
+  + `day2/Deadlock`（D1 交叉死锁 + ThreadMXBean / D2 可重入 / D3a 活锁 5 次统计 / D3b 随机退避 / D3c 全局定序）
+  + `day2-result.txt`（116 行）+ `day2-deadlock-jstack.txt`（142 行，含 Found one Java-level deadlock）。
+- 题库 `Java并发.md` 2 → 4 题；`cheatsheets/JVM排查命令.md` 补「死锁」小节；`run.sh`/`run.bat` 支持第 2 参数透传。
+- 同步：W03 笔记（Day 2 整节 8 小节 + 踩坑 5 条 + 参考要点两条 + 打卡 + 勾 `synchronized`）、`today.md`、`MILESTONES.md`、工程 `README.md`。
+- 下次起点：**W03 Day 3 = `volatile` 内存语义 + happens-before + DCL**（`Lock`/AQS/`wait-notify` 排 Day 4）。
+- 新增经验（已写进 MEMORY.md）：并发 demo 各段会互相污染（复用已死锁的锁对象 → 整段静默无输出）；
+  **Git Bash 的 `$!` 是 MSYS pid，jstack 必须用 `ProcessHandle.current().pid()`**，且要在一条命令内完成抓取；
+  线程名带 `→` 会让 Windows 下 jstack 输出乱码 → 用纯 ASCII；
+  `tryLock` 不加退避 = 活锁（实测 4/5），"会活锁"只能靠多次统计证明，不能由单次输出断言。

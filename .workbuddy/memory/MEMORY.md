@@ -58,10 +58,17 @@
   + `day1-bytecode.txt`（6 段 javap 证据）✅ 题库 `Java并发.md` 0 → **2 题**
 - **W02 已封板（11-03）**，六天全部完成。笔记状态改 🟩，MILESTONES 进展表已补两行 + 封板小结。
 
-**下一步**：**W03 Day 2 = `synchronized` 到底锁了谁**。时间盒在 `00-plan/today.md`：
-① 实例方法锁 `this` / 静态方法锁 `Class` / `synchronized(new Object())` 等于没锁；
-② 交叉拿锁复现死锁 + `jstack` 抓 `Found one Java-level deadlock` + `ThreadMXBean` 检测；
-③ 核对 JDK 17 偏向锁现状（JEP 374 默认关闭）；④ `day2-result.txt` + 笔记 Day 2 小节 + 勾 `synchronized`。
+- **W03 Day 2（11-05）`synchronized` 锁的是谁**（`day2/LockTarget`：A 实例锁 this 三小段 / B 静态锁 Class
+  三小段 / C `new Object()` 等于没锁 + 字符串常量全局锁；`day2/Deadlock`：D1 交叉死锁 + `findDeadlockedThreads`、
+  D2 可重入与 `ReentrantLock.holdCount`、D3 活锁 5 次统计 + 随机退避 + 全局定序）+ `day2-result.txt`（116 行）
+  + `day2-deadlock-jstack.txt`（jstack 原件 142 行）✅ 题库 `Java并发.md` 2 → **4 题**；
+  `cheatsheets/JVM排查命令.md` 补「死锁」小节；`run.sh`/`run.bat` 支持第 2 参数透传
+- **W02 已封板（11-03）**，六天全部完成。笔记状态改 🟩，MILESTONES 进展表已补两行 + 封板小结。
+
+**下一步**：**W03 Day 3 = `volatile` 内存语义 + happens-before + DCL**。时间盒在 `00-plan/today.md`：
+① happens-before 挑四条可实测的，每条一个「去掉就错」的最小 Demo；
+② DCL 不加 volatile 会拿到什么（构造里 sleep + 字段赋值放大窗口，跑 100 轮统计）；
+③ `javap` 看屏障落点；④ 输出 `day3-result.txt` + 勾 `volatile`。`Lock`/AQS/`wait-notify` 排 Day 4。
 
 **W02 最值钱的三条（讲课直接用）**
 
@@ -127,6 +134,25 @@ attr 错和 flow 错要放不同文件（`LambdaLimits` / `LambdaLimits2` / `Lam
 ④ 可见性实验两个必备：**线程握手**（`CountDownLatch` 确认已在自旋）+ **自旋上限远大于等待时间**
 （3 亿次 ≈ 200 ms，与 200 ms 等待同量级 → 连 volatile 都「没看见」，差点得出「volatile 没用」）。
 ⑤ `Callable` 的异常包在 `ExecutionException.getCause()`；`start()` 二次调用抛**无 message** 的 `IllegalThreadStateException`。
+
+**W03 Day 2 四条（讲锁必用，全有实测数字）**：
+① **三种写法三把锁**：实例方法锁 `this`（同实例第二个排队 414 ms、两实例都 0 ms）、
+静态方法锁 `Class`（`holdsLock(ClassLock.class)=true`，与实例锁并行 412 ms）、代码块锁括号里的对象。
+证明手段是 `Thread.holdsLock(obj)` + 方法入口算「排队多久」，**不要用总耗时**（会被启动/JIT 污染）。
+② **`static synchronized` 保护不了实例字段** —— `@Transactional` 失效 / `@Async` 不同步的同一个病根。
+两个方法改同一个 `static Map` 却各加各的锁，等于没加。
+③ **`synchronized(new Object())` 丢 2846644/5000000 且只花 46 ms，真锁 339 ms** ——
+**「加了锁反而更快」几乎一定是锁没生效**，这是最好用的反直觉信号。锁字符串常量=`"LOCK"` 驻留 → 跨类全局锁（挡 354 ms）。
+④ **死锁的发现/确认/破解是三件事**：`findDeadlockedThreads()`（`getThreadInfo(ids, true, true)` 两个 true 不能省）
+/ `jstack` 看 `waiting to lock … which is held by …` 成对 + 行号 + `Found N deadlock`
+/ 全局定序（2000 轮零重试 1 ms）。`isAlive()==true` 不代表在干活，`blockedCount` 不是毫秒数。
+**`tryLock` 不加退避会活锁**（5 次里 4 次跑不完）：死锁确定、活锁概率，排查路径完全不同。
+⑤ 偏向锁现状：JDK 17 `UseBiasedLocking=false`（JEP 374）、显式开启只剩弃用警告、**JDK 25 参数已删**
+（`Unrecognized VM option`）。别背 JDK 8 的「无锁→偏向→轻量→重量」。
+
+**并发实验脚手架的三个新坑**：demo 各段会互相污染（D2 复用 D1 已死锁的锁对象 → 整段无输出、join 静默超时）；
+`jstack` 要抓现场必须「起进程→等→读程序自己打印的 `ProcessHandle.current().pid()`→jstack」一条命令做完，
+**Git Bash 的 `$!` 是 MSYS pid，不是 Windows 原生 pid**；线程名别带 `→` 之类符号，Windows 下 jstack 输出会乱码。
 
 **W01 最值钱的一条实测结论（以后讲集合必用）**：
 「链表到 8 个就转红黑树」缺两个前提 —— **容量 ≥ 64** 且 **key 能比较大小**。

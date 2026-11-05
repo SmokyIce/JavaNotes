@@ -108,23 +108,146 @@
 
 ---
 
-### 3.
+### 3. `synchronized` 到底锁的是谁？修饰实例方法、静态方法、代码块，锁对象分别是什么？
 
 **我的回答（自己的话）：**
 
+> 三种写法，三把不同的锁：
+>
+> | 写法 | 锁对象 | 实测证据 |
+> | :--- | :--- | :--- |
+> | `synchronized` 实例方法 | **`this`**（当前实例） | 同一实例两线程：第二个排队 414 ms；两个不同实例：都排队 0 ms |
+> | `synchronized` 静态方法 | **`Xxx.class`**（Class 对象） | 静态方法里 `Thread.holdsLock(Xxx.class)==true`，`holdsLock(任意实例)==false` |
+> | `synchronized (obj)` | **`obj` 指向的那个对象** | `synchronized(inst)` 持锁 400 ms 时，另一线程调 `inst.work()` 排队 340 ms |
+>
+> 我用的证据不是背结论，是两条可以直接打印的东西：
+> `Thread.holdsLock(obj)`（问 JVM 你现在拿的是谁的锁），
+> 以及在方法入口算「从调用到真正进来等了多久」——**被挡住时这个数字不是 0**。
+>
+> 三个最容易错的推论：
+>
+> 1. **两个实例的 synchronized 方法互不阻塞**（实测总耗时 409 ms ≈ 一个 400 ms 的量级）。
+>    所以「单例里加 synchronized」和「多例里加 synchronized」根本不是一回事。
+> 2. **静态锁和实例锁是两把锁**，实测 412 ms 并行。静态同步方法保护不了实例字段 ——
+>    这条直接对应 `@Transactional` 拦不住、`@Async` 不生效那一类 bug 的同一个病根。
+> 3. **`synchronized (new Object())` 等于没锁**。每次进临界区都是一把新锁，谁也不挡谁：
+>    10 线程 × 50 万次实测丢 2846644 / 5000000，而且**比真锁还快**（46 ms vs 339 ms）——
+>    快出来的那部分，就是没加锁省下的。
+>
+> 还有个特别阴的：**锁字符串常量等于拿了一把全局锁**。
+> `"LOCK"` 字面量是驻留的，本类的 `"LOCK"` 和另一个类的 `LOCK` 字段 `==` 为 true，
+> 实测两边的 `synchronized` 会互相阻塞（排队 354 ms）。
+> 锁对象要 `private final Object lock = new Object()` —— 专用、私有、final、不可变。
+
 **追问预判：**
+- 那到底该锁什么？（锁「不变的那个东西」：要保护的状态本身，或者一个专用的 `private final` 锁对象。
+  锁 `this` 的问题是外部代码也能拿到这个 monitor 跟你抢）
+- `synchronized` 能重入吗？怎么实现的？（能。同一线程再进同一把锁，monitor 的持有计数 +1，
+  退出 -1，归零才真正释放。实测递归 3 层正常返回；所以「自己等自己」这种死锁不存在）
+- 锁升级的过程？（无锁 → 偏向 → 轻量（自旋 CAS）→ 重量（monitor 挂起）。
+  但**别背 JDK 8 的八股**：JDK 15 起偏向锁默认关闭（JEP 374），
+  实测 JDK 17 `UseBiasedLocking = false {product} {default}`，
+  显式 `-XX:+UseBiasedLocking` 只剩一句「deprecated in 15.0」警告；
+  JDK 25 直接 `Unrecognized VM option` —— 参数已经删了）
+- 那「偏向锁」面试还考吗？（考的是**你知道它没了**。答「JDK 17 起默认关闭，因为撤销偏向的代价
+  在大量并发场景下比收益还高」比背「偏向锁把线程 ID 写进 Mark Word」加分得多）
+- 方法级和代码块的字节码区别？（方法级没有 `monitorenter`，只有方法 flags `ACC_SYNCHRONIZED`；
+  代码块才有指令 + 异常表兜底）
 
 **项目里的实际案例：**
+
+> 场景：一个工具类写了 `public static synchronized void refreshCache()`，
+> 同时另一个地方 `synchronized (this)` 改同一份 `static Map` —— 以为是互斥的，其实两把锁，
+> 并发下照样丢更新。后来统一成 `private static final Object CACHE_LOCK`，两处都锁它。
+> **「锁的是谁」答错，代码看起来完全正常，只有压测才露头。**
 
 ---
 
-### 4.
+### 4. 死锁怎么排查？线上只能用 jstack 的时候，你从哪几行看出问题？
 
 **我的回答（自己的话）：**
 
+> 先分成两件事：**怎么发现**、**怎么确认**。
+>
+> **怎么发现**（程序里）：`ThreadMXBean.findDeadlockedThreads()`。
+> 它是 JVM 自己算的锁图环检测，返回死锁线程 id 数组，比人眼看日志靠谱：
+>
+> ```java
+> ThreadMXBean mx = ManagementFactory.getThreadMXBean();
+> long[] ids = mx.findDeadlockedThreads();      // null = 没检出
+> ThreadInfo[] infos = mx.getThreadInfo(ids, true, true);  // 后两个 true 才带锁信息
+> ```
+>
+> 实测输出（两个线程互相等）：
+>
+> ```text
+> - D1-A-then-B  state=BLOCKED
+>     在等 : java.lang.Object @0x5197848c（被 D1-B-then-A 持有）
+>     已持有: Object @0x20ad9418（栈深度 0，位置 Deadlock.lambda$sectionD1$0:65）
+> - D1-B-then-A  state=BLOCKED
+>     在等 : java.lang.Object @0x20ad9418（被 D1-A-then-B 持有）
+> ```
+>
+> 两行对着读就是环：A 等 0x...48c，那把在 B 手里；B 等 0x...418，那把在 A 手里。
+>
+> **怎么确认**（线上）：`jstack <pid>`，找 `Found one Java-level deadlock:`。
+> 原件存在 `w03-concurrency-basics/day2-deadlock-jstack.txt`，关键结构是：
+>
+> ```text
+> Found one Java-level deadlock:
+> "D1-A-then-B":
+>   waiting to lock monitor 0x...b620 (object 0x...f060, a java.lang.Object),
+>   which is held by "D1-B-then-A"
+> "D1-B-then-A":
+>   waiting to lock monitor 0x...bfc0 (object 0x...f050, a java.lang.Object),
+>   which is held by "D1-A-then-B"
+> ...
+> 	at ...Deadlock.lambda$sectionD1$0(Deadlock.java:65)
+> 	- waiting to lock <0x...f060>
+> 	- locked <0x...f050>
+> Found 1 deadlock.
+> ```
+>
+> 看三样：**谁等谁**（第一段就够）、**业务代码在第几行**（`Deadlock.java:65` 这种）、
+> **结尾那行 `Found N deadlock`**（没有这行就说明不是死锁，是别的卡住）。
+>
+> **几个容易踩的点：**
+>
+> - **`isAlive() == true` 不等于在干活。** 卡死的线程一直是 BLOCKED，还活着，但不推进。
+> - **`blockedCount` 不是等待毫秒数**，是这个线程「进过多少次阻塞」，别拿它算等了多久。
+> - **只有一把锁的时候不可能死锁**，死锁至少要两把 + 反向获取。
+> - **jstack 抓不到的原因通常是你抓晚了**：进程还在，但你 `jstack` 的时候它已经退出，
+>   报 `no such process`。我在 Windows 上还踩了一个：Git Bash 里 `$!` 拿到的是 MSYS 的 pid，
+>   跟 Windows 原生 pid 不是同一个数 —— 必须用程序自己打印的 `ProcessHandle.current().pid()`。
+>
+> **死锁的四个条件**：互斥、持有并等待、不可剥夺、循环等待。破一个就行，
+> 工程上最常用的是**破循环等待**：全局定序。
+> 实测两个线程按 `identityHashCode` 排序后加锁，2000 轮 × 2 线程 = 4000 次，结果精确 4000、耗时 1 ms、零重试。
+>
+> **还有一个比死锁更阴的：活锁。** 用 `tryLock(timeout)` 拿不到就放掉重试，看起来是标准解法，
+> 但不加退避的话两个线程会踩同一个节拍反复对撞 —— 实测 5 次里 **4 次 2 秒内一个都没跑完**，
+> 线程都在跑、CPU 也在烧，就是没人推进。加随机退避后 0~1 次重试就成功。
+> **区别**：死锁是确定的（每次必卡），活锁是概率的（有时能自己走出来）——所以它更难排查。
+
 **追问预判：**
+- 生产上怎么预防？（① 加锁全局定序；② 用 `tryLock` 带超时，超时就放弃并回滚；
+  ③ 缩小锁粒度、不要在锁里调 RPC / 做 IO；④ 关键路径上不做嵌套锁）
+- 那 `synchronized` 能设置超时吗？（不能，`synchronized` 只能无限等。
+  要超时就得换 `ReentrantLock.tryLock(timeout)`）
+- 死锁能被 JVM 自动解开吗？（不能。JDK 没有自动侦测并 kill 的机制，
+  只能靠外部监控调用 `findDeadlockedThreads()` 报警，或者人工 dump 线程后重启）
+- 线程 dump 里除了 `Found one Java-level deadlock` 还看什么？（看大量 BLOCKED 集中在哪个 monitor、
+  看 `at ...` 是否集中在同一个业务方法、看是不是 `waiting on condition`（那是等 IO 或等信号，不是死锁））
+- `findDeadlockedThreads` 和 `findMonitorDeadlockedThreads` 区别？（后者只查 synchronized 监视器，
+  前者连 `ReentrantLock` 这类 `AbstractOwnableSynchronizer` 一起查，现在用前者）
 
 **项目里的实际案例：**
+
+> 场景：任务调度里两个定时任务，一个先锁任务表再更新用户表，另一个反过来，
+> 平时错峰跑没事，某天大促两个撞上，整个调度线程池 8 个线程全 BLOCKED，任务全停。
+> 定位方式：`jstack` 抓到的就是上面那个结构，两段 `waiting to lock` 指向对方的 `locked`。
+> 修法是统一按表名排序加锁，并给 `tryLock` 加 3 秒超时兜底 —— 超时就放弃本轮、记日志、下一轮再来。
+> **教训：锁的获取顺序是一个跨模块的约定，不能各写各的。**
 
 ---
 

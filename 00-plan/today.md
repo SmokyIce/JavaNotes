@@ -1,107 +1,112 @@
 ---
 title: 今天做什么
-date: 2026-11-04
-weekday: 周三
+date: 2026-11-05
+weekday: 周四
 milestone: M1 · Java 地基
-task: W03 Day 1 — 线程基础：把「丢更新」撞出来
+task: W03 Day 2 — synchronized 到底锁了谁
 status: 已完成
 ---
 
-# 今天 · 2026-11-04（周三）· 已完成
+# 今天 · 2026-11-05（周四）· 已完成
 
-> 进并发。并发是 M1 里唯一「不实测就必然学错」的一块，
-> 所以今天只做一件事：**把共享可变状态用代码撞出来**，不讲 API 清单。
+> 昨天证明了「加锁能救丢更新」，但没回答「锁的是哪个对象」。
+> 今天只做这一件事：**把锁对象钉死**，再顺着它把死锁撞出来。
 > 开工第一步照旧：**回归编译 + 跑全部入口**。
 
 ## 一、先查的遗留
 
 | 检查项 | 结果 |
 | :--- | :--- |
-| 清空 `out/` 全量重编 w02（18 文件）+ 跑 16 个入口 | ✅ 全部 exit=0，无回归，**没有中断的代码** |
-| `01-notes` 里的未勾项 | W02 已全部勾完；W03 之后全是未解锁里程碑，无孤儿待办 |
-| w02 里剩下的「遗留」三条 | `toMap` 四参 `mapFactory`、`concurrentGroupingBy`、`Files.lines()` 持句柄 —— 分别等 W03 / W04 / W08，今天不动 |
-| `w03-concurrency-basics/` | 只有 `.gitkeep`，**今天从零建工程**（`.gitkeep` 已删） |
+| 清空 `out/` 全量重编 w03（4 文件）+ 跑 day1 两个入口 | ✅ 全部 exit=0（`StartThread` 全段正常、`RaceCondition` 106 行），**没有中断的代码** |
+| `01-notes` 里的未勾项 | W03 只剩 `synchronized` / `volatile` / `Lock` 三个；其余全是未解锁里程碑，无孤儿待办 |
+| `02-code` 空目录 | 无 |
+| Day 1 遗留「C2 耗时含预热」 | 仍未做成正规基准，按计划留到 W04 线程池那节一起做 |
 
-## 二、今天的正题：线程基础
+## 二、今天的正题：锁对象
 
-代码在 `02-code/stage1-basics/w03-concurrency-basics/src/main/java/com/newt/java48/w03/day1/`：
+代码在 `02-code/stage1-basics/w03-concurrency-basics/src/main/java/com/newt/java48/w03/day2/`：
 
 | 文件 | 内容 |
 | :--- | :--- |
-| `StartThread.java` | A~E：`extends Thread` / `Runnable` + lambda / `Callable` + `FutureTask` / `run()` vs `start()` / daemon |
-| `RaceCondition.java` | B0 基线 / B1 每线程 2 万（复现不稳）/ B2 50 万（稳定复现）/ C1 volatile / C2 synchronized（方法级 + 同步块各 5 轮）/ C3 `AtomicInteger` / C4 可见性对照 |
-| `day1-result.txt` | 两个入口的完整实测输出（147 行） |
-| `day1-bytecode.txt` | `javap` 六段证据：字段 flags / `incPlain` 四指令 / `incVolatile` 同指令 / `incSync` 只有 `ACC_SYNCHRONIZED` / `incSyncBlock` 才有 `monitorenter` + 异常路径 |
+| `LockTarget.java` | A 实例方法锁 `this`（A1 同实例 / A2 两实例 / A3 与 `synchronized(this)` 对撞）/ B 静态方法锁 `Class`（B1 / B2 / B3 与实例锁并行）/ C `new Object()` 等于没锁 + 字符串常量全局锁 |
+| `Deadlock.java` | D1 交叉拿锁 + `ThreadMXBean.findDeadlockedThreads()` 检测 / D2 可重入（含 `ReentrantLock` 的 holdCount 对照）/ D3 活锁 4/5 + 随机退避 + 全局定序 |
+| `day2-result.txt` | 全部实测（116 行，含 E 段偏向锁三档证据） |
+| `day2-deadlock-jstack.txt` | `jstack` 现场原件（142 行，`Found one Java-level deadlock`） |
 
-## 三、今天挖到的五个点
+## 三、今天挖到的六个点
 
-1. **`count++` 是四条字节码，窗口在 `iadd` 与 `putfield` 之间。**
-   `getfield` → `iconst_1` → `iadd` → `putfield`。两个线程都停在 `getfield` 读到 100，
-   各自算出 101、各自写回 —— 两次自增只多 1。
-   **能指着 `putfield` 说「窗口在这儿」，和只会背「count++ 不是原子操作」是两种水平。**
+1. **三种写法，三把锁，靠两条东西证明 —— 不是靠背。**
+   `Thread.holdsLock(obj)` 直接问 JVM 你拿的是谁的锁；方法入口算「排队等了多久」。
+   实测：同实例第二个线程排队 **414 ms**，两个不同实例**都 0 ms**（总 409 ms）；
+   先 `synchronized(inst)` 占住 400 ms 再调 `inst.work()`，调用者排队 **340 ms** ——
+   方法锁与 `synchronized(this)` 抢的是同一个 monitor。
+   **排队时长比总耗时可靠**：总耗时会被线程启动、JIT、调度污染，排队时长是因果直接的。
 
-2. **「本地跑十遍都是对的」有物理解释，不是玄学。**
-   同一份代码，每线程 2 万次 × 10 线程 × 10 轮，今天三次运行分别丢 **4/10、5/10、7/10** ——
-   连丢几轮都不稳定；某一轮里的形状还是「前 4 轮丢 80%+ → 中间 3 轮整齐 200000 → 后面又小额丢」，
-   总耗时只有 30~50 ms。
-   原因：JIT 预热后 2 万次只要几十微秒，而唤醒 10 个线程要上百微秒，**第一个跑完第九个还没被调度**。
-   加量到每线程 50 万次，立刻 **10/10 轮丢**（最低 930367 / 5000000）。
-   → 复现竞态两个必需品：**工作量够长** + **同时起跑**（`CountDownLatch(1)`）。
+2. **`static synchronized` 保护不了实例字段。**
+   静态方法锁 `ClassLock.class`、实例锁 `this`，实测两路并行（都 0 ms，总 412 ms）。
+   两个方法都在改同一个 `static Map` 却各加各的锁 —— 代码看着有锁，实际没锁。
+   **这就是 `@Transactional` 不生效、`@Async` 不同步那一类 bug 的病根**，W07 会再撞一次。
 
-3. **`volatile` 救不了 `count++`，但真的能救标志位 —— 同一天两个相反的实验。**
-   `volatile int vol; vol++` 10/10 轮丢（最低 1676548）；
-   而自旋等标志位：普通 `boolean` **20 亿次自旋始终没看见**，`volatile boolean` **1.98 亿次后看见**（51 ms）。
-   字节码上 `incVolatile()` 和 `incPlain()` 指令**一模一样**，差别只在字段 `flags: (0x0042) ACC_PRIVATE, ACC_VOLATILE`
-   —— **volatile 不是多一条指令，是给 `getfield`/`putfield` 加内存语义。**
+3. **`synchronized (new Object())` 不仅没锁，还比真锁快 7 倍。**
+   10 线程 × 50 万次：锁新对象丢 **2846644**、耗时 **46 ms**；锁共享 `final` 字段丢 0、耗时 **339 ms**。
+   **「加了锁反而更快」几乎一定意味着锁没生效** —— 省下来的正是加锁的开销。
+   附带撞到：锁字符串常量 = 拿了一把全局锁（跨类 `==` 为 true，别的类被挡 354 ms）。
 
-4. **方法级 `synchronized` 压根没有 `monitorenter`。**（今天被 `javap` 打脸的一条）
-   方法级：`flags: (0x0022) ACC_PRIVATE, ACC_SYNCHRONIZED`，四条指令全是算术，**一条加锁指令都没有**；
-   同步块：才真的出现 `monitorenter` / `monitorexit`，而且带 `Exception table` 两条 `any` ——
-   这就是「同步块里抛异常也不会漏锁」的字节码依据。
-   两种写法实测都 0/10 轮丢。
+4. **死锁的「发现 / 确认 / 破解」是三件事，别混。**
+   发现靠 `findDeadlockedThreads()`（JVM 自己算锁图环）；确认靠 `jstack` 看
+   `waiting to lock … which is held by …` **成对**出现 + 业务行号 + 末尾 `Found N deadlock`；
+   破解靠**全局定序**（按 `identityHashCode` 排序，2000 轮 × 2 线程 = 4000，1 ms，零重试）。
+   两个易错：`isAlive()==true` 不代表在干活；`blockedCount` 不是毫秒数。
 
-5. **`Callable` 的异常不会直接冒泡。** `future.get()` 抛的是
-   `ExecutionException: java.lang.IllegalStateException: ...`，业务异常躺在 `getCause()` 里。
-   只 `catch (ExecutionException e)` 不打 cause，日志里就只剩一句包装异常 —— 跟丢了没区别。
-   顺带：`start()` 第二次调用抛 `IllegalThreadStateException`，**message 是 null**。
+5. **`tryLock` 不加退避会变成活锁 —— 5 次里 4 次跑不完。**
+   两个线程节拍一致（都「先左手、等 50 ms、再右手」），每次都在同一处对撞、同时放弃同时重来。
+   线程在跑、CPU 在烧、没有 BLOCKED 栈 —— 死锁是**确定的**，活锁是**概率的**，所以活锁更难查。
+   加随机退避后 0~1 次重试就过。
+
+6. **偏向锁：JDK 17 默认关，JDK 25 参数已删。**
+   `UseBiasedLocking = false {product} {default}`（JEP 374）；显式 `-XX:+UseBiasedLocking`
+   只剩一句「deprecated in version 15.0」；JDK 25 直接 `Unrecognized VM option`。
+   以后讲锁升级必须补这句，别背 JDK 8 的八股。
 
 ## 四、今天踩的坑
 
-- **实验脚手架比被测代码更容易错。** 可见性实验第一版：主线程 `start()` 后直接 `sleep(20)` 就置位，
-  结果 reader 输出「自旋 0 次就看见了」—— 自相矛盾（没进循环怎么叫看见）。
-  加 `CountDownLatch` 握手（reader 进循环前 `countDown()`，主线程 `await()` 后再等 50 ms）才干净。
-- **自旋上限必须远大于等待时间，否则测的是「谁先到终点」。** 第二版上限设 3 亿次，
-  实测 3 亿次只要 200 ms，跟等待时间几乎相等 → 连 `volatile` 那条也「没看见」，
-  差一点得出「volatile 没用」的荒谬结论。改成上限 20 亿 / 等待 50 ms 才对上。
-- **写结论之前先跑一遍。** 字节码文件的标题我先写成「incSync 多出 monitorenter / monitorexit」，
-  `javap` 打出来一条都没有。这已经是连续第三天栽在「断言先于实测」上（W02：`sorted` 屏障、
-  `Predicate` 优先级、`toList` 的 null 政策）。低成本修法：**注释里的每个「所以」都配一条可复现命令**。
+- **demo 里各段会互相污染状态。** D2（可重入）第一版直接复用 D1 的锁对象 `A`，而那时 `A` 已被
+  死锁线程永久占着 —— 整段一行输出都没有，`join(2000)` 悄悄超时，看着像「代码没跑」。
+  修法：每段自带干净的锁对象。**死锁线程不会自己松手。**
+- **`jstack` 报 `no such process` 两次。** 第一次是抓晚了（`hold` 只挂 20 秒，两次工具调用之间的间隔就超了）；
+  第二次更坑：Git Bash 里 `$!` 拿到的是 **MSYS 的 pid**（1315），跟 Windows 原生 pid（33708）不是一个数。
+  最后固定成「用程序自己打印的 `ProcessHandle.current().pid()`」。
+- **又是「断言先于实测」。** D3a 的注释我先写死「不加退避一定活锁」，实跑第一次 3 次重试就成功了。
+  改成跑 5 次统计比例（4/5）+ 加 `CountDownLatch` 同时起跑提高对称性，结论才站得住。
+  这已经是连续第四天（`sorted` 屏障 → `Predicate` 优先级 → `monitorenter` → 今天这个）。
 
 ## 五、环境备忘
 
-- 跑 day1：`run.bat`（默认 `StartThread`）/ `run.bat RaceCondition`
-- `RaceCondition` 全跑约 5 秒（C2 的 synchronized 最慢，5 轮 1890 ms）
-- 手动编译照旧先 `find src/main/java -name "*.java" > sources.txt`
-- C4 那两行「自旋 N 次」的数字每台机器都不同，**只对比「看见 / 没看见」，别对比次数**
+- 跑 day2：`run.sh day2.LockTarget` / `run.sh day2.Deadlock`（约 11 秒）/ `run.sh day2.Deadlock hold`
+- `run.sh` / `run.bat` 今天补了「第 2 个参数透传给程序」，`hold` 模式才能从脚本跑
+- 抓 jstack 一条命令搞定（避免两次调用之间的等待窗口）：
+  `java ... Deadlock hold & sleep 4; jstack <程序打印的 PID> > stack.txt`
+- `Deadlock` 结尾必须 `System.exit(0)`：D1 的两个线程永远醒不来，不 exit JVM 不退出
+- `day2-result.txt` 是**一条命令整体生成**的（含 E 段的 flag 输出），不是手抄
 
 ---
 
 # 下一个时间盒（60 分钟）
 
-**W03 Day 2：`synchronized` 到底锁了谁**
+**W03 Day 3：`volatile` 的内存语义 + happens-before + DCL 为什么必须 volatile**
 
-今天已经证明「加锁能救」，但没回答「锁的是哪个对象」。明天只做这件事。
+Day 1 已经撞过「volatile 救不了 `count++`，但救得了标志位」，但只到现象层。
+今天要把它讲到能解释**为什么**，顺手把 W02 遗留的 DCL 单例补掉。
 
 | 时间 | 做什么 | 产出 |
 | -: | :--- | :--- |
-| 10 分钟 | 复述 Day 1：`count++` 的窗口在哪条指令之间 / 为什么 2 万次复现不了 / volatile 管哪件事 | 口头过，卡住回看 Day 1 |
-| 20 分钟 | **锁对象三连**：① 实例方法锁 `this`，两个实例互不影响；② 静态方法锁 `Class`，与实例锁互不影响；③ `synchronized(new Object())` 等于没锁 | `day2/LockTarget.java` A~C 段 |
-| 15 分钟 | **死锁复现**：两个线程交叉拿两把锁，统计「几秒内没跑完」；用 `jstack` 抓一次现场，再用 `ThreadMXBean.findDeadlockedThreads()` 程序化检测 | `day2/Deadlock.java` D 段 + `jstack` 快照 |
-| 10 分钟 | 锁升级的现状核对：JDK 17 里偏向锁已默认关闭（JEP 374），用 `-XX:+PrintFlagsFinal` 查 `UseBiasedLocking` 实际值，别背 JDK 8 的八股 | 同上 E 段 + 输出片段 |
-| 5 分钟 | 输出 `day2-result.txt` + 笔记 W03 Day 2 小节 + 勾掉 `synchronized` | 笔记 + 快照 |
+| 10 分钟 | 复述 Day 2：三种写法各锁谁 / 为什么 `static synchronized` 救不了实例字段 / 死锁看 jstack 哪三样 | 口头过，卡住回看 Day 2 |
+| 20 分钟 | **happens-before 八条**里挑四条能实测的（程序次序 / monitor / volatile / 线程启动与 join），每条写一个「去掉就错」的最小 Demo | `day3/HappensBefore.java` A~D 段 |
+| 15 分钟 | **DCL 单例**：不加 volatile 的版本能不能复现半初始化对象？用 `Unsafe` 或「构造里 sleep + 字段赋值顺序」放大窗口，跑 100 轮统计 | `day3/DclSingleton.java` + 统计输出 |
+| 10 分钟 | 用 `javap` 看 volatile 字段读写的实际屏障落点（x86 上写靠 `lock` 前缀、读基本无额外指令） | `day3-bytecode.txt` |
+| 5 分钟 | 输出 `day3-result.txt` + 笔记 Day 3 小节 + 勾掉 `volatile` | 笔记 + 快照 |
 
-> 优先做第二个 20 分钟。**「锁的是谁」答错，后面 `@Transactional` 失效、`@Async` 不生效、
-> 单例里的 `synchronized` 拦不住两个实例，全是同一个病根**（W07 会再撞一次）。
+> 优先做第二个 20 分钟。**DCL 是「背了十年还在答错」的题**：多数人只会说「volatile 禁止重排」，
+> 说不清「重排成什么样、另一个线程会拿到什么」，今天的放大实验就是补这一刀。
 >
-> 死锁那 15 分钟也别省：`jstack` 抓到的那段 `Found one Java-level deadlock` 是线上排查的原件，
-> 值得存进 `05-resources/cheatsheets/`。
+> 顺带说明：`Lock` / AQS / `wait-notify` 排到 Day 4，`Lock` 那个勾也留到那天。

@@ -1,0 +1,116 @@
+# Day 2 实测快照 · java version "17.0.12" 2024-07-16 LTS / Windows / 12 核
+# 生成时间：2026-11-05 11:29
+# 命令：java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w03.day2.LockTarget
+#       java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w03.day2.Deadlock
+#       jstack <PID>（hold 模式，见 day2-deadlock-jstack.txt）
+
+########## 一、LockTarget（A 实例方法锁 this / B 静态方法锁 Class / C 新对象等于没锁）##########
+
+========== A · 实例方法 synchronized 锁的是 this ==========
+A1 同一实例 × 2 线程（应该串行：第二个排队约 400 ms）
+    [A1-线程2] 排队   0 ms 才进方法；holdsLock(this)=true，holdsLock(另一个实例)=false
+    [A1-线程1] 排队 416 ms 才进方法；holdsLock(this)=true，holdsLock(另一个实例)=false
+    → 总耗时 825 ms
+    → count = 2（两次自增都在，锁生效）
+A2 两个不同实例 × 各 1 线程（应该并行：都排队 0 ms）
+    [A2-实例1] 排队   0 ms 才进方法；holdsLock(this)=true，holdsLock(另一个实例)=false
+    [A2-实例2] 排队   0 ms 才进方法；holdsLock(this)=true，holdsLock(另一个实例)=false
+    → 总耗时 412 ms
+A3 先 synchronized(inst) 持锁 400 ms，再调 inst.work()（应被挡住约 350 ms）
+    [A3-持锁者] 已持有 inst 的锁，占 400 ms
+    [A3-调用者] 排队 352 ms 才进方法；holdsLock(this)=true，holdsLock(另一个实例)=false
+    → 从发起到方法返回共 757 ms = 排队 + 400 ms 自身占用
+    → 结论：synchronized 方法 与 synchronized(this) 抢的是同一个 monitor
+
+========== B · 静态方法 synchronized 锁的是 Class 对象 ==========
+B1 两个线程调 ClassLock.swork()（同一把 Class 锁，第二个排队约 400 ms）
+    [B1-线程1] 排队   0 ms 才进方法；holdsLock(ClassLock.class)=true，holdsLock(某个实例)=false
+    [B1-线程2] 排队 400 ms 才进方法；holdsLock(ClassLock.class)=true，holdsLock(某个实例)=false
+    → 总耗时 803 ms
+    → 静态 count = 2
+B2 先 synchronized(ClassLock.class) 持锁 400 ms，再调 swork()（应被挡住）
+    [B2-持锁者] 已持有 ClassLock.class 的锁，占 400 ms
+    [B2-调用者] 排队 341 ms 才进方法；holdsLock(ClassLock.class)=true，holdsLock(某个实例)=false
+    → 结论：静态方法 与 synchronized(Xxx.class) 抢的是同一个 monitor
+B3 一个线程走静态方法、一个线程锁住某个实例（应该并行）
+    [B3-静态] 排队   0 ms 才进方法；holdsLock(ClassLock.class)=true，holdsLock(某个实例)=false
+    [B3-实例] 排队   0 ms；holdsLock(实例)=true，holdsLock(ClassLock.class)=false
+    → 总耗时 414 ms
+    → 上面那个总耗时如果到 800 ms 上下，才说明两把是同一把锁
+    → 结论：Class 锁 与 this 锁 是两把锁，静态同步方法保护不了实例字段
+
+========== C · synchronized (new Object()) 等于没锁 ==========
+C1 锁 new Object()：期望 5000000，实际 2153356，丢 2846644，耗时 46 ms
+C2 锁共享 final 字段：期望 5000000，实际 5000000，丢 0，耗时 339 ms
+C3 本类的 "LOCK" 与 OtherCode.LOCK 是同一个对象吗？true（是则同一把锁）
+    [C3-我的类] 持有本类字符串常量的锁 400 ms
+    [C3-别的类] 排队 354 ms 才进来 —— 被一个不相干的类挡住了
+    → 结论：锁字符串常量等于锁公共资源，别人写 synchronized("LOCK") 就会和你互相阻塞
+
+########## 二、Deadlock（D1 死锁检测 / D2 可重入 / D3 活锁 + 固定顺序）##########
+
+PID = 24796（需要抓现场就趁它活着：jstack 24796）
+
+========== D1 · 交叉拿锁：A 等 B、B 等 A ==========
+  [t1] 拿到 A
+  [t2] 拿到 B
+  [t1] 想要 B …
+  [t2] 想要 A …
+  t1.isAlive=true t2.isAlive=true（还活着不等于在干活，可能只是卡住了）
+  isSynchronizerUsageSupported = true
+  ✓ findDeadlockedThreads() 检出 2 个线程：
+    - D1-A-then-B  state=BLOCKED  blockedCount=1
+        在等 : java.lang.Object @0x5197848c（被 D1-B-then-A 持有）
+        已持有: Object @0x20ad9418（栈深度 0，位置 Deadlock.lambda$sectionD1$0:65）
+    - D1-B-then-A  state=BLOCKED  blockedCount=2
+        在等 : java.lang.Object @0x20ad9418（被 D1-A-then-B 持有）
+        已持有: Object @0x5197848c（栈深度 0，位置 Deadlock.lambda$sectionD1$1:76）
+  → 两个线程各持一把、各等一把，形成环 —— 这就是死锁的「循环等待」
+  → 注意 blockedCount 只统计「这次进入阻塞」的次数，不是等了多少毫秒，
+     等得久不久要看 jstack 里的线程栈 + 采样时间差
+  （两个线程会一直卡着，main 后面调 System.exit 收尾）
+
+========== D2 · 可重入：自己锁自己不会死 ==========
+  [D2] 第一次进锁，holdsLock=true
+  [D2] 第二次进同一把锁，照样进去了 → 锁按「线程」记，不按「次」记
+  [D2] 递归 3 层也回来了
+  → 若 synchronized 不可重入，上面第二行就会把自己锁死；
+     所以「死锁四个必要条件」里没有『线程等自己』这一条 —— 它压根不成立
+  → 对照：ReentrantLock 也可重入，但必须 lock 几次 unlock 几次
+     holdCount=2（拿两次记 2）
+     unlock 一次后 holdCount=1，锁还没真放开
+     unlock 两次后 holdCount=0，别的线程这时才进得来
+     再多 unlock 一次 → IllegalMonitorStateException（而 synchronized 的加解锁是 JVM 隐式配对的，多不出来）
+
+========== D3 · 破解：tryLock 拿不到就放掉，别硬等 ==========
+      第 1 次：活锁超时，重试 8 + 8，耗时 2159 ms
+      第 2 次：活锁超时，重试 8 + 8，耗时 2116 ms
+      第 3 次：活锁超时，重试 8 + 7，耗时 2119 ms
+      第 4 次：活锁超时，重试 8 + 8，耗时 2131 ms
+      第 5 次：跑完，重试 4 + 3，耗时 1117 ms
+D3a 不加退避 × 5 次（每次限时 2 秒）：活锁 4/5 次，重试合计 70 次
+D3b 加随机退避：跑完？true，重试 0 + 1 次
+  → 关键有两层：① 拿不到第二把必须把第一把还回去；
+     ② 还回去之后要「错开时间」再来，否则两个线程踩同一个节拍反复对撞 ——
+        那叫活锁（livelock）：线程都在跑、CPU 也在烧，就是没人推进。
+        注意它和死锁的区别：死锁是确定的（D1 每次必卡），活锁是概率的（D3a 有时能自己走出来）
+D3c 固定顺序：跑完？true，期望 4000，实际 4000，耗时 2 ms，零重试
+  → 全局定序（这里是按 identityHashCode）让两个线程的加锁顺序一致，
+     「循环等待」这个条件从一开始就不成立 —— 这是生产代码里最常用的解法
+
+########## 三、E · 偏向锁的现状：JDK 17 默认关，JDK 25 连开关都没了 ##########
+
+$ java -XX:+PrintFlagsFinal -version | grep -i biased     # JDK 17.0.12
+     intx BiasedLockingBulkRebiasThreshold         = 20                                        {product} {default}
+     intx BiasedLockingBulkRevokeThreshold         = 40                                        {product} {default}
+     intx BiasedLockingDecayTime                   = 25000                                     {product} {default}
+     intx BiasedLockingStartupDelay                = 0                                         {product} {default}
+     bool UseBiasedLocking                         = false                                     {product} {default}
+
+$ java -XX:+UseBiasedLocking -version                      # JDK 17：能开，但只剩一句弃用警告
+Java HotSpot(TM) 64-Bit Server VM warning: Option UseBiasedLocking was deprecated in version 15.0 and will likely be removed in a future release.
+java version "17.0.12" 2024-07-16 LTS
+
+$ jdk-25/bin/java -XX:+UseBiasedLocking -version            # JDK 25：参数已被删除
+Unrecognized VM option 'UseBiasedLocking'
+Error: Could not create the Java Virtual Machine.
