@@ -25,6 +25,8 @@ run.bat day1.RaceCondition   rem 带点号 -> 完整类名
 ./run.sh day2.LockTarget
 ./run.sh day2.Deadlock          # 约 11 秒：D1 死锁 + D2 可重入 + D3 活锁统计
 ./run.sh day2.Deadlock hold     # 只跑 D1 并挂住 20 秒，留给外部 jstack
+./run.sh day3.HappensBefore     # 约 8 秒：happens-before 四条实测 + volatile 代价
+./run.sh day3.DclSingleton      # 约 6 秒：DCL 压力测试 + 手工重排 + Unsafe
 ```
 
 手动编译：
@@ -35,6 +37,8 @@ javac -encoding UTF-8 -d out @sources.txt
 java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w03.day1.RaceCondition
 java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w03.day2.LockTarget
 java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w03.day2.Deadlock
+java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w03.day3.HappensBefore
+java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w03.day3.DclSingleton
 ```
 
 > ⚠️ `RaceCondition` 会开 10 个线程做几千万次自增，跑完大约 5 秒；`StartThread` 里的守护线程会故意被 JVM 掐断，属于预期现象。
@@ -49,13 +53,18 @@ w03-concurrency-basics/
 ├── day1-bytecode.txt                       Day 1 字节码证据（iinc 窗口 / ACC_VOLATILE / ACC_SYNCHRONIZED / monitorenter）
 ├── day2-result.txt                         Day 2 实测输出（锁对象三连 + 死锁检测 + 活锁统计 + 偏向锁三档）
 ├── day2-deadlock-jstack.txt                Day 2 死锁现场原件（jstack，含 Found one Java-level deadlock）
+├── day3-result.txt                         Day 3 实测输出（Dekker / monitor / volatile 发布订阅 / start-join / set vs lazySet）
+├── day3-bytecode.txt                       Day 3 证据（ACC_VOLATILE / 两个 DCL 字节码对比 / lock 前缀原文）
 └── src/main/java/com/newt/java48/w03/
     ├── day1/
     │   ├── StartThread.java                A~E：三种起线程方式 / run vs start / 守护线程
     │   └── RaceCondition.java              B0~C4：基线 / 竞态复现 / volatile / synchronized / AtomicInteger / 可见性
-    └── day2/
-        ├── LockTarget.java                 A~C：实例锁 this / 静态锁 Class / new Object() 等于没锁 / 字符串常量全局锁
-        └── Deadlock.java                   D1~D3：死锁 + ThreadMXBean 检测 / 可重入 / 活锁与全局定序
+    ├── day2/
+    │   ├── LockTarget.java                 A~C：实例锁 this / 静态锁 Class / new Object() 等于没锁 / 字符串常量全局锁
+    │   └── Deadlock.java                   D1~D3：死锁 + ThreadMXBean 检测 / 可重入 / 活锁与全局定序
+    └── day3/
+        ├── HappensBefore.java              A~E：Dekker litmus / monitor 传可见性 / volatile 发布订阅 / start-join / 屏障代价
+        └── DclSingleton.java               D1~D4：压力测试 / 手工重排抓半初始化对象 / Unsafe.allocateInstance
 ```
 
 ## Day 1 做了什么
@@ -160,3 +169,58 @@ JDK 25: Unrecognized VM option 'UseBiasedLocking'              ← 参数已删�
 
 所以面试再讲「无锁 → 偏向 → 轻量 → 重量」这套升级，要补一句「JDK 15 起偏向锁默认关闭」，
 别背 JDK 8 的八股。
+
+## Day 3 做了什么
+
+> 主题：**`volatile` 的内存语义**。Day 1 只证明「volatile 救得了标志位」，
+> Day 3 要回答「为什么救得了」「happens-before 到底保证了什么」「DCL 不加会怎样」。
+
+### `HappensBefore` —— 四条规则，四组对照
+
+| 段 | 规则 | 实测 |
+| :-- | :--- | :--- |
+| A | 程序次序（Dekker litmus） | 10 万轮里 `(0,0)` 出现 **16239 / 28465 / 40629 次**（16%~40%）→ 「先写后读」在内存看来能反过来 |
+| B | monitor | 锁内自旋 **11 065 533 次**后看到标志，读到锁外写的 `data = 42`；且没被 JIT 优化掉 |
+| C1 | 对照组：普通 `boolean` 标志 | **5 轮全部撞满 15 亿次上限，一次没看见** |
+| C2 | volatile 标志 | **5/5 看见**，平均自旋 2.97 亿次（≈80 ms，正好是写入时刻） |
+| D1 | `start()` 前的写 | 子线程 100% 读到 777 |
+| D2 | 不 join，直接读结果 | **151/500 轮读到 0**（抢跑） |
+| D3 | `join()` 后读 | 500/500 正确 |
+| E | `set()` vs `lazySet()` | 15.51 ms vs 2.66 ms（2000 万次），**5.8 倍** |
+
+> E 段还有一行「普通字段写 0.38 ms / 0.019 ns」，那是**测量事故** ——
+> JIT 发现中间值没人看，整个循环只剩最后一次 store。留着这一行是为了记住这个坑。
+
+### `DclSingleton` —— 为什么必须 volatile，以及为什么你在 x86 上测不出来
+
+| 段 | 内容 | 实测 |
+| :-- | :--- | :--- |
+| D1 | 不加 volatile 的 DCL，50 轮 × 6 线程 × 每轮抢 30 ms | 拿到半初始化对象 **0 次** |
+| D2 | 加 volatile，同样压力 | **0 次** |
+| D3 | 把重排顺序**手工写出来**（分配 → 发布 → 构造） | 抓到 `Singleton{a=1, b=null, c=0}` —— 构造停在中途 |
+| D4 | `Unsafe.allocateInstance` 不跑构造造对象 | `Singleton{a=0, b=null, c=0}` —— 字段全零值 |
+
+**D1/D2 都是 0，这本身就是最重要的结论**：x86 是 TSO，不重排 store-store，
+所以 DCL 少写 volatile 在 x86 开发机上「永远测不出来」，换 ARM 才炸。
+判断依据只能是 JMM 的规则，不能是「我跑了没复现」。
+
+D3 抓到的 `b=null` 也纠正了一个常见想象：半初始化不是「字段全是默认值」，而是「停在半路的某一刻」，
+所以 NPE 会出现在离构造很远的地方。
+
+### `day3-bytecode.txt` 里的两处证据
+
+```text
+private static Singleton plain;            flags: (0x000a) ACC_PRIVATE, ACC_STATIC
+private static volatile Singleton safe;    flags: (0x004a) ACC_PRIVATE, ACC_STATIC, ACC_VOLATILE
+```
+
+两个 `getInstance()` 的字节码**指令序列完全一样** —— 加 volatile 一行都没多，改的是 `putstatic` 的内存语义。
+
+屏障在机器码里（`-XX:+PrintAssembly`，本机只输出十六进制、不带助记符）：
+
+```text
+0x000002198f2d1830: 4d8b 5740 | 4d8b 5f50 | f083 4424 | c000 4180 | 3800 ...
+```
+
+`f0 83 44 24 c0 00` = `lock addl $0x0,-0x40(%rsp)` —— HotSpot 在 x86 上实现 StoreLoad 屏障的标准做法，
+全文出现 21 处。读侧不加指令（TSO 本来就不许 LoadLoad 重排）。

@@ -105,3 +105,18 @@
   **Git Bash 的 `$!` 是 MSYS pid，jstack 必须用 `ProcessHandle.current().pid()`**，且要在一条命令内完成抓取；
   线程名带 `→` 会让 Windows 下 jstack 输出乱码 → 用纯 ASCII；
   `tryLock` 不加退避 = 活锁（实测 4/5），"会活锁"只能靠多次统计证明，不能由单次输出断言。
+
+## 2026-11-06（第九次执行 · W03 Day 3）
+- 开工回归：清空 `out/` 重编 w03（11 文件 / 14 class）+ 跑 day1/day2 四入口，全 exit=0，**无中断代码**；
+  `01-notes` 未勾项只剩 `volatile`/`Lock`，`02-code` 无空目录 → 无遗留需补。
+- 推进 W03 Day 3：新建 `day3/HappensBefore`（A~E：Dekker litmus / monitor / volatile 发布订阅 /
+  start-join / set vs lazySet）+ `day3/DclSingleton`（D1~D4：压力测试 / 手工重排 / Unsafe）
+  + `day3-result.txt`（86 行）+ `day3-bytecode.txt`（170 行，含 `lock addl` 十六进制原文）。
+- 题库 `Java并发.md` 4 → 6 题；笔记 W03（Day 3 整节 8 小节 + 踩坑 6 条 + 面试 9 条 + 参考要点 2 题 + 打卡 + 勾 `volatile`）、
+  `today.md`、`MILESTONES.md`、工程 `README.md` 全部同步。顺手压缩了超限的 `MEMORY.md`（17.5 KB → ~7 KB）。
+- 下次起点：**W03 Day 4 = `Lock` / AQS / `wait-notify`**（手写 30 行简易 AQS + `while` 防虚假唤醒 +
+  公平/非公平实测 + `Condition` 对照），之后 W03 封板 → W04 线程池。
+- 新增经验（已写进 MEMORY.md）：`CyclicBarrier` 每轮同步会把线程错开（要用自旋 gate + `(1,1)` 重叠探针）；
+  可见性实验的循环体里**不许有方法调用**（`nanoTime` 会挡住 JIT 提升），且要让目标循环先被 JIT 编译完；
+  **自旋上限必须远大于等待时间**（本月第二次踩）；并发下 `toString` 与后续读不是同一瞬间，要抓快照；
+  `-XX:+PrintAssembly` 本机能跑但只输出十六进制，`f0 83 44 24 c0 00` = `lock addl $0x0,-0x40(%rsp)`。

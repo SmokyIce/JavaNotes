@@ -112,9 +112,11 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > | 2026-11-03 | **W02 Day 6 · `List<User>` 报表**，W02 封板 | `day6/` 三个 Demo + `User` / `UserData`（15 条含 3 种 null）+ `day6-result.txt`；笔记 Day 6 整节（8 小节）+ 踩坑 7 条 + 参考要点 Q11；`Java基础.md` 22 → **24 题** |
 > | 2026-11-04 | **W03 Day 1 · 线程基础**（`w03-concurrency-basics/` 从 `.gitkeep` 建工程） | `day1/StartThread`（三种起线程 + run/start + daemon）+ `day1/RaceCondition`（基线 / 2 万 vs 50 万对照 / volatile / synchronized 方法级与同步块 / Atomic / 可见性对照）+ `day1-result.txt`（147 行）+ `day1-bytecode.txt`（6 段 javap 证据）；笔记 Day 1 整节（8 小节）+ 踩坑 6 条 + 参考要点「为什么会有线程安全问题」；`Java并发.md` 0 → **2 题** |
 > | 2026-11-05 | **W03 Day 2 · `synchronized` 锁的是谁** | `day2/LockTarget`（实例锁 this / 静态锁 Class / `new Object()` 等于没锁 / 字符串常量全局锁）+ `day2/Deadlock`（交叉死锁 + `ThreadMXBean` 检测 / 可重入 / 活锁 4/5 + 随机退避 + 全局定序）+ `day2-result.txt`（116 行）+ `day2-deadlock-jstack.txt`（jstack 原件 142 行）；笔记 Day 2 整节（8 小节）+ 踩坑 5 条 + 参考要点「锁的是谁」「死锁怎么排查」；`Java并发.md` 2 → **4 题**；`cheatsheets/JVM排查命令.md` 补「死锁」小节 |
+> | 2026-11-06 | **W03 Day 3 · `volatile` 内存语义 + happens-before + DCL** | `day3/HappensBefore`（Dekker litmus 测出 `(0,0)` 16%~40% / monitor 传可见性 / volatile 发布订阅 5/5 vs 对照组 0/5 / start-join 抢跑 151/500 / `set` vs `lazySet` 5.8 倍）+ `day3/DclSingleton`（50 轮 × 6 线程压力 0 次 + 手工重排抓到 `{a=1,b=null,c=0}` + `Unsafe.allocateInstance`）+ `day3-result.txt`（86 行）+ `day3-bytecode.txt`（170 行，含 `lock addl` 原文）；笔记 Day 3 整节（8 小节）+ 踩坑 6 条 + 面试 9 条 + 参考要点 2 题；`Java并发.md` 4 → **6 题** |
 >
 > **W02 已封板（2026-11-03）**，六天全部完成。题库 M1 只要 8 道，现在 24 + 4 道。
-> 当前在 **W03 并发**，Day 1（11-04）、Day 2（11-05）已完成，`synchronized` 已勾，题库 `Java并发.md` 4 道。
+> 当前在 **W03 并发**，Day 1（11-04）、Day 2（11-05）、Day 3（11-06）已完成，
+> `Thread`/`synchronized`/`volatile` 已勾，只剩 `Lock`；题库 `Java并发.md` 6 道。
 >
 > W02 六天里最值钱的五条结论（讲课时直接能用，全部有实测数字）：
 >

@@ -1,7 +1,7 @@
 # W03 · Java 并发基础
 
 > **第一阶段 · 打基础（W01–W12）** ｜ 预计投入 ≈ 7 小时（每天 60 分钟）
-> 状态：🟨 进行中（Day 2 已完成 2026-11-05）　｜　开始日期：2026-11-04　｜　完成日期：____-__-__
+> 状态：🟨 进行中（Day 3 已完成 2026-11-06）　｜　开始日期：2026-11-04　｜　完成日期：____-__-__
 
 > 💡 重点理解：为什么会有线程安全问题？
 
@@ -11,15 +11,17 @@
 
 - [x] Thread · Runnable
 - [x] synchronized
-- [ ] volatile
+- [x] volatile
 - [ ] Lock
 - [x] 为什么会有线程安全问题
 
 > Day 1 勾了 `Thread · Runnable` 和「为什么会有线程安全问题」。
 > Day 2 勾 `synchronized`：现在能脱稿答「锁的是谁」（this / Class / 锁对象本身）+
-> 能说清死锁怎么发现、怎么确认。`volatile` 仍不勾 —— 它救标志位那一面撞过了，
-> 但 happens-before 八条、DCL 为什么必须 volatile 还没单独过。
-> `Lock` 也不勾：只用了 `ReentrantLock.tryLock` 和可重入计数，AQS 一行没碰。
+> 能说清死锁怎么发现、怎么确认。
+> Day 3 勾 `volatile`：happens-before 四条实测规则（程序次序 / monitor / volatile / start-join）+
+> DCL 为什么必须 volatile + 手工复现「半初始化对象」。`volatile` 这一格现在敢说「讲得清」了，
+> 因为每条规则都有一个「去掉就错」的对照实验，不是一个定义。
+> `Lock` 仍不勾：只用了 `ReentrantLock.tryLock` 和可重入计数，AQS 的 state / CLH 队列一行没碰。
 
 ## 二、核心问题（能用自己的话脱稿讲出来，才算学会）
 
@@ -38,6 +40,9 @@ Day 1（已完成 11-04）  线程基础：三种起线程方式 + run/start 陷
 Day 2（已完成 11-05）  锁的是谁：实例方法锁 this / 静态方法锁 Class / new Object() 等于没锁
                        + 可重入 + 死锁（ThreadMXBean 检测 + jstack 现场）+ 活锁与全局定序
                        + 偏向锁在 JDK 17 / 25 的真实状态
+Day 3（已完成 11-06）  happens-before 四条实测（程序次序 Dekker / monitor / volatile 发布订阅 / start-join）
+                       + DCL 为什么必须 volatile（压力测试 0 次 + 手工重排抓到半初始化对象）
+                       + Unsafe.allocateInstance + set vs lazySet 的屏障代价
 ```
 
 ### Day 1 · 2026-11-04（周三）· 线程基础：把「丢更新」撞出来
@@ -396,6 +401,157 @@ Error: Could not create the Java Virtual Machine.
 - ⬜ `wait` / `notify` / `interrupt` 还没碰。
 - ⬜ Day 1 遗留的「C2 耗时含预热」仍未做成正规基准。
 
+### Day 3 · 2026-11-06（周五）· `volatile` 的内存语义 + happens-before + DCL
+
+| 时间 | 做什么 | 产出 |
+| -: | :--- | :--- |
+| 10 分钟 | 复述 Day 2：三种写法各锁谁 / 为什么 `static synchronized` 救不了实例字段 / 死锁看 jstack 哪三样 | 口头过 |
+| 20 分钟 | **happens-before 四条能实测的**（程序次序 / monitor / volatile / start-join），每条一个「去掉就错」的对照 | `day3/HappensBefore.java` A~E 段 |
+| 15 分钟 | **DCL 单例**：不加 volatile 能不能复现半初始化对象？50 轮 × 6 线程压力测试 + 手工重排复现 | `day3/DclSingleton.java` |
+| 10 分钟 | `javap` 看字段 flags、`PrintAssembly` 看 StoreLoad 屏障落点 | `day3-bytecode.txt` |
+| 5 分钟 | 输出 `day3-result.txt` + 本节笔记 + 勾掉 `volatile` | 笔记 + 快照 |
+
+实测快照：`w03-concurrency-basics/day3-result.txt`（86 行）
+字节码/屏障证据：`w03-concurrency-basics/day3-bytecode.txt`（170 行）
+
+#### 1. happens-before 不是「时间上先发生」
+
+`A happens-before B` 说的是两件事：**A 的结果对 B 可见**，**A 不会被重排到 B 之后**。
+它**不说**「A 先执行」—— 只要不影响单线程的可见结果，JVM 想怎么重排都行（as-if-serial）。
+所以两个没有 HB 边的操作，顺序是不确定的。
+
+这条定义之所以重要，是因为它解释了「为什么本地跑不出来」：
+没有 HB 边的地方，行为取决于 JIT 和 CPU 当天的心情，不取决于代码的字面顺序。
+
+#### 2. 程序次序规则只对单线程负责：Dekker 实测 16%~40%
+
+```text
+线程 1：ax = 1;  ar1 = ay;
+线程 2：ay = 1;  ar2 = ax;
+```
+
+按「程序次序」每个线程都是**先写后读**，那么 `(ar1, ar2)` 至少有一个该是 1。
+10 万轮实测（三次运行）：
+
+| 运行 | (0,0) | (1,1) | 只有 r1=1 | 只有 r2=1 |
+| :--- | ---: | ---: | ---: | ---: |
+| 第 1 次 | **16239（16.2%）** | 34 | 25279 | 58448 |
+| 第 2 次 | 28465（28.5%） | 23 | 32057 | 39455 |
+| 第 3 次 | 40629（40.6%） | 22 | 34548 | 24801 |
+
+**(0,0) 的含义**：两个读都发生在对方写生效之前 —— 「先写后读」在内存看来被换成了「先读后写」。
+x86 的 TSO 只禁止 LoadLoad / LoadStore / StoreStore，**唯独放行 StoreLoad**，这就是它的来源。
+**程序次序规则保证的是「单线程内 as-if-serial」，跨线程什么都没保证。**
+
+顺带注意 `(1,1)` 只有 20~30 次：这才是「两个线程都看见对方」的轮次。
+一多半轮次其实是「一个跑完另一个才跑」—— 数量级差四个，说明并发窗口有多窄。
+
+#### 3. monitor 规则：`synchronized` 也管可见性
+
+写线程在**锁外**写普通字段 `data`、在**锁内**写普通字段 `flag`；读线程在 `synchronized` 里自旋等 `flag`。
+
+```text
+[B1 有 monitor] 看见标志？true，自旋 11065533 次，读到的 data = 42
+```
+
+`data` 不是 volatile，可见性完全是「写线程解锁 → 读线程加锁」这条 HB 边传过来的。
+**这条常被忽略：很多人以为 `synchronized` 只负责互斥。**
+
+更硬的证据是它「没被优化掉」：同一个自旋循环套上 `synchronized`，
+JIT 不敢把 `flag` 的读提到循环外（monitor 是一道屏障）；脱掉就立刻被提走 —— 见下一段。
+
+#### 4. volatile 规则：看见标志 = 看见标志之前的**所有**写
+
+发布/订阅：写线程先写 `d1`、`d2`，再置 `flag`；读线程自旋等 `flag`，然后读 `d1`/`d2`。
+写线程先睡 80 ms（**给读线程的循环留出被 JIT 编译的时间**，这一条是今天的关键）。
+
+| 段 | 标志类型 | 5 轮结果 |
+| :--- | :--- | :--- |
+| C1 | 普通 `boolean` | **5 轮全部撞满 15 亿次自旋上限，一次也没看见** |
+| C2 | `volatile boolean` | **5/5 看见**，平均自旋 2.97 亿次（≈80 ms，正好是写完的时刻） |
+
+只差一个 `volatile`，一个永远看不见、一个 80 ms 后立刻看见。
+这就是 DCL 敢靠 volatile 的理论依据：**volatile 写之前的写，对读到该 volatile 的线程全部可见。**
+
+至于「看见标志之后数据是否完整」，x86 上测不出差异（TSO 不重排 store-store）——
+这跟 DCL 是同一个故事：**JMM 允许的事，不一定能在 x86 上复现。**
+
+#### 5. start() 与 join() 是两条屏障
+
+| 段 | 做法 | 500 轮实测 |
+| :--- | :--- | :--- |
+| D1 | `start()` **之前**写 `777`，子线程读 | 100% 读到 777 |
+| D2 | 不 join，主线程 `start()` 后立刻读结果 | **151 轮读到 0**（还没算完），349 轮读到结果 |
+| D3 | `join()` 之后读 | **500/500 正确**（4951） |
+
+D2 那 151 个 0 不是「线程没跑」，是**你比它先读** —— 抢跑。不是并发 bug，但一样是错的。
+
+#### 6. DCL：重排之后递给别人的，是一个「停在半路」的对象
+
+`instance = new Singleton()` 在字节码里是三条：`new` → `invokespecial`（构造）→ `putstatic`（发布）。
+JMM 允许把最后一步提到中间那步之前。压力测试（50 轮 × 6 线程 × 每轮抢 30 ms）：
+
+```text
+[D1 无 volatile] 拿到构造没跑完的对象 0 次
+[D2 有 volatile] 拿到构造没跑完的对象 0 次
+```
+
+**两个 0。** 这个 0 不能读成「不加也没事」，只能读成「x86 测不出来」。
+
+为了看清「重排之后长什么样」，我把重排顺序**手工写出来**（分配 → 发布引用 → 跑构造）：
+
+```text
+读线程在「引用已发布、构造还没跑」的窗口里抓到了：
+  Singleton{a=1, b=null, c=0}
+  incomplete（b==null || c!=99）= true
+```
+
+注意 `a=1` 已经赋上了、`b` 还是 null —— **半初始化不是「全是默认值」，是「停在中途」**。
+调用方拿到它调 `b.length()` 就是 NPE，堆栈指向调用方，离构造十万八千里。
+这类 bug 的排查方向天然是错的：会去查「b 为什么是 null」，而不是查「单例怎么发出去的」。
+
+`Unsafe.allocateInstance` 那段补了另一半证据：不跑构造也能造出对象，字段全是零值 / null
+（`Singleton{a=0, b=null, c=0}`）—— 说明 `new` 在字节码里一步，在内存里是两步。
+
+#### 7. volatile 的代价：字节码一字不差，机器码多一条 `lock`
+
+```text
+private static Singleton plain;                  flags: (0x000a) ACC_PRIVATE, ACC_STATIC
+private static volatile Singleton safe;          flags: (0x004a) ACC_PRIVATE, ACC_STATIC, ACC_VOLATILE
+```
+
+`getPlain()` 与 `getSafe()` 的字节码**指令序列完全一样**（`getstatic` → `ifnonnull` → `monitorenter`
+→ 再判空 → `putstatic` → `monitorexit`）。加 volatile 一行都没多 ——
+它改的是 `putstatic` 的内存语义，不是指令条数。
+
+代价在机器码上（`PrintAssembly`）：
+
+```text
+0x000002198f2d1830: 4d8b 5740 | 4d8b 5f50 | f083 4424 | c000 4180 | 3800 ...
+```
+
+`f0 83 44 24 c0 00` 解码是 `lock addl $0x0,-0x40(%rsp)` —— HotSpot 在 x86 上实现 StoreLoad 屏障的标准做法。
+全文这样的 lock 前缀出现 21 处。读侧不加指令：x86 的 TSO 本来就不许 LoadLoad 重排。
+
+微基准（2000 万次 × 6 轮取最小值）：
+
+| 写法 | 耗时 | ns/次 | 说明 |
+| :--- | ---: | ---: | :--- |
+| 普通字段写 | 0.38 ms | 0.019 | **测量事故**：JIT 发现中间值没人看，整个循环只剩最后一次 store |
+| `AtomicInteger.lazySet()` | 2.66 ms | 0.133 | 有序写，不加 lock 前缀 |
+| `AtomicInteger.set()` | 15.51 ms | 0.775 | volatile 写 |
+
+**`set()` 是 `lazySet()` 的 5.8 倍。** 差的不是指令，是那道屏障。
+
+#### 8. 遗留
+
+- ✅ `volatile` 已勾（Day 3 的四条规则 + DCL 都过了一遍）。
+- ⬜ `Lock` / AQS：只碰了 `tryLock` 与 `holdCount`，`Condition`、公平锁、AQS 的 state/CLH 队列留 Day 4。
+- ⬜ `wait` / `notify` / `interrupt` 仍未碰，排 Day 4。
+- ⬜ DCL 的「真复现」需要 ARM 机器（x86 的 TSO 天然挡住 store-store 重排），本机只能手工重排 + JMM 推理。
+- ⬜ 微基准不是 JMH：E 段只能看量级，不能说「volatile 写就是 0.775 ns」。
+- ⬜ 对象头 Mark Word 仍未实测（要 JOL），偏向锁只到 `PrintFlagsFinal` 这一层。
+
 ## 四、踩坑与 Bug 复盘
 
 | 现象 | 原因 | 排查过程 | 解决 | 底层原理 |
@@ -410,6 +566,12 @@ Error: Could not create the Java Virtual Machine.
 | `jstack` 报 `17592: no such process`，但进程明明在 | ① 抓晚了：`hold` 只挂 20 秒，两次工具调用之间的间隔就超了；② 更坑的是 Git Bash 里 `$!` 拿到的是 **MSYS 的 pid**，跟 Windows 原生 pid 不是一个数 | 第二次比对：`$!`=1315，程序自己打印的 `ProcessHandle.current().pid()`=33708 | 单条命令里完成「起进程 → 等 4 秒 → 读程序打印的 PID → jstack」 | Windows 上跨 shell 的 pid 不是同一个 ID 空间；`jstack` 只认原生 pid |
 | `tryLock` 那版第一轮跑出「5 秒内跑完？false，重试 18/18」，以为 demo 写错了 | 不是写错，是**活锁**：两个线程节拍完全一致，每次都在「等第二把锁」处对撞，然后同时放弃同时重来 | 重试次数 18 说明循环在疯狂空转而不是卡住；没有 BLOCKED、CPU 还在烧 → 排除死锁 | ① 加随机退避打散节拍；② 单次改成 5 轮统计（4/5 活锁）；③ 保留「不加退避 vs 加退避」的对照 | 活锁的判据是「线程在跑但没推进」，靠 CPU + 无阻塞栈排除死锁；**它和死锁的排查路径完全不同** |
 | D3a 第一版写死注释「不加退避一定活锁」，实跑却 3 次就成功了 | 活锁是**概率事件**，不是必然；线程启动有先后，节拍本来就会漂 | 连跑两次：一次 0/5 活锁、一次 3/5 活锁 | 改成「跑 5 次统计比例」并加上 `CountDownLatch` 同时起跑提高对称性 | 同 Day 1 的教训：**偶发不能写成必然**；能证明「会活锁」的只有统计，不是单次输出 |
+| Dekker 第一版 2 万轮一次 (0,0) 都没出现，差点写成「x86 不会重排」 | 用 `CyclicBarrier` 每轮同步，barrier 释放是有先后的：分布 9468 / 10531 一边倒，说明两个线程根本没重叠 —— 测的是「谁先跑完」，不是重排 | 加了一列 `(1,1)` 计数当「真的重叠了吗」的探针：2 万轮里只有 1 次 | 把 barrier 换成**自旋 gate**（`volatile int` 放行 + `AtomicInteger` 收工），(0,0) 立刻占到 16%~40% | 同步工具本身会改变时序；**测试脚手架的对称性决定了能测出什么**，要有一个「重叠确认」的探针 |
+| B2 / C1 第一版「去掉锁也看得见」，结论完全反了 | ① 循环体里放了 `System.nanoTime()` 当超时判据 —— 方法调用挡住 JIT 把字段读提到循环外；② 写线程立刻置位，循环还没被 JIT 编译就已经结束，测的是解释执行 | 输出里自旋只有 1.3 万次就看见了，而 Day 1 同样的实验要 20 亿次 —— 数量级不对 | ① 循环体改成纯自旋、只留计数器；② 写线程先睡 80 ms，让循环先被 JIT 编译完 | 可见性实验里**任何方法调用都会污染被测代码**；必须先让 JIT 编译完，否则永远测不出「提升」 |
+| C2（volatile）也「看不见」，一度以为 volatile 失效 | 自旋上限 5 亿次 ≈ 170 ms，比写线程的 200 ms 等待还短 —— 读者先撞上限退出了，写还没发生 | 上限 15 亿次 ≈ 400 ms 后 5/5 都看得见，平均自旋 2.97 亿（≈80 ms，正好是写入时刻） | 上限提到 15 亿，等待降到 80 ms（比值 6 倍） | **自旋上限必须远大于等待时间** —— 这条 Day 1 就记过，今天又踩了一次。同一个坑踩两次，说明它该进「开工前必读」 |
+| E 段「普通字段写」测出 0.019 ns/次，比 L1 命中还快 50 倍 | JIT 发现循环里的中间写没人看得见，整条循环只剩最后一次 store —— 循环被消掉了 | 数字小到物理上不可能（0.019 ns ≈ 1/50 个时钟周期） | 不再拿它当基准，改用 `AtomicInteger.set()` vs `lazySet()` 对照（都是方法调用，消不掉） | **数字接近 0 一律先怀疑测量事故**，这是本周第二次（Day 5 的 parallel 也是） |
+| D3 段同一段输出里 `toString` 显示 `b=null`，下一行 `incomplete()` 却是 false | `toString` 抓得早、`incomplete()` 调用得晚，中间 2 ms 构造跑完了 —— 两次读不是同一个瞬间 | 两句话自相矛盾，一眼看着像 bug | 先把 `a` / `b` / `c` 各抓一次快照到局部变量，再用快照判断和拼接 | 并发下的「打印」不是原子的；**要断言同一条状态，必须只读一次** |
+| 以为本机没装 hsdis，`PrintAssembly` 用不了，准备把屏障证据留成遗留 | 想当然。`-XX:+PrintAssembly` 其实能跑，只是输出只有十六进制、**不带助记符** | 跑一次发现输出了 204 段 Assembly，全文 21 处 `f0` 前缀 | 改成「贴原始十六进制 + 自己按 x86 编码表解码」并标明这是人读的不是工具给的 | `f0 83 44 24 c0 00` = `lock addl $0x0,-0x40(%rsp)`，HotSpot 的 StoreLoad 屏障就长这样 —— **工具不给助记符，也照样能取证** |
 
 ---
 
@@ -438,6 +600,24 @@ Error: Could not create the Java Virtual Machine.
 - 死锁的四个条件？破了哪个？（互斥 / 持有并等待 / 不可剥夺 / 循环等待；工程上通常破**循环等待** —— 全局定序）
 - `tryLock` 能解决死锁吗？（能破「无限等待」，但不加退避会**活锁**；实测 5 次里 4 次 2 秒内没跑完）
 - 偏向锁现在还有吗？（JDK 15 起默认关闭，JDK 17 `UseBiasedLocking=false`，JDK 25 参数已删除）
+- **happens-before 到底是什么？**（偏序，不是时钟；说的是「结果可见 + 不许重排」，不是「先执行」。
+  八条里能实测的四条：程序次序 / monitor / volatile / start-join —— 每条都有一个「去掉就错」的对照实验）
+- 程序次序规则能不能保证跨线程的顺序？（不能。Dekker 实测 10 万轮里 `(0,0)` 出现 16%~40%，
+  「先写后读」在内存看来可以被换过来。程序次序只管单线程 as-if-serial）
+- `synchronized` 只保证互斥吗？（不是，还保证可见性 —— 写线程解锁 happens-before 读线程加锁。
+  实测：锁外写的普通字段，读线程在锁内看到标志后一定能读到新值，去掉锁就 15 亿次自旋也看不见）
+- **volatile 在字节码上多了什么？**（一条指令都没多。`getPlain()` 和 `getSafe()` 的字节码完全一样，
+  差别只在字段 flags：`0x000a` vs `0x004a`，多出来的 `0x0040` 是 `ACC_VOLATILE`）
+- **volatile 写为什么比普通写慢？慢多少？**（x86 上要跟一条 `lock addl $0x0,-0x40(%rsp)` 做 StoreLoad 屏障。
+  实测 `set()` 0.775 ns/次 vs `lazySet()` 0.133 ns/次，**5.8 倍**。读侧几乎不加指令）
+- **DCL 为什么必须加 volatile？不加会发生什么？**（`putstatic` 可能被提到 `invokespecial` 之前，
+  另一个线程会拿到「构造跑一半」的对象 —— 实测抓到 `{a=1, b=null, c=0}`。
+  注意它不是「全是默认值」，是「停在中途」，所以 NPE 的位置离构造很远）
+- 那在 x86 上不加 volatile 是不是也没事？（**不是**。实测压力跑 50 轮 × 6 线程，失败 0 次 ——
+  因为 x86 是 TSO，不重排 store-store。但 JMM 允许，换 ARM 就炸。
+  **判断依据只能是 JMM，不是「我跑了没复现」**）
+- DCL 之外还有什么单例写法？哪种更稳？（静态内部类 holder / 枚举 / 饿汉。
+  holder 靠 `<clinit>` 的类初始化锁，天然带 HB 边且不需要 volatile，**工程上更推荐**）
 
 ## 六、一句话总结
 
@@ -451,8 +631,7 @@ Error: Could not create the Java Virtual Machine.
 | :--- | :--- | :--- | ---: | :--- | :--: |
 | 2026-11-04 | 三 | Day 1 线程基础：三种起线程方式 + run/start 陷阱 + 竞态复现（2 万 vs 50 万对照）+ volatile/synchronized/Atomic 三条修法 + 可见性对照 + javap 字节码 | 60 min | `StartThread` / `RaceCondition` / `day1-result.txt` / `day1-bytecode.txt` | ✅ |
 | 2026-11-05 | 四 | Day 2 锁的是谁：实例锁 this / 静态锁 Class / `new Object()` 没锁 + 可重入 + 死锁（ThreadMXBean + jstack）+ 活锁 4/5 + 全局定序 + 偏向锁三档证据 | 60 min | `LockTarget` / `Deadlock` / `day2-result.txt` / `day2-deadlock-jstack.txt` | ✅ |
-|  | 四 |  |  |  |  |
-|  | 五 |  |  |  |  |
+| 2026-11-06 | 五 | Day 3 happens-before：Dekker 测出 (0,0) 16%~40% / monitor 传可见性 / volatile 发布订阅（对照组 15 亿次看不见）/ start-join 抢跑 151/500 + DCL 半初始化对象 `{a=1,b=null,c=0}` + `lock` 前缀取证 + set vs lazySet 5.8 倍 | 60 min | `HappensBefore` / `DclSingleton` / `day3-result.txt` / `day3-bytecode.txt` | ✅ |
 |  | 六 |  |  |  |  |
 |  | 日 |  |  |  |  |
 
@@ -512,3 +691,49 @@ Error: Could not create the Java Virtual Machine.
 
 破法按优先级：**全局定序**（实测 2000 轮零重试、1 ms）> `tryLock` 超时放弃（但有活锁风险，
 不加退避实测 5 次里 4 次跑不完）> 缩小粒度 / 不在锁里做 IO。
+
+---
+
+**Q · happens-before 保证的是什么？为什么它不等于「先执行」？**
+
+一句话：**它保证「结果可见」和「不许越过它重排」，不保证「时间上先执行」。**
+
+- `A hb B` → A 的写对 B 可见；并且编译器/CPU 不能把 A 挪到 B 后面。
+- 但 A 完全可能被挪到 B **前面**的其他位置，也可能和别的操作交错 —— 只要单线程的可见结果不变（as-if-serial）。
+- 两个**没有** hb 边的操作，顺序是完全不确定的 —— 这就是并发 bug 的温床。
+
+四条实测（`day3/HappensBefore.java`，每条都有对照组）：
+
+| 规则 | 怎么证明 |
+| :--- | :--- |
+| 程序次序 | Dekker litmus，10 万轮 `(0,0)` 占 16%~40% → 「先写后读」在内存看来能反过来 |
+| monitor | 锁内自旋能看到锁外写的普通字段；脱掉锁 15 亿次也看不见 |
+| volatile | 同样的发布/订阅，`volatile` 版 80 ms 后看见，普通版撞满上限也看不见 |
+| start / join | `start()` 前写的 777 必然可见；不 join 抢跑 151/500；join 后 500/500 |
+
+补一句容易答漏的：**`volatile` 修的是「可见性 + 有序性」，不是「原子性」**。
+所以它救不了 `count++`（Day 1 实测 10/10 轮丢），但能救标志位与安全发布。
+
+---
+
+**Q · 双重检查锁为什么必须加 `volatile`？**
+
+`instance = new Singleton()` 是三条字节码：`new`（分配）→ `invokespecial`（构造）→ `putstatic`（发布）。
+JMM 允许 `putstatic` 被提到 `invokespecial` 前面 —— 于是第二个线程可能拿到**构造只跑了一半**的对象：
+
+```text
+Singleton{a=1, b=null, c=0}
+```
+
+（这是实测抓到的现场：`a` 已赋值、`b` 还是 null，所以「半初始化」不是「全是默认值」，是「停在中途」。）
+后果是调用方 NPE，堆栈指向调用方，跟构造毫无关系 —— 排查方向天然是错的。
+
+`volatile` 的作用：在「发布引用」这一步加 StoreStore 屏障，禁止它被提前。
+
+**最容易被追问的一点：这个 bug 在 x86 上复现不了。**
+实测 50 轮 × 6 线程 × 每轮抢 30 ms，不加 volatile 那版失败 **0 次** —— x86 的 TSO 不重排 store-store。
+但这**不代表安全**：JMM 允许它发生，ARM / 换 JIT 版本就会炸。
+**判断依据只能是 JMM 的规则，不能是「我跑了没复现」。**
+
+工程上更推荐**静态内部类 holder**：靠 `<clinit>` 的类初始化锁，JVM 保证只跑一次且天然带 hb 边，
+不需要 volatile，也不会有「两次判空」这种需要读者懂内存模型才能看懂的地方。

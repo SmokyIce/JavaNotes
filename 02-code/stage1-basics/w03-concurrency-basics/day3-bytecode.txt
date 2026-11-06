@@ -1,0 +1,170 @@
+================================================================
+ W03 Day 3 · 字节码 / 标志位 / 屏障 证据
+ JDK 17.0.12 · 每条命令都贴了原文，可直接复现
+================================================================
+
+① 两个 DCL 字段的访问标志（差别只有一处）
+$ javap -p -v -cp out com.newt.java48.w03.day3.DclSingleton
+--------------------------------------------------------------
+{
+  private static com.newt.java48.w03.day3.DclSingleton$Singleton plain;
+    descriptor: Lcom/newt/java48/w03/day3/DclSingleton$Singleton;
+    flags: (0x000a) ACC_PRIVATE, ACC_STATIC
+
+  private static volatile com.newt.java48.w03.day3.DclSingleton$Singleton safe;
+    descriptor: Lcom/newt/java48/w03/day3/DclSingleton$Singleton;
+    flags: (0x004a) ACC_PRIVATE, ACC_STATIC, ACC_VOLATILE
+
+  private static final java.lang.Object LOCK;
+    descriptor: Ljava/lang/Object;
+    flags: (0x001a) ACC_PRIVATE, ACC_STATIC, ACC_FINAL
+
+  private static volatile com.newt.java48.w03.day3.DclSingleton$Singleton published;
+
+  读法：plain 是 0x000a = PRIVATE|STATIC；safe 是 0x004a，多出来的 0x0040 就是 ACC_VOLATILE。
+
+② 两个 getInstance 的字节码：指令序列一模一样
+$ javap -p -c -cp out com.newt.java48.w03.day3.DclSingleton
+--------------------------------------------------------------
+  static com.newt.java48.w03.day3.DclSingleton$Singleton getPlain();
+    Code:
+       0: getstatic     #7                  // Field plain:Lcom/newt/java48/w03/day3/DclSingleton$Singleton;
+       3: ifnonnull     40
+       6: getstatic     #13                 // Field LOCK:Ljava/lang/Object;
+       9: dup
+      10: astore_0
+      11: monitorenter
+      12: getstatic     #7                  // Field plain:Lcom/newt/java48/w03/day3/DclSingleton$Singleton;
+      15: ifnonnull     30
+      18: new           #17                 // class com/newt/java48/w03/day3/DclSingleton$Singleton
+      21: dup
+      22: ldc           #19                 // String plain
+      24: invokespecial #20                 // Method com/newt/java48/w03/day3/DclSingleton$Singleton."<init>":(Ljava/lang/String;)V
+      27: putstatic     #7                  // Field plain:Lcom/newt/java48/w03/day3/DclSingleton$Singleton;
+      30: aload_0
+      31: monitorexit
+      32: goto          40
+      35: astore_1
+      36: aload_0
+      37: monitorexit
+      38: aload_1
+      39: athrow
+      40: getstatic     #7                  // Field plain:Lcom/newt/java48/w03/day3/DclSingleton$Singleton;
+      43: areturn
+    Exception table:
+       from    to  target type
+          12    32    35   any
+          35    38    35   any
+
+      35: invokestatic  #283                // Method getPlain:()Lcom/newt/java48/w03/day3/DclSingleton$Singleton;
+      38: astore        5
+      40: aload         5
+      42: ifnull        58
+      45: aload         5
+      47: invokevirtual #238                // Method com/newt/java48/w03/day3/DclSingleton$Singleton.incomplete:()Z
+      50: ifeq          58
+      53: aload_2
+      54: invokevirtual #286                // Method java/util/concurrent/atomic/AtomicLong.incrementAndGet:()J
+      57: pop2
+      58: goto          17
+      61: return
+    Exception table:
+       from    to  target type
+           0     4     7   Class java/lang/InterruptedException
+
+  static com.newt.java48.w03.day3.DclSingleton$Singleton getSafe();
+    Code:
+       0: getstatic     #23                 // Field safe:Lcom/newt/java48/w03/day3/DclSingleton$Singleton;
+       3: ifnonnull     40
+       6: getstatic     #13                 // Field LOCK:Ljava/lang/Object;
+       9: dup
+      10: astore_0
+      11: monitorenter
+      12: getstatic     #23                 // Field safe:Lcom/newt/java48/w03/day3/DclSingleton$Singleton;
+      15: ifnonnull     30
+      18: new           #17                 // class com/newt/java48/w03/day3/DclSingleton$Singleton
+      21: dup
+      22: ldc           #26                 // String safe
+      24: invokespecial #20                 // Method com/newt/java48/w03/day3/DclSingleton$Singleton."<init>":(Ljava/lang/String;)V
+      27: putstatic     #23                 // Field safe:Lcom/newt/java48/w03/day3/DclSingleton$Singleton;
+      30: aload_0
+      31: monitorexit
+      32: goto          40
+      35: astore_1
+      36: aload_0
+      37: monitorexit
+      38: aload_1
+      39: athrow
+      40: getstatic     #23                 // Field safe:Lcom/newt/java48/w03/day3/DclSingleton$Singleton;
+      43: areturn
+    Exception table:
+       from    to  target type
+          12    32    35   any
+          35    38    35   any
+
+      29: invokestatic  #279                // Method getSafe:()Lcom/newt/java48/w03/day3/DclSingleton$Singleton;
+      32: goto          38
+      35: invokestatic  #283                // Method getPlain:()Lcom/newt/java48/w03/day3/DclSingleton$Singleton;
+      38: astore        5
+      40: aload         5
+      42: ifnull        58
+      45: aload         5
+      47: invokevirtual #238                // Method com/newt/java48/w03/day3/DclSingleton$Singleton.incomplete:()Z
+      50: ifeq          58
+      53: aload_2
+      54: invokevirtual #286                // Method java/util/concurrent/atomic/AtomicLong.incrementAndGet:()J
+      57: pop2
+      58: goto          17
+      61: return
+    Exception table:
+       from    to  target type
+           0     4     7   Class java/lang/InterruptedException
+
+  要点：都是 getstatic → ifnonnull → monitorenter → 再判空 → putstatic → monitorexit。
+        也就是说「加 volatile」在字节码层面一行都没多 —— 它改的是 putstatic 的内存语义，
+        不是指令条数。这是「volatile 不慢在指令上」的第一层证据。
+
+③ 普通 int 与 volatile int 的字段标志
+$ javap -p -v -cp out com.newt.java48.w03.day3.HappensBefore | grep -A2 'int e'
+--------------------------------------------------------------
+  private static int ePlain;
+    descriptor: I
+    flags: (0x000a) ACC_PRIVATE, ACC_STATIC
+
+④ 构造里的写顺序（DCL 半初始化的现场）
+$ javap -p -c -cp out 'com.newt.java48.w03.day3.DclSingleton$Singleton'
+--------------------------------------------------------------
+  void init(java.lang.String);
+    Code:
+       0: aload_0
+       1: iconst_1
+       2: putfield      #16                 // Field a:I
+       5: ldc2_w        #20                 // long 2l
+       8: invokestatic  #22                 // Method com/newt/java48/w03/day3/DclSingleton.sleep:(J)V
+      11: aload_0
+      12: aload_1
+      13: putfield      #28                 // Field b:Ljava/lang/String;
+      16: aload_0
+      17: ldc2_w        #32                 // long 99l
+      20: putfield      #34                 // Field c:J
+      23: return
+
+  要点：putfield a → invokestatic sleep → putfield b → putfield c。
+        字节码看不出「putstatic 被提前」—— 那是 JIT/CPU 的事，字节码层面永远是这个顺序。
+        所以「看字节码验证 DCL 有 bug」这条路走不通，只能靠 JMM 的规则推。
+
+⑤ 反汇编：StoreLoad 屏障真的在
+$ java -XX:+UnlockDiagnosticVMOptions -XX:+PrintAssembly -cp out com.newt.java48.w03.day3.DclSingleton
+--------------------------------------------------------------
+  全文 lock 前缀（f0）出现次数： 21 处
+  原文样例（volatile 写后面的那道屏障）：
+      0x00000219877fdf9c: f083 4424 | c000 488b | d049 33d1 | 48c1 ea15 | 4883 fa00 | 0f85 c707 
+      0x000002198f2d1830: 4d8b 5740 | 4d8b 5f50 | f083 4424 | c000 4180 | 3800 0f84 | 13ff ffff | 4588 204d 
+
+  解码：f0 = LOCK 前缀，83 44 24 c0 00 = addl $0x0,-0x40(%rsp)
+        整条就是 lock addl $0x0,-0x40(%rsp) —— HotSpot 在 x86 上实现 StoreLoad 屏障的标准做法。
+        （本机 PrintAssembly 只输出十六进制、不带助记符：没有 hsdis 解码器。
+          所以上面的「解码」是我按 x86 编码表读的，不是工具给的。）
+
+  另一半：volatile 读不加任何指令。x86 的 TSO 天然不允许 LoadLoad / LoadStore 重排，
+  所以读侧只需要编译器别把读提到前面，硬件不用管。
