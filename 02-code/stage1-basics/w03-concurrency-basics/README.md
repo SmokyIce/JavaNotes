@@ -27,6 +27,9 @@ run.bat day1.RaceCondition   rem 带点号 -> 完整类名
 ./run.sh day2.Deadlock hold     # 只跑 D1 并挂住 20 秒，留给外部 jstack
 ./run.sh day3.HappensBefore     # 约 8 秒：happens-before 四条实测 + volatile 代价
 ./run.sh day3.DclSingleton      # 约 6 秒：DCL 压力测试 + 手工重排 + Unsafe
+./run.sh day4.WaitNotify        # 约 5 秒：wait/notify 五个现场 + if vs while
+./run.sh day4.MiniAqs           # 约 7 秒：手写 AQS 对拍 200 万次 + 三种锁吞吐对照
+./run.sh day4.LockCompare       # 约 3 秒：公平/非公平 + Condition vs notifyAll
 ```
 
 手动编译：
@@ -39,6 +42,9 @@ java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w03.day2.LockTarget
 java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w03.day2.Deadlock
 java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w03.day3.HappensBefore
 java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w03.day3.DclSingleton
+java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w03.day4.WaitNotify
+java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w03.day4.MiniAqs
+java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w03.day4.LockCompare
 ```
 
 > ⚠️ `RaceCondition` 会开 10 个线程做几千万次自增，跑完大约 5 秒；`StartThread` 里的守护线程会故意被 JVM 掐断，属于预期现象。
@@ -55,6 +61,8 @@ w03-concurrency-basics/
 ├── day2-deadlock-jstack.txt                Day 2 死锁现场原件（jstack，含 Found one Java-level deadlock）
 ├── day3-result.txt                         Day 3 实测输出（Dekker / monitor / volatile 发布订阅 / start-join / set vs lazySet）
 ├── day3-bytecode.txt                       Day 3 证据（ACC_VOLATILE / 两个 DCL 字节码对比 / lock 前缀原文）
+├── day4-result.txt                         Day 4 实测输出（wait/notify 五段 + AQS 对拍 + 公平性 + Condition）
+├── day4-bytecode.txt                       Day 4 证据（手写 lock 的快路径 / park 调用 / monitorenter 成对出现）
 └── src/main/java/com/newt/java48/w03/
     ├── day1/
     │   ├── StartThread.java                A~E：三种起线程方式 / run vs start / 守护线程
@@ -62,9 +70,13 @@ w03-concurrency-basics/
     ├── day2/
     │   ├── LockTarget.java                 A~C：实例锁 this / 静态锁 Class / new Object() 等于没锁 / 字符串常量全局锁
     │   └── Deadlock.java                   D1~D3：死锁 + ThreadMXBean 检测 / 可重入 / 活锁与全局定序
-    └── day3/
-        ├── HappensBefore.java              A~E：Dekker litmus / monitor 传可见性 / volatile 发布订阅 / start-join / 屏障代价
-        └── DclSingleton.java               D1~D4：压力测试 / 手工重排抓半初始化对象 / Unsafe.allocateInstance
+    ├── day3/
+    │   ├── HappensBefore.java              A~E：Dekker litmus / monitor 传可见性 / volatile 发布订阅 / start-join / 屏障代价
+    │   └── DclSingleton.java               D1~D4：压力测试 / 手工重排抓半初始化对象 / Unsafe.allocateInstance
+    └── day4/
+        ├── WaitNotify.java                 A~E：ISE / if vs while / notify 只叫一个 / 释放锁 / 中断清标志
+        ├── MiniAqs.java                    A~D：手写 state+CLH 队列 / 200 万次对拍 / 三种锁吞吐 / CAS 与 park 统计
+        └── LockCompare.java                A~B：公平 vs 非公平（插队次数）/ Condition vs notifyAll（无效唤醒）
 ```
 
 ## Day 1 做了什么
@@ -224,3 +236,84 @@ private static volatile Singleton safe;    flags: (0x004a) ACC_PRIVATE, ACC_STAT
 
 `f0 83 44 24 c0 00` = `lock addl $0x0,-0x40(%rsp)` —— HotSpot 在 x86 上实现 StoreLoad 屏障的标准做法，
 全文出现 21 处。读侧不加指令（TSO 本来就不许 LoadLoad 重排）。
+
+## Day 4 做了什么
+
+> 主题：**`Lock` / AQS / `wait-notify`**。前三天证明了「锁能互斥」「volatile 能传可见性」，
+> 但 `wait()` 为什么必须写在 `synchronized` 里、AQS 的 `state` 和那个队列到底怎么转，一直是空的。
+> 今天把 AQS 手写了一遍 —— 这两个问题只有写出来才答得干净。
+
+### `WaitNotify` —— 五个现场
+
+| 段 | 内容 | 实测 |
+| :-- | :--- | :--- |
+| A | `wait()` 不在 `synchronized` 里 | `IllegalMonitorStateException: current thread is not owner` |
+| B1 | 2 消费者 + 1 件货 + `notifyAll()`，用 `if` | 空手而归 **1 次** —— 醒了就往下走，货架是空的 |
+| B2 | 同样场景换成 `while` | 空手而归 **0 次**，「醒来重查又回去等」1 次 |
+| C1 | 放 2 件货只 `notify()` 一次 | 取走 **1 件**，剩 1 件，还有 **1 个消费者停在 WAITING** |
+| C2 | 放 2 件货 `notifyAll()` | 取走 2 件，剩 0 件，0 个在等 |
+| C3 | 没人在等时 `notify()`，随后 `wait(200)` | 等满 **200 ms** 才超时 —— 信号不存储 |
+| D | 持锁者 `sleep(500)` vs `wait(500)` | 旁观者排队 **414 ms** vs **0 ms** |
+| E | 中断打断 `wait()` | 抛 `InterruptedException`，捕获后 `isInterrupted()` 已是 **false** |
+
+C 段第一版想用「两个等待者等不同条件 + `notify()` 叫错人」来演示丢信号，
+20 轮只丢了 2 次 —— 这个 JVM 大多时候恰好挑中了该醒的那个。**靠概率的结论不算结论**，
+改成「2 件货只喊一声」：只要少喊一次，就必然有人醒不过来，100% 可复现。
+
+### `MiniAqs` —— 80 行手写 AQS
+
+`state`（重入计数）+ 双向 CLH 队列 + `LockSupport.park/unpark`，与 AQS 同构。
+
+| 段 | 内容 | 实测 |
+| :-- | :--- | :--- |
+| A | 10 线程 × 20 万次 `count++`，普通 `int` | 期望 2000000，实际 **2000000，丢 0**，730 ms |
+| A' | 同一段代码不加上锁 | 丢 **1551791**（77.6%） |
+| B | `lock()` 三次 / `unlock()` 三次 | `state` 1 → 3 → 1 → 0；第 4 次 `unlock()` 抛 ISE |
+| C | 三种锁，临界区 ≈1 ns（200 万次） | sync **118 ms** / ReentrantLock **50 ms** / 简易 **687 ms**（5.8 倍） |
+| C' | 三种锁，临界区 ≈0.5 µs（5 万次） | sync **84 ms** / ReentrantLock **75 ms** / 简易 **95 ms**（**1.13 倍**） |
+| D | 队列开销 | CAS 建哨兵 **1 次**、CAS 抢尾 **87742 次**、park **175075 次**、醒来没抢到 **87500 次** |
+
+**C / C' 这一对是今天最有价值的对照**：临界区从 1 ns 拉到 0.5 µs，5.8 倍的差距缩到 1.13 倍。
+差的那部分几乎正好等于 `park 次数 × 4.2 µs`（D 段算出来的实数）。
+所以「手写版慢」不是队列写错了，是**这个负载在考「自旋 vs 挂起」的取舍** ——
+`ReentrantLock` 敢猛自旋，是因为它知道自旋失败才付挂起的钱；而临界区 1 ns 时，挂起一次就等于输几万次。
+
+回答开头那两个问题：
+
+- **为什么入队要 CAS 两次**：一次建哨兵（队列惰性初始化），一次抢尾。两个状态转移各自必须原子，
+  没法合并成一个 CAS —— 合并就意味着要同时原子地改 `head` 和 `tail`。实测就是 `1 次 + 每次入队 1 次`。
+- **为什么 park 之后还要再检查**：D 段那 **87500 次「醒来没抢到」**就是答案。最凶的插队者不是新线程，
+  而是**刚 `unlock()` 转头又 `lock()` 的那个线程** —— 在压测循环里它每轮都干这事。
+
+### `LockCompare` —— 公平性，和 Condition 存在的理由
+
+| 段 | 指标 | 非公平 | 公平 |
+| :-- | :--- | :--- | :--- |
+| A | 8 线程 × 2 万次耗时 | **30 ms** | 1228 ms（**41 倍**） |
+| A | 连续两次抢到锁 | **154582 次** | 445 次 |
+| A | 单线程最长等待 | 387 µs | **582 µs** |
+
+第三行是反直觉的：**公平锁的最长等待反而更大**。因为临界区只有 1 ns，公平锁等的主要不是临界区，
+而是「解锁后唤醒下一个人」的交接成本（几 µs），排 8 个人就是 8 次交接。
+所以公平换来的不是「等得更短」，是「等得有上界、可预测」；非公平的理论最坏情况是无穷。
+
+| 段 | 实现 | 耗时 | 无效唤醒 |
+| :-- | :--- | :--- | :--- |
+| B | `Condition`（notFull / notEmpty 两个队列） | 143 ms | **11 次** |
+| B | `synchronized` + `notifyAll` | 172 ms | **7666 次** |
+
+容量设成 1（队列几乎总是空或满），每次唤醒都是争抢，差别才看得见：
+`Condition` 精确叫一个，`notifyAll` 把 4 个消费者一起叫醒，3 个白醒。
+**这就是 `Condition` 存在的唯一理由 —— 把等不同条件的线程分组成多个等待队列。**
+
+### 今天的四个坑
+
+- **`join()` 写在 `synchronized` 里 = 自己卡自己。** C 段第一版在持锁状态下 `join` 消费者线程，
+  而消费者要重新拿到这把锁才能退出临界区 —— 直接等到超时。改成先取数、出临界区、再 join。
+- **C 段第一版把「放 2 件货」写成了初始状态。** 消费者进临界区时货已经在架上，谁都没 `wait`，
+  于是两个人都顺利取走 —— 实验根本没成立。**货必须在消费者睡着之后才放。**
+- **`synchronized` 那个 22 ms 是假的。** 一开始 C 段和 C2 用了两套脚手架（一套内联自增、一套包 lambda），
+  同一份活测出 22 ms 和 107 ms，还很自信地写了「差 15 倍」。统一脚手架 + 预热之后是 5.8 倍。
+  **不同脚手架的数字不能放一张表里比。**
+- **`Node.thread` 声明成 `final` 就没法变哨兵。** `setHead` 要把自己变成哨兵（`thread = null`），
+  `final` 直接编译不过 —— 真实 AQS 里这个字段也是 `volatile` 而非 `final`。

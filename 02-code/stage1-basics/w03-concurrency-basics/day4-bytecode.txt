@@ -1,0 +1,75 @@
+==================================================================
+ W03 Day 4 · 字节码证据：三种「锁」在字节码层长什么样
+ 生成时间：2026-11-11 14:09:25
+ 环境：java version "17.0.12" 2024-07-16 LTS
+ 说明：全部由 javap 命令直接输出，没有手抄
+==================================================================
+
+------------------------------------------------------------------
+ 一、手写 AQS 的 lock()：先试快路径，失败才入队
+     （MiniAqs$MiniLock.lock 的前 12 条指令）
+------------------------------------------------------------------
+  void lock();
+    Code:
+       0: aload_0
+       1: iconst_1
+       2: invokevirtual #35                 // Method tryAcquire:(I)Z
+       5: ifeq          9
+       8: return
+       9: aload_0
+      10: invokevirtual #39                 // Method enq:()Lcom/newt/java48/w03/day4/MiniAqs$Node;
+      13: astore_1
+      14: iconst_0
+      15: istore_2
+      16: aload_1
+      17: getfield      #43                 // Field com/newt/java48/w03/day4/MiniAqs$Node.prev:Lcom/newt/java48/w03/day4/MiniAqs$Node;
+
+     解读：invokevirtual tryAcquire → ifeq 跳过 return → 失败才进 enq。
+     整段没有 monitorenter —— 因为它根本不是 monitor，是「state + 队列」自己实现的锁。
+
+------------------------------------------------------------------
+ 二、挂起与唤醒：一个 invokestatic 就到内核
+------------------------------------------------------------------
+     110: invokestatic  #66                 // Method java/util/concurrent/locks/LockSupport.park:(Ljava/lang/Object;)V
+     113: iconst_1
+      80: aload_2
+      81: getfield      #104                // Field com/newt/java48/w03/day4/MiniAqs$Node.thread:Ljava/lang/Thread;
+      84: invokestatic  #107                // Method java/util/concurrent/locks/LockSupport.unpark:(Ljava/lang/Thread;)V
+
+     解读：park/unpark 就是普通静态方法调用，没有特殊字节码。
+     真正贵的是它们的实现（让出 CPU、进操作系统调度队列），不是这几条指令。
+
+------------------------------------------------------------------
+ 三、synchronized 块：monitorenter / monitorexit 成对出现
+     （day2 LockTarget.lockInstance，锁的是参数 target）
+------------------------------------------------------------------
+6:       4: monitorenter
+41:      66: monitorexit
+45:      74: monitorexit
+47:      77: athrow
+
+     注意：monitorexit 出现了两次 —— 一次正常路径，一次在异常路径上。
+     这就是「synchronized 一定是 try/finally」的字节码证据。
+
+------------------------------------------------------------------
+ 四、synchronized 方法：只有 ACC_SYNCHRONIZED 标志，没有 monitorenter
+     （day2 LockTarget$InstanceLock.work）
+------------------------------------------------------------------
+  synchronized void work(java.lang.String, long);
+    flags: (0x0020) ACC_SYNCHRONIZED
+    flags: (0x0020) ACC_SYNCHRONIZED
+
+     这就是 Day 2 那条被打脸的「想当然」：方法级同步不加指令，改的是方法访问标志。
+
+------------------------------------------------------------------
+ 五、ReentrantLock：调用方看到的就是一次普通方法调用
+     （LockCompare 里的 lock.lock()）
+------------------------------------------------------------------
+       1: invokevirtual #282                // Method java/util/concurrent/locks/ReentrantLock.lock:()V
+      67: invokevirtual #290                // Method java/util/concurrent/locks/ReentrantLock.unlock:()V
+      91: invokevirtual #290                // Method java/util/concurrent/locks/ReentrantLock.unlock:()V
+     100: invokevirtual #290                // Method java/util/concurrent/locks/ReentrantLock.unlock:()V
+
+     三种写法的字节码差别，比它们的性能差别小得多：
+     synchronized → monitorenter（JVM 指令）；ReentrantLock → invokevirtual（Java 方法）；
+     手写 AQS → 同样的 invokevirtual，只是方法体里多了 park/unpark。

@@ -1,7 +1,7 @@
 # W03 · Java 并发基础
 
 > **第一阶段 · 打基础（W01–W12）** ｜ 预计投入 ≈ 7 小时（每天 60 分钟）
-> 状态：🟨 进行中（Day 3 已完成 2026-11-06）　｜　开始日期：2026-11-04　｜　完成日期：____-__-__
+> 状态：🟩 已完成（Day 4 收尾，2026-11-11 封板）　｜　开始日期：2026-11-04　｜　完成日期：2026-11-11
 
 > 💡 重点理解：为什么会有线程安全问题？
 
@@ -12,7 +12,7 @@
 - [x] Thread · Runnable
 - [x] synchronized
 - [x] volatile
-- [ ] Lock
+- [x] Lock
 - [x] 为什么会有线程安全问题
 
 > Day 1 勾了 `Thread · Runnable` 和「为什么会有线程安全问题」。
@@ -21,7 +21,9 @@
 > Day 3 勾 `volatile`：happens-before 四条实测规则（程序次序 / monitor / volatile / start-join）+
 > DCL 为什么必须 volatile + 手工复现「半初始化对象」。`volatile` 这一格现在敢说「讲得清」了，
 > 因为每条规则都有一个「去掉就错」的对照实验，不是一个定义。
-> `Lock` 仍不勾：只用了 `ReentrantLock.tryLock` 和可重入计数，AQS 的 state / CLH 队列一行没碰。
+> Day 4 勾 `Lock`：手写了 `state` + CLH 队列 + `park` 的简易 AQS（200 万次对拍零丢失），
+> `wait/notify` 的 `while`、`notifyAll`、释放锁三件事都有实测对照，`Condition` 与公平锁也测过了。
+> 五个知识点全勾 → **W03 封板**。
 
 ## 二、核心问题（能用自己的话脱稿讲出来，才算学会）
 
@@ -43,6 +45,10 @@ Day 2（已完成 11-05）  锁的是谁：实例方法锁 this / 静态方法�
 Day 3（已完成 11-06）  happens-before 四条实测（程序次序 Dekker / monitor / volatile 发布订阅 / start-join）
                        + DCL 为什么必须 volatile（压力测试 0 次 + 手工重排抓到半初始化对象）
                        + Unsafe.allocateInstance + set vs lazySet 的屏障代价
+Day 4（已完成 11-11）  wait/notify：ISE / if vs while / notify 只叫一个（2 件货喊一声）/ 释放锁对照 / 中断清标志
+                       + 手写简易 AQS（state + CLH 队列 + park）对拍 200 万次零丢失
+                       + 两次 CAS 与 park 重查的实测数字 + 自旋 vs 挂起的临界区对照
+                       + 公平锁（插队 154582 次 vs 445 次）+ Condition vs notifyAll（无效唤醒 11 vs 7666）
 ```
 
 ### Day 1 · 2026-11-04（周三）· 线程基础：把「丢更新」撞出来
@@ -552,6 +558,169 @@ private static volatile Singleton safe;          flags: (0x004a) ACC_PRIVATE, AC
 - ⬜ 微基准不是 JMH：E 段只能看量级，不能说「volatile 写就是 0.775 ns」。
 - ⬜ 对象头 Mark Word 仍未实测（要 JOL），偏向锁只到 `PrintFlagsFinal` 这一层。
 
+### Day 4 · 2026-11-11（周三）· `Lock` / AQS / `wait-notify`
+
+| 时间 | 做什么 | 产出 |
+| -: | :--- | :--- |
+| 10 分钟 | 复述 Day 3：happens-before 四条各怎么证明 / DCL 为什么在 x86 上测不出来 | 口头过 |
+| 15 分钟 | `wait` / `notify`：为什么必须写在 `synchronized` 里、`if` 与 `while`、`notify` 与 `notifyAll` | `day4/WaitNotify.java` A~E 段 |
+| 25 分钟 | **手写简易 AQS**：`state` + CLH 队列 + `tryAcquire`/`tryRelease` + `LockSupport.park`，再跑 10 线程 × 20 万次对拍 | `day4/MiniAqs.java` A~D 段 |
+| 10 分钟 | `ReentrantLock` 公平 vs 非公平（吞吐 + 插队次数 + 最长等待）、`Condition` 对照 `wait/notifyAll` | `day4/LockCompare.java` A/B 段 |
+| 5 分钟 | 输出 `day4-result.txt` + `day4-bytecode.txt` + 本节笔记 + 勾掉 `Lock` | 笔记 + 快照 |
+
+实测快照：`w03-concurrency-basics/day4-result.txt`（JDK 17.0.12 / 12 核，129 行）
+字节码证据：`w03-concurrency-basics/day4-bytecode.txt`（75 行）
+
+#### 1. `wait()` 为什么必须写在 `synchronized` 里
+
+```text
+wait()   → IllegalMonitorStateException: current thread is not owner
+notify() → IllegalMonitorStateException: current thread is not owner
+```
+
+不是语法洁癖。`wait()` 要一次做三件事：**释放锁 → 挂起 → 被唤醒后重新抢锁**，
+三件事全部围绕 monitor 完成。没有 monitor，「要释放的东西」就不存在，这个动作没法定义。
+
+#### 2. 被唤醒 ≠ 条件成立：`if` 与 `while`
+
+两个消费者 `wait()`，生产者放 **1** 件货然后 `notifyAll()` —— 两个人都被叫醒，货只有一件：
+
+| 写法 | 空手而归 | 说明 |
+| :--- | ---: | :--- |
+| `if (item == null) wait();` | **1 次** | 醒了就往下走，货架是空的，取到 `null` |
+| `while (item == null) wait();` | **0 次** | 醒来重查，还是空的就接着睡（实测「重查又回去等」1 次） |
+
+**`wait()` 必须包在 `while(条件不成立)` 里。** 被叫醒只是「你有机会了」，不是「条件成立了」。
+
+关于真正的**虚假唤醒**：它来自 JVM/OS，没有参数能让它必然发生，所以**不能靠「我等到了就能复现」来证明**。
+但它造成的后果和「`notifyAll` 多叫醒一个」完全一样 —— 醒了，条件还是不成立。
+所以用后者来演示是等价的，而且 100% 可复现。
+
+#### 3. `notify()` 一次只叫醒一个：信号会丢
+
+> 这一节的第一版是错的。「两个等待者等不同条件 + `notify()` 叫错人」20 轮只丢了 2 次 ——
+> 这个 JVM 大多时候恰好挑中了该醒的那个。**靠概率的结论不算结论。**
+
+换成确定性的写法：一次放 **2** 件货，只喊一声。
+
+| 段 | 做法 | 结果 |
+| :--- | :--- | :--- |
+| C1 | 放 2 件货 + `notify()` 一次 | 取走 **1 件**，剩 **1 件**，还有 **1 个消费者停在 WAITING** |
+| C2 | 放 2 件货 + `notifyAll()` | 取走 2 件，剩 0 件，0 个在等 |
+| C3 | 没人在等时 `notify()`，随后 `wait(200)` | 等满 **200 ms** 才超时 —— 信号不存储 |
+
+C1 那行是死锁的雏形：**货还在，人在睡**。真实业务里「放了几件货」根本算不准，
+所以默认 `notifyAll()` —— 多叫醒几个只是几次空转，少叫醒一个是永久卡死。
+
+C3 补的是另一半：**monitor 不是信号量**，`notify` 不是一个会累加的计数，它只是「当场叫醒」这个动作。
+所以「先改条件再 `wait`」一定丢；条件检查和 `wait` 必须在同一把锁里。
+
+#### 4. `wait()` 释放锁，`sleep()` 不释放
+
+| 持锁者做什么 | 旁观者进临界区前的排队 |
+| :--- | ---: |
+| `Thread.sleep(500)` | **414 ms** |
+| `lock.wait(500)` | **0 ms** |
+
+同是「停 500 ms」，一个把门锁着睡，一个把钥匙放桌上。
+**「在 `synchronized` 里 `sleep`」是并发性能的头号杀手** —— 要让出锁只能靠 `wait`。
+
+顺带一条：被 `interrupt()` 打断时抛 `InterruptedException`，**JVM 会先清掉中断标志**
+（实测捕获后 `isInterrupted()` 已是 `false`），所以捕获后必须自己再 `interrupt()` 一次，
+否则上层永远不知道「有人想让我停」。
+
+#### 5. 手写 AQS：`state` + 双向队列 + park
+
+80 行，和真实 AQS 同构：`state` 当重入计数、双向 CLH 队列、`LockSupport.park/unpark` 挂起唤醒。
+
+```java
+void lock() {
+    if (tryAcquire(1)) return;          // 快路径
+    Node node = enq();                  // 慢路径：入队
+    for (;;) {
+        Node p = node.prev;
+        if (p == head.get() && tryAcquire(1)) { setHead(node); return; }   // 只有队首有资格抢
+        ...
+        LockSupport.park(this);         // 醒来必须回到循环顶部重试
+    }
+}
+```
+
+对拍结果：10 线程 × 20 万次 `count++`（普通 `int`），**期望 2000000，实际 2000000，丢 0**；
+同一段代码去掉锁 → 丢 **1551791**（77.6%）。
+`state` 的验证：`lock()` 三次 → 3，`unlock()` 两次 → 1，第三次 → 0，第 4 次 `unlock()` 抛 ISE。
+
+#### 6. 「入队两次 CAS」和「park 之后还要重查」的实测答案
+
+| 统计项 | 实测（200 万次加锁） |
+| :--- | :--- |
+| CAS 建哨兵（`head`） | **1 次** —— 队列惰性初始化，整个进程只建一次 |
+| CAS 抢尾（`tail`） | **87742 次**，平均每 23 次加锁 1 次 |
+| `park` 挂起 | **175075 次**，平均每 11 次加锁挂起一次 |
+| **醒来但没抢到** | **87500 次** |
+
+- **为什么两次 CAS**：一次建哨兵、一次抢尾，两个状态转移各自必须原子，合并成一个 CAS 做不到 ——
+  那意味着要同时原子地改 `head` 和 `tail`。
+- **为什么 `park` 之后要重查**：那 **87500 次**「醒来没抢到」就是答案。最凶的插队者不是新线程，
+  而是**刚 `unlock()` 转头又 `lock()` 的那个消费线程** —— 压测循环里它每轮都干这事。
+
+另外 `unpark` 有**许可**语义：先 `unpark` 后 `park` 不会丢信号，后到的 `park` 立刻返回。
+所以这里不用像 `wait/notify` 那样担心「叫早了」。
+
+#### 7. 手写版慢 5.8 倍？换个临界区就只剩 1.13 倍
+
+同一套脚手架（10 线程、`CountDownLatch` 同时起跑、三轮取最小、先预热）：
+
+| 临界区 | `synchronized` | `ReentrantLock` | 简易 AQS | 简易 ÷ 内置 |
+| :--- | ---: | ---: | ---: | ---: |
+| ≈1 ns（一条 `iadd`，200 万次） | 118 ms | **50 ms** | 687 ms | **5.8 倍** |
+| ≈0.5 µs（1500 次乘加，5 万次） | 84 ms | 75 ms | 95 ms | **1.13 倍** |
+
+**这一对是今天最值钱的对照。** 临界区一拉长，差距就没了 ——
+因为 `park` 的代价是固定的几微秒（`730 ms ÷ 175075 次 ≈ 4.2 µs/次`），
+临界区越长它被摊得越薄；而临界区只有 1 ns 时，**挂起一次就等于输几万次**。
+
+所以「手写版慢」不是队列写错了，是**这个负载在考「自旋 vs 挂起」的取舍**。
+`ReentrantLock` 敢猛自旋，是因为它知道自旋失败才付挂起的钱。
+
+#### 8. 公平锁：一个反直觉的实测
+
+| 指标 | 非公平 | 公平 |
+| :--- | ---: | ---: |
+| 8 线程 × 2 万次耗时 | **30 ms** | 1228 ms（**41 倍**） |
+| 连续两次抢到锁（插队） | **154582 次** | 445 次 |
+| 单线程最长等待 | 387 µs | **582 µs** |
+
+第三行和「公平锁不会饿死人」的直觉是反的：**公平锁的最长等待反而更大**。
+因为临界区只有 1 ns，公平锁等的主要不是临界区，而是「解锁后唤醒下一个人」的交接成本（几 µs），
+排 8 个人就是 8 次交接；非公平靠自旋，几乎不走内核。
+
+所以公平换来的**不是「等得更短」，是「等得有上界、可预测」**：
+最坏 = 排在你前面的人数 × 交接成本；非公平的理论最坏是无穷。这是**吞吐换确定性**，不是吞吐换公平。
+
+#### 9. `Condition` 存在的唯一理由
+
+同样的「有界队列 + 生产者消费者」，容量故意设成 **1**（每次唤醒都是一场争抢），数的是**无效唤醒**：
+醒来一看条件还不成立、只能再睡回去的次数。
+
+| 实现 | 耗时 | 无效唤醒 |
+| :--- | ---: | ---: |
+| `Condition`（`notFull` / `notEmpty` 两个等待队列） | 143 ms | **11 次** |
+| `synchronized` + `notifyAll` | 172 ms | **7666 次** |
+
+`Condition` 精确叫一个，`notifyAll` 把 4 个消费者一起叫醒、3 个白醒。
+**`Condition` 存在的唯一理由：把等不同条件的线程分组成多个等待队列。**
+`wait/notify` 只有一个等待集合，做不到这件事。
+
+#### 10. 遗留
+
+- ✅ `Lock` 已勾：AQS 的 `state` / 队列 / `park` 都手写过了，`Condition` 和公平锁也测了。
+- ⬜ 没有 `cancelAcquire`（节点取消）—— 真实 AQS 有一整套「跳过已取消节点」的逻辑，这里省略了。
+  所以本实现**不支持中断取消**，也**不支持超时**（`tryLock(timeout)`）。
+- ⬜ 没有 `shared` 模式（`Semaphore` / `CountDownLatch` / 读写锁共用同一套 AQS）。
+- ⬜ 微基准不是 JMH：三轮取最小 + 预热可控抖动，但只能说量级，不能说「`park` 就是 4.2 µs」。
+- ⬜ `synchronized` 的锁升级链（无锁 → 轻量 → 重量）仍未从 Mark Word 层面实测（要 JOL）。
+
 ## 四、踩坑与 Bug 复盘
 
 | 现象 | 原因 | 排查过程 | 解决 | 底层原理 |
@@ -562,6 +731,11 @@ private static volatile Singleton safe;          flags: (0x004a) ACC_PRIVATE, AC
 | 加上握手之后，第二版 `volatile` 那条也「始终没看见」，差点得出「volatile 没用」的荒谬结论 | 自旋上限设成 3 亿次，实测 3 亿次只要 200 ms，而主线程要等 200 ms 才置位 —— reader 撞上限退出时标志位还没写 | 两行输出都是「撞上限」，耗时 201 / 214 ms，跟等待时间几乎相等，明显是「跑完了才被置位」 | 上限提到 20 亿次、等待降到 50 ms，普通版撞上限（384 ms 未看见）、volatile 版 1.98 亿次后看见 | 自旋上限必须远大于等待时间，否则测的是「谁先到终点」，不是可见性 |
 | `start()` 调第二次抛 `IllegalThreadStateException`，想打点日志发现 message 是 null | `Thread.start0()` 里就一句 `throw new IllegalThreadStateException()`，没带任何信息 | `e.toString()` 只有类名；`getMessage()` 为 null | 结论化进笔记：这类异常只能靠上下文推断 | 「异常没 message」不一定是 JDK 偷懒，也可能是「它认为调用方本该知道」（同一个线程不能起两次） |
 | `RaceCondition` 第一版直接 `for` 循环起 10 个线程，竞态复现率极不稳定 | 线程是一个个 `start()` 的，第一个可能已经跑完第十个才起来，天然错开 | 把「每轮有没有丢」打出来，发现有的轮次整齐 200000 | 全部卡在 `CountDownLatch(1)` 上，`countDown()` 一起放行 | 复现竞态的第二件必需品：**同时起跑**。第一件是「工作量够长」（见上面第一条） |
+| Day 4 的 C 段：在 `synchronized (mon)` 里调 `a.join(1000)`，每次都等到 1 秒超时才往下走 | 消费者线程要**重新拿到 `mon`** 才能退出临界区，而我持着锁等它结束 —— 自己把自己卡住 | 段耗时异常（固定 1 秒），且两个消费者状态一直是 `WAITING` | 先取数、出临界区、再 `join` | 「持锁」不只是挡别人，也挡自己等的那个线程；`join` / `wait` / IO 都不该写在临界区里 |
+| Day 4 的 C 段第一版：两个消费者都没 `wait`，直接各取走一件，`notify` 一次也「取走 2 件」 | 我把「放 2 件货」写成了**初始状态**，消费者进临界区时货已经在架上，`while` 条件一开始就不成立 | 打出来的 `WAITING` 消费者数是 0，和「只喊一声」的预期矛盾 | 初始 `items = 0`，等两个消费者都睡下之后再 `items = 2` + `notify` | 讲 `wait/notify` 的实验，**必须先让人睡着再发生事件**，否则测的是普通顺序执行 |
+| Day 4 想演示「`notify()` 叫错人导致丢信号」，20 轮只丢了 2 次 | 两个等待者等不同条件时，`notify()` 挑谁是 JVM 实现细节，本机大多挑中该醒的那个 | 连续跑三次分别是 2/20、3/20、2/20 —— 样本不够稳定 | 换成「2 件货只喊一声」：只要少喊一次，就必然有人醒不过来 | **靠概率的实验不能当结论**；要证明「丢了」，得构造必然丢的场景，而不是等它丢 |
+| Day 4 的 C 段算出 `synchronized` 只要 22 ms 跑完 200 万次，还写了「差 15 倍」，同一份活在 C2 段却是 107 ms | C 段用内联 `counter++`，C2 段用 lambda + 接口调用，**两套脚手架**；且 C 段是 JVM 里第一个跑的，预热成本全算它头上 | 同一份活两个数字对不上，回头查两个 `bench` 方法才发现不是同一段代码 | 统一成一套 `benchXxx` + 开头 `warmup()`，结论改成 5.8 倍 | **不同脚手架的数字不能放同一张表比**；先跑的代码会背下全部 JIT 预热成本 |
+| 手写 AQS 第一版把 `Node.thread` 声明成 `final`，`setHead()` 编译不过 | 节点抢到锁之后要**把自己变成哨兵**，哨兵没有线程，需要 `thread = null` | `javac` 报「无法为 final 字段赋值」 | 改成 `volatile Thread thread` | 真实 AQS 的 `Node.thread` 也是 `volatile` 而非 `final` —— 字段的可变性和它在算法里的角色是绑定的 |
 | Day 2 的 D2 段（可重入）整段一行输出都没有，`join(2000)` 直接超时 | **复用了 D1 的锁对象 A** —— 那时 A 已经被死锁线程永久占着，D2 一进去就 BLOCKED | 输出里 D2 标题在、内容全无，且没有异常栈；反查发现 `synchronized (A)` 的 A 就是 D1 那两把 | 给 D2 换一个全新的 `final Object me = new Object()` | 死锁的线程不会自己松手；**同一份 demo 里段的顺序会互相污染状态**，每段要自带干净的锁 |
 | `jstack` 报 `17592: no such process`，但进程明明在 | ① 抓晚了：`hold` 只挂 20 秒，两次工具调用之间的间隔就超了；② 更坑的是 Git Bash 里 `$!` 拿到的是 **MSYS 的 pid**，跟 Windows 原生 pid 不是一个数 | 第二次比对：`$!`=1315，程序自己打印的 `ProcessHandle.current().pid()`=33708 | 单条命令里完成「起进程 → 等 4 秒 → 读程序打印的 PID → jstack」 | Windows 上跨 shell 的 pid 不是同一个 ID 空间；`jstack` 只认原生 pid |
 | `tryLock` 那版第一轮跑出「5 秒内跑完？false，重试 18/18」，以为 demo 写错了 | 不是写错，是**活锁**：两个线程节拍完全一致，每次都在「等第二把锁」处对撞，然后同时放弃同时重来 | 重试次数 18 说明循环在疯狂空转而不是卡住；没有 BLOCKED、CPU 还在烧 → 排除死锁 | ① 加随机退避打散节拍；② 单次改成 5 轮统计（4/5 活锁）；③ 保留「不加退避 vs 加退避」的对照 | 活锁的判据是「线程在跑但没推进」，靠 CPU + 无阻塞栈排除死锁；**它和死锁的排查路径完全不同** |
@@ -618,6 +792,37 @@ private static volatile Singleton safe;          flags: (0x004a) ACC_PRIVATE, AC
   **判断依据只能是 JMM，不是「我跑了没复现」**）
 - DCL 之外还有什么单例写法？哪种更稳？（静态内部类 holder / 枚举 / 饿汉。
   holder 靠 `<clinit>` 的类初始化锁，天然带 HB 边且不需要 volatile，**工程上更推荐**）
+- **`wait()` 为什么必须写在 `synchronized` 里？**（它要「释放锁 → 挂起 → 重新抢锁」，
+  三件事都围绕 monitor；不在锁里就没有可释放的东西，直接 `IllegalMonitorStateException: current thread is not owner`）
+- `wait()` 为什么必须包在 `while` 里，不能用 `if`？（醒来 ≠ 条件成立。实测：2 消费者 + 1 件货 +
+  `notifyAll()`，`if` 版空手而归 1 次，`while` 版 0 次。虚假唤醒只是「醒了但条件没成立」的其中一种来源）
+- `notify()` 和 `notifyAll()` 怎么选？（只要等待的条件不止一种，就必须 `notifyAll`。
+  实测：放 2 件货只 `notify()` 一次 → 取走 1 件、剩 1 件、1 个消费者永久 `WAITING`）
+- `notify()` 能不能当信号量用、攒着？（不能。没人在等时 `notify()` 直接丢弃，
+  随后的 `wait(200)` 等满 200 ms 才超时。它只是「当场叫醒」这个动作，不是计数器）
+- `wait()` 和 `sleep()` 的区别？（`wait` 释放锁、`sleep` 抱着锁睡。实测旁观者排队 0 ms vs 414 ms；
+  另外 `wait` 是 `Object` 的方法、要在锁里，`sleep` 是 `Thread` 的静态方法、在哪里都能调）
+- 捕获 `InterruptedException` 之后为什么还要 `interrupt()` 一次？（抛异常时 JVM 已清标志，
+  实测捕获后 `isInterrupted()` 是 false，不补一次上层就永远不知道要停）
+- **AQS 的核心是什么？**（一个 `volatile int state` + 一条 CLH 双向队列 + `LockSupport.park/unpark`。
+  `state` 的语义由子类定义：`ReentrantLock` 当重入次数、`Semaphore` 当许可数、`CountDownLatch` 当倒计数）
+- **AQS 入队为什么要 CAS 两次？**（一次建哨兵 `head`（惰性初始化），一次抢 `tail`。
+  实测整轮 200 万次加锁里建哨兵 1 次、抢尾 87742 次。两个状态转移各自必须原子，
+  合并意味着要同时原子改 `head` 和 `tail`）
+- **`park` 之后为什么还要再检查一次？**（`park` 返回 ≠ 拿到锁。实测 175075 次挂起里有 87500 次
+  「醒来没抢到」—— 最常见是被「刚 `unlock` 又立刻 `lock`」的线程插队。不重查就会带着「我以为我有锁」继续跑）
+- `park` 和 `wait` 的区别？（`park` 不需要持锁、以线程为单位、有「许可」语义 —— 先 `unpark` 后 `park` 不丢信号；
+  `wait` 必须持锁、以对象为单位、信号会丢。所以 AQS 用 `park` 不用 `wait`）
+- **公平锁为什么慢？它真的「等得更短」吗？**（慢是因为每次解锁都要唤醒队首、把锁交接出去 ——
+  实测 41 倍。而且**最长等待反而更大**（582 µs vs 387 µs），因为临界区只有 1 ns 时，
+  等的是交接成本不是临界区。公平换来的是「有上界、可预测」，不是「更短」）
+- 非公平锁会不会把线程饿死？（理论上会 —— 一直有人插队就可能轮不到你，
+  但代价是吞吐；`ReentrantLock(true)` 用「排队 + 交接」把最坏情况压成「前面人数 × 交接成本」）
+- **`Condition` 和 `wait/notify` 有什么区别？**（`Condition` 一个锁可以 `newCondition()` 出多个等待队列，
+  `signal` 只叫自己队列里的一个；`synchronized` 只有一个等待集合，只能 `notifyAll` 全员广播。
+  实测容量 1 的队列：无效唤醒 11 次 vs 7666 次）
+- `Condition.await()` 和 `Object.wait()` 有什么关系？（语义一一对应，`await/signal/signalAll` ↔ `wait/notify/notifyAll`，
+  都要包在 `while` 里。区别是 `Condition` 可以分组，而且支持 `awaitNanos` / `awaitUninterruptibly` / 多条件）
 
 ## 六、一句话总结
 
@@ -632,6 +837,7 @@ private static volatile Singleton safe;          flags: (0x004a) ACC_PRIVATE, AC
 | 2026-11-04 | 三 | Day 1 线程基础：三种起线程方式 + run/start 陷阱 + 竞态复现（2 万 vs 50 万对照）+ volatile/synchronized/Atomic 三条修法 + 可见性对照 + javap 字节码 | 60 min | `StartThread` / `RaceCondition` / `day1-result.txt` / `day1-bytecode.txt` | ✅ |
 | 2026-11-05 | 四 | Day 2 锁的是谁：实例锁 this / 静态锁 Class / `new Object()` 没锁 + 可重入 + 死锁（ThreadMXBean + jstack）+ 活锁 4/5 + 全局定序 + 偏向锁三档证据 | 60 min | `LockTarget` / `Deadlock` / `day2-result.txt` / `day2-deadlock-jstack.txt` | ✅ |
 | 2026-11-06 | 五 | Day 3 happens-before：Dekker 测出 (0,0) 16%~40% / monitor 传可见性 / volatile 发布订阅（对照组 15 亿次看不见）/ start-join 抢跑 151/500 + DCL 半初始化对象 `{a=1,b=null,c=0}` + `lock` 前缀取证 + set vs lazySet 5.8 倍 | 60 min | `HappensBefore` / `DclSingleton` / `day3-result.txt` / `day3-bytecode.txt` | ✅ |
+| 2026-11-11 | 三 | Day 4 Lock/AQS/wait-notify：ISE / if vs while / notify 只叫一个（剩 1 件货 + 1 个人 WAITING）/ wait 释放锁 0 ms vs 414 ms / 中断清标志 + 手写 AQS 200 万次零丢失 + 两次 CAS 与 park 重查（87742 / 87500）+ 临界区对照 5.8 倍→1.13 倍 + 公平锁 41 倍且最长等待更大 + Condition 无效唤醒 11 vs 7666 | 60 min | `WaitNotify` / `MiniAqs` / `LockCompare` / `day4-result.txt` / `day4-bytecode.txt` | ✅ |
 |  | 六 |  |  |  |  |
 |  | 日 |  |  |  |  |
 
@@ -737,3 +943,50 @@ Singleton{a=1, b=null, c=0}
 
 工程上更推荐**静态内部类 holder**：靠 `<clinit>` 的类初始化锁，JVM 保证只跑一次且天然带 hb 边，
 不需要 volatile，也不会有「两次判空」这种需要读者懂内存模型才能看懂的地方。
+
+---
+
+**Q · AQS 到底是个什么东西？为什么入队要 CAS 两次、`park` 之后还要再检查？**
+
+三句话：**一个 `volatile int state`、一条 CLH 双向队列、`LockSupport.park/unpark`。**
+`state` 的语义不归 AQS 管，由子类定义 —— `ReentrantLock` 当重入次数、`Semaphore` 当许可数、
+`CountDownLatch` 当倒计数。这就是「一套框架撑起整个 `java.util.concurrent`」的原因。
+
+**为什么两次 CAS**：第一次是队列还不存在时造哨兵 `head`（惰性初始化），第二次是把 `tail` 从旧尾换成自己。
+两个状态转移各自必须原子；想合成一个 CAS 就得「同时原子地改 `head` 和 `tail`」，做不到。
+实测（200 万次加锁）：建哨兵 **1 次**，抢尾 **87742 次**。
+
+**为什么 `park` 之后要重查**：因为 `park` 返回不等于拿到锁。它可能被 `unpark` 了但锁已经被别人抢走，
+也可能被中断/虚假唤醒。实测 175075 次挂起里有 **87500 次「醒来没抢到」** —— 最常见的就是
+「刚 `unlock` 转头又 `lock`」的线程插队。所以 `park` 必须包在 `for(;;)` 里，醒来第一件事是重试 `tryAcquire`。
+
+顺便记住 `lock()` 的形状，面试让手写就是这个：
+
+```text
+快路径 tryAcquire 成功 → 直接走
+失败 → enq() 入队 → 循环：
+        前驱是 head 且 tryAcquire 成功 → setHead 摘出自己，返回
+        否则自旋几轮 → 还是不行就 park
+```
+
+**还有一句容易答漏的话**：手写版比 `ReentrantLock` 慢 5.8 倍，但那是临界区只有 1 ns 时的结果；
+把临界区拉到 0.5 µs，差距就只剩 1.13 倍。差的那部分 ≈ `park 次数 × 4.2 µs` ——
+**慢的不是队列，是挂起**。这也解释了为什么 `ReentrantLock` 要拼命自旋。
+
+---
+
+**Q · `wait/notify` 的三个「必须」是什么？**
+
+1. **必须在 `synchronized` 里**（否则 `IllegalMonitorStateException: current thread is not owner`）——
+   因为 `wait` 要做的是「释放锁 → 挂起 → 重新抢锁」，没有锁就没有可释放的东西；
+2. **必须包在 `while` 里，不是 `if`** —— 被唤醒只代表「有机会了」，不代表条件成立。
+   实测 2 消费者 + 1 件货 + `notifyAll`：`if` 版空手而归 1 次，`while` 版 0 次；
+3. **多个条件时必须 `notifyAll`** —— `notify()` 一次只叫一个。实测放 2 件货只喊一声：
+   取走 1 件、剩 1 件、1 个消费者永久 `WAITING`（货还在，人在睡）。
+
+再补两条实测细节：`wait()` 会**释放锁**（旁观者排队 0 ms vs `sleep` 的 414 ms）；
+被中断时 JVM **先清标志再抛异常**，所以捕获后要自己 `interrupt()` 一次。
+
+`Condition` 存在的理由就一条：`synchronized` 只有一个等待集合，
+而 `Condition` 能 `newCondition()` 出多个队列、`signal` 只叫自己那个 ——
+实测容量 1 的队列，无效唤醒 **11 次 vs 7666 次**。

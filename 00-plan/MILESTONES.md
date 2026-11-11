@@ -95,7 +95,7 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 | 主题 | 笔记 | 代码 | 面试题库 |
 | :--- | :--- | :--- | :--- |
 | 泛型 · 异常 · Optional · Stream | `W02-泛型-异常-Stream.md` | `w02-generics-stream/` | Java基础 +3 |
-| Java 并发基础 | `W03-Java并发基础.md` | `w03-concurrency-basics/` | Java并发 +3 |
+| Java 并发基础 | `W03-Java并发基础.md` | `w03-concurrency-basics/` | Java并发 +8（✅ 已 8 道） |
 | 线程池 · CompletableFuture | `W04-线程池与CompletableFuture.md` | `w04-threadpool-completablefuture/` | Java并发 +2 |
 
 **M1 解锁标准**：三份笔记各自「核心问题」有个人回答 + 三个工程能一条命令跑起来 + 题库 8 道题有内容。
@@ -113,10 +113,12 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > | 2026-11-04 | **W03 Day 1 · 线程基础**（`w03-concurrency-basics/` 从 `.gitkeep` 建工程） | `day1/StartThread`（三种起线程 + run/start + daemon）+ `day1/RaceCondition`（基线 / 2 万 vs 50 万对照 / volatile / synchronized 方法级与同步块 / Atomic / 可见性对照）+ `day1-result.txt`（147 行）+ `day1-bytecode.txt`（6 段 javap 证据）；笔记 Day 1 整节（8 小节）+ 踩坑 6 条 + 参考要点「为什么会有线程安全问题」；`Java并发.md` 0 → **2 题** |
 > | 2026-11-05 | **W03 Day 2 · `synchronized` 锁的是谁** | `day2/LockTarget`（实例锁 this / 静态锁 Class / `new Object()` 等于没锁 / 字符串常量全局锁）+ `day2/Deadlock`（交叉死锁 + `ThreadMXBean` 检测 / 可重入 / 活锁 4/5 + 随机退避 + 全局定序）+ `day2-result.txt`（116 行）+ `day2-deadlock-jstack.txt`（jstack 原件 142 行）；笔记 Day 2 整节（8 小节）+ 踩坑 5 条 + 参考要点「锁的是谁」「死锁怎么排查」；`Java并发.md` 2 → **4 题**；`cheatsheets/JVM排查命令.md` 补「死锁」小节 |
 > | 2026-11-06 | **W03 Day 3 · `volatile` 内存语义 + happens-before + DCL** | `day3/HappensBefore`（Dekker litmus 测出 `(0,0)` 16%~40% / monitor 传可见性 / volatile 发布订阅 5/5 vs 对照组 0/5 / start-join 抢跑 151/500 / `set` vs `lazySet` 5.8 倍）+ `day3/DclSingleton`（50 轮 × 6 线程压力 0 次 + 手工重排抓到 `{a=1,b=null,c=0}` + `Unsafe.allocateInstance`）+ `day3-result.txt`（86 行）+ `day3-bytecode.txt`（170 行，含 `lock addl` 原文）；笔记 Day 3 整节（8 小节）+ 踩坑 6 条 + 面试 9 条 + 参考要点 2 题；`Java并发.md` 4 → **6 题** |
+> | 2026-11-11 | **W03 Day 4 · `Lock` / AQS / `wait-notify`**，W03 封板 | `day4/WaitNotify`（ISE / `if` vs `while` / `notify` 只叫一个 → 剩 1 件货 + 1 人 WAITING / `wait` 释放锁 0 ms vs `sleep` 414 ms / 中断清标志）+ `day4/MiniAqs`（**手写 state + CLH 队列 + park**，200 万次对拍零丢失；两次 CAS 与 park 重查的实测 1 / 87742 / 175075 / 87500；临界区 1 ns 慢 5.8 倍 → 0.5 µs 只慢 1.13 倍）+ `day4/LockCompare`（公平锁 41 倍、插队 154582 vs 445、最长等待反而更大；`Condition` 无效唤醒 11 vs 7666）+ `day4-result.txt`（129 行）+ `day4-bytecode.txt`（75 行）；笔记 Day 4 整节（10 小节）+ 踩坑 5 条 + 面试 14 条 + 参考要点 2 题；`Java并发.md` 6 → **8 题** |
 >
-> **W02 已封板（2026-11-03）**，六天全部完成。题库 M1 只要 8 道，现在 24 + 4 道。
-> 当前在 **W03 并发**，Day 1（11-04）、Day 2（11-05）、Day 3（11-06）已完成，
-> `Thread`/`synchronized`/`volatile` 已勾，只剩 `Lock`；题库 `Java并发.md` 6 道。
+> **W02 已封板（2026-11-03）**，六天全部完成。**W03 已封板（2026-11-11）**，四天全部完成。
+> 题库 M1 只要 8 道，现在 24（Java基础）+ 8（Java并发）＝ **32 道，M1 题量已达标**。
+> 当前在 **M1**，五个知识点（`Thread`/`synchronized`/`volatile`/`Lock`/线程安全成因）全部勾完，
+> 下一步 **W04 线程池 · CompletableFuture**（`w04-threadpool-completablefuture/` 从 `.gitkeep` 建工程）。
 >
 > W02 六天里最值钱的五条结论（讲课时直接能用，全部有实测数字）：
 >
@@ -211,9 +213,26 @@ D3c 全局定序 4000/4000 零重试）。产出 `day2-result.txt`（116 行）+
 ③ **「加了锁反而变快」几乎一定是锁没生效**（`new Object()` 46 ms vs 真锁 339 ms）；
 ④ 死锁的发现（`ThreadMXBean`）/ 确认（`jstack` 三样）/ 破解（全局定序）是三件事；活锁是概率的，死锁是确定的。
 
-下一个时间盒（60 分钟）：**W03 Day 3 · `volatile` 内存语义 + happens-before + DCL** ——
-① happens-before 八条里挑四条能实测的，每条写一个「去掉就错」的最小 Demo；
-② DCL 单例不加 volatile 到底会拿到什么，用「构造里 sleep + 字段赋值」放大窗口跑 100 轮统计；
-③ `javap` 看 volatile 字段读写的屏障落点；④ 输出 `day3-result.txt` + 勾掉 `volatile`。
-`Lock` / AQS / `wait-notify` 排 Day 4。
+**W03 Day 4 已完成（2026-11-11）· W03 封板**：`Lock` / AQS / `wait-notify`。
+`day4/WaitNotify`（A `wait()` 不在锁里 → `IllegalMonitorStateException: current thread is not owner`；
+B 2 消费者 + 1 件货 + `notifyAll`：`if` 版空手而归 1 次 vs `while` 版 0 次；
+C 放 2 件货只 `notify()` 一次 → 取走 1 件、剩 1 件、1 个消费者永久 `WAITING`（对比 `notifyAll` 2/0/0），
+外加「没人在等时 `notify` 直接丢弃」（`wait(200)` 等满 200 ms）；
+D `wait` 释放锁：旁观者排队 0 ms vs 持锁 `sleep` 414 ms；E 中断时 JVM 先清标志再抛异常）
++ `day4/MiniAqs`（**手写 `state` + CLH 双向队列 + `LockSupport.park/unpark`**：
+200 万次对拍零丢失、不锁对照丢 1551791；`state` 1→3→1→0 加重入 ISE；
+两次 CAS 实测「建哨兵 1 次 / 抢尾 87742 次」；175075 次挂起里 **87500 次醒来没抢到**；
+临界区 1 ns 时比 `synchronized` 慢 5.8 倍，拉到 0.5 µs 只慢 1.13 倍，差额 ≈ `park × 4.2 µs`）
++ `day4/LockCompare`（公平锁慢 41 倍、插队 154582 次 vs 445 次，但**最长等待反而更大** 582 µs vs 387 µs；
+`Condition` vs `notifyAll` 无效唤醒 11 次 vs 7666 次）。
+产出 `day4-result.txt`（129 行）+ `day4-bytecode.txt`（75 行）。
+
+三条核心结论：① **`park` 返回 ≠ 拿到锁**，87500 次「醒来没抢到」就是「必须重查」的实测证据，
+最凶的插队者是「刚 `unlock` 转头又 `lock`」的线程；② 手写 AQS 慢的不是队列是**挂起**
+（4.2 µs/次），临界区一变长差距就没了；③ 公平锁换来的不是「等得更短」而是「**等得有上界**」。
+
+下一个时间盒（60 分钟）：**W04 Day 1 · 线程池** ——
+① `ThreadPoolExecutor` 七个参数怎么配、任务在「核心 / 队列 / 非核心 / 拒绝」四步里怎么走；
+② 队列填满 vs 线程到上限，两种触发拒绝的路径实测；③ `Executors` 那几个工厂方法为什么被禁用（`newFixedThreadPool` 的无限队列）；
+④ 输出 `w04/day1-result.txt` + 勾掉「线程池」。
 时间盒见 `00-plan/today.md`（每天开工前先打开它，收工时覆盖）。
