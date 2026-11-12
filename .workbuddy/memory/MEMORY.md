@@ -24,9 +24,10 @@
 - W02 泛型/异常/Optional/Lambda/Stream/收集器 ✅ **已封板（11-03）**
 - W03 并发 ✅ **已封板（11-11）**：Day 1 线程基础 / Day 2 锁的是谁 /
   Day 3 volatile + happens-before + DCL / Day 4 `Lock` + 手写 AQS + `wait-notify`
-- **下一步：W04 Day 1 = 线程池**（`w04-threadpool-completablefuture/` 从 `.gitkeep` 建工程；
-  重点讲「核心线程满 → 先入队 → 队满才开非核心 → 都满才拒绝」这个顺序）
-- 题库：`Java基础.md` 24 题、`Java并发.md` 8 题（M1 只要 8 道，**刚好达标**）
+- W04 线程池/CF 🟨 **Day 1 完成（11-12）**：线程池七个参数 + 任务四步顺序 + Executors 四个工厂的坑
+- **下一步：W04 Day 2 = CompletableFuture**（`day2/`；`supplyAsync` 默认 `commonPool` /
+  `thenApply` vs `thenCompose` 的嵌套 Future / 异常链三种写法）
+- 题库：`Java基础.md` 24 题、`Java并发.md` 10 题（M1 只要 8 道，**已超标**）
 
 ## 目录职责
 
@@ -93,6 +94,16 @@
      临界区 1 ns 时它等的是「唤醒交接」而不是临界区。公平换来的是**有上界**，不是更短。
      `Condition` vs `notifyAll` 无效唤醒 11 vs 7666 —— Condition 存在的唯一理由就是「分多个等待队列」。
 
+- **线程池（W04 Day 1）**：
+  ① 任务顺序 **核心 → 队列 → 非核心 → 拒绝**（实测线程数 1→2→2→2→3→4→4，队列 0→0→1→2→2，
+  `#5` 是分水岭 = 队列刚满）；JDK 原话 `only if the queue is full`。教科书反着的那个答案就是错的。
+  ② **队列决定 max 是否生效**：无界队列永远不满 → 永不开非核心（实测 max=4、peak 恒 2）。
+  ③ 1 万个任务：`new Thread` 620~796 ms vs 池 12~13 ms（几十倍，量级稳、倍数飘），≈62 µs/线程。
+  ④ 无界队列不是「会 OOM」，是「**OOM 之前一切正常**」：`-Xmx64m` 下第 176 个任务才炸、拒绝数一直 0；
+  有界 50 + Abort → 拒绝 99948 次不 OOM。
+  ⑤ **`submit` 吞异常**（不 get 一个字不打，`execute` 打印且线程被替换 `thread-1`→`thread-2`）；
+  `ThreadLocal` 在池里串味（必须 `fixed(1)` 才能复现）；`keepAlive` 只管非核心线程。
+
 ## 工作方式上的硬教训（每条都踩过两次以上）
 
 - **断言先于实测**：已连续五天抓到自己「先写结论再验证」（`sorted` 屏障、`Predicate` 优先级、
@@ -117,6 +128,10 @@
 - **`jstack` 抓现场**：一条命令内「起进程 → 等 → 读程序打印的 `ProcessHandle.current().pid()` → jstack」；
   **Git Bash 的 `$!` 是 MSYS pid，不是 Windows 原生 pid**。线程名只用 ASCII。
 - 收集多个编译错误要按 javac 阶段拆文件（attribution 先跑，flow 会被整段跳过）。
+- **`catch (OutOfMemoryError)` 里不能直接 `printf`**：打印本身要分配对象，堆已满 → 二次 OOM，
+  控制台只剩 `thrown from the UncaughtExceptionHandler`。先预留 4 MB，catch 到就 `reserve = null; System.gc();` 再打。
+- **用线程池做实验也会被调度骗**：想演示「线程复用 / ThreadLocal 串味」，必须 `fixed(1)`，
+  否则两个任务落到不同线程，「复用」根本没发生（这个坑和「并发实验先让人睡着」是同一个毛病）。
 
 ## 断档与恢复的口径
 

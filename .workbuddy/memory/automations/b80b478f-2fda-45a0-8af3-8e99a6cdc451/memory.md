@@ -138,3 +138,18 @@
 - 新增经验（已写进 MEMORY.md）：不同脚手架数字不能同表比 + 必须 `warmup()`；靠概率的实验不算结论；
   并发实验先让人睡着再发生事件；`join`/`wait`/IO 不许写在 `synchronized` 里。
 - 环境提醒：加了新文件后 `sources.txt` 是旧的 → `ClassNotFoundException`，手动编译必须先刷新清单。
+
+## 2026-11-12（第十一次执行 · W04 Day 1 线程池）
+- 开工回归：清空 `out/` 重编 w03（6 文件）+ 跑 day1/day2/day3 六个入口，全 exit=0、行数与 11-06 逐个一致
+  （31/106/40/48/47/32），**无中断代码**；`01-notes` 未勾项只剩 W04 起，`02-code` 只剩 `w04-` 起的 `.gitkeep` → 无遗留需补。
+- 推进 W04 Day 1：从 `.gitkeep` 建 `w04-threadpool-completablefuture/`（run.sh / run.bat / README），
+  新建 `day1/PoolBasics`（A~E）、`day1/PoolFlow`（S1~S5 快照表）、`day1/PoolTraps`（T1~T6）
+  + `day1-result.txt`（164 行）+ `day1-jdk-source.txt`（ThreadPoolExecutor execute 三步 + 类文档原文）。
+- 题库 `Java并发.md` 8 → 10（Q9 任务四步顺序 / Q10 Executors 禁用 + 线程数）。
+- 同步：W04 笔记（Day 1 十一小节 + 踩坑 5 + 面试 12 + 参考要点 2 题 + 打卡 + 勾前三格）、
+  `today.md`（覆盖为 11-12，下一时间盒 W04 Day 2）、`MILESTONES.md`（M1 进展表 + 三条结论 + 下一步）。
+- 下次起点：**W04 Day 2 = CompletableFuture**（`supplyAsync` 默认 `commonPool` / `thenApply` vs `thenCompose` /
+  异常链 `exceptionally`/`handle`/`whenComplete`）。
+- 本次踩坑（已进 MEMORY.md）：`catch(OOM)` 里直接 printf 会二次 OOM（先预留内存再打印）；
+  `ThreadLocal` 串味实验必须 `fixed(1)`（`fixed(2)` 两个请求落到不同线程，残留根本没发生）；
+  `DiscardOldestPolicy` 连丢多个；`PoolFlow` 的 core=0 那格会抖 → 输出里标注；`ExecutorService` 无 `getQueue()`。

@@ -1,0 +1,147 @@
+==================================================================
+ W04 Day 1 · 源码取证：任务到底先入队还是先开线程
+ 来源：JDK 17 src.zip → java.base/java/util/concurrent/ThreadPoolExecutor.java
+ 提取命令（Git Bash）：
+   jar xf "C:/Program Files/Java/jdk-17/lib/src.zip" \
+          java.base/java/util/concurrent/ThreadPoolExecutor.java
+ 下面三段都是原文，未改动。
+==================================================================
+
+──────────────────────────────────────────────────────────────────
+一、类文档「Core and maximum pool sizes」（第 75 行起）
+   一句话：非核心线程**只在队列满的时候**才创建。
+──────────────────────────────────────────────────────────────────
+ * <dt>Core and maximum pool sizes</dt>
+ *
+ * <dd>A {@code ThreadPoolExecutor} will automatically adjust the
+ * pool size (see {@link #getPoolSize})
+ * according to the bounds set by
+ * corePoolSize (see {@link #getCorePoolSize}) and
+ * maximumPoolSize (see {@link #getMaximumPoolSize}).
+ *
+ * When a new task is submitted in method {@link #execute(Runnable)},
+ * if fewer than corePoolSize threads are running, a new thread is
+ * created to handle the request, even if other worker threads are
+ * idle.  Else if fewer than maximumPoolSize threads are running, a
+ * new thread will be created to handle the request only if the queue
+ * is full.  By setting corePoolSize and maximumPoolSize the same, you
+ * create a fixed-size thread pool. By setting maximumPoolSize to an
+ * essentially unbounded value such as {@code Integer.MAX_VALUE}, you
+ * allow the pool to accommodate an arbitrary number of concurrent
+ * tasks.
+
+   ↑ 关键是这一句：
+     "a new thread will be created to handle the request **only if the queue is full**"
+     所以顺序是：核心线程 → 队列 → （队满了才）非核心线程 → 拒绝。
+
+──────────────────────────────────────────────────────────────────
+二、类文档「Queuing」（第 138 行起）
+   三条规则，跟实测 S1/S2/S3 一一对应。
+──────────────────────────────────────────────────────────────────
+ * <dd>Any {@link BlockingQueue} may be used to transfer and hold
+ * submitted tasks.  The use of this queue interacts with pool sizing:
+ *
+ * <ul>
+ *
+ * <li>If fewer than corePoolSize threads are running, the Executor
+ * always prefers adding a new thread
+ * rather than queuing.
+ *
+ * <li>If corePoolSize or more threads are running, the Executor
+ * always prefers queuing a request rather than adding a new
+ * thread.
+ *
+ * <li>If a request cannot be queued, a new thread is created unless
+ * this would exceed maximumPoolSize, in which case, the task will be
+ * rejected.
+ *
+ * </ul>
+
+   ↑ 这三条就是「核心 → 队列 → 非核心 → 拒绝」的原文表述。
+     第 2 条最容易被忽略：只要核心线程够了，它**优先排队**，不会去开新线程。
+
+──────────────────────────────────────────────────────────────────
+三、execute() 方法本体（第 1328 行起）
+   注释里的 "Proceed in 3 steps" 就是这三步，代码是完全对应的。
+──────────────────────────────────────────────────────────────────
+    public void execute(Runnable command) {
+        if (command == null)
+            throw new NullPointerException();
+        /*
+         * Proceed in 3 steps:
+         *
+         * 1. If fewer than corePoolSize threads are running, try to
+         * start a new thread with the given command as its first
+         * task.  The call to addWorker atomically checks runState and
+         * workerCount, and so prevents false alarms that would add
+         * threads when it shouldn't, by returning false.
+         *
+         * 2. If a task can be successfully queued, then we still need
+         * to double-check whether we should have added a thread
+         * (because existing ones died since last checking) or that
+         * the pool shut down since entry into this method. So we
+         * recheck state and if necessary roll back the enqueuing if
+         * stopped, or start a new thread if there are none.
+         *
+         * 3. If we cannot queue task, then we try to add a new
+         * thread.  If it fails, we know we are shut down or saturated
+         * and so reject the task.
+         */
+        int c = ctl.get();
+        if (workerCountOf(c) < corePoolSize) {      // 第 1 步：核心线程没满 → 直接开线程
+            if (addWorker(command, true))           //            参数 true = 核心线程
+                return;
+            c = ctl.get();
+        }
+        if (isRunning(c) && workQueue.offer(command)) {   // 第 2 步：先试着入队
+            int recheck = ctl.get();
+            if (! isRunning(recheck) && remove(command))
+                reject(command);
+            else if (workerCountOf(recheck) == 0)
+                addWorker(null, false);             // 队里有活但一个线程都没有（core=0）→ 借一个
+        }
+        else if (!addWorker(command, false))        // 第 3 步：队满 → 开非核心线程
+            reject(command);                        //            开不动（到 max 了）→ 拒绝
+    }
+
+   ↑ 注意第 2 步的 `else if (workerCountOf(recheck) == 0) addWorker(null, false)`：
+     这就是实测里 S4（core=0）那个「先进队、再借线程」的来源。
+     注释里说得也很清楚：因为上一次检查之后线程可能已经死了，所以要 recheck。
+
+──────────────────────────────────────────────────────────────────
+四、类文档「Rejected tasks」（第 203 行起，节选）
+   四种策略的官方解释，跟实测 D 段一一对应。
+──────────────────────────────────────────────────────────────────
+ * <dd>New tasks submitted in method {@link #execute(Runnable)} will be
+ * <em>rejected</em> when the Executor has been shut down, and also when
+ * the Executor uses finite bounds for both maximum threads and work queue
+ * capacity, and is saturated.  In either case, the {@code execute} method
+ * invokes the {@link
+ * RejectedExecutionHandler#rejectedExecution(Runnable, ThreadPoolExecutor)}
+ * method of its {@link RejectedExecutionHandler}.  Four predefined handler
+ * policies are provided:
+ *
+ * <ol>
+ *
+ * <li>In the default {@link ThreadPoolExecutor.AbortPolicy}, the handler
+ * throws a runtime {@link RejectedExecutionException} upon rejection.
+ *
+ * <li>In {@link ThreadPoolExecutor.CallerRunsPolicy}, the thread
+ * that invokes {@code execute} itself runs the task. This provides a
+ * simple feedback control mechanism that will slow down the rate that
+ * new tasks are submitted.
+ *
+ * <li>In {@link ThreadPoolExecutor.DiscardPolicy}, a task that cannot
+ * be executed is simply dropped. This policy is designed only for
+ * those rare cases in which task completion is never relied upon.
+ *
+ * <li>In {@link ThreadPoolExecutor.DiscardOldestPolicy}, if the
+ * executor is not shut down, the task at the head of the work queue
+ * is dropped, and then execution is retried (which can fail again,
+ * causing this to be repeated.) This policy is rarely acceptable.  In
+ * nearly all cases, you should also cancel the task to cause an
+ * exception in any component waiting for its completion, and/or log
+ * the failure, as illustrated in {@link
+ * ThreadPoolExecutor.DiscardOldestPolicy} documentation.
+ *
+ * </ol>

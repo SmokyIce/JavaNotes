@@ -1,0 +1,163 @@
+==================================================================
+ W04 Day 1 · 线程池 · 实测输出（JDK 17 / Windows 11 / 12 核）
+ 生成时间：2026-11-12 09:36:00
+ 由 5 条 java 命令整体重定向生成，不是手抄（命令见 README「怎么跑」）
+==================================================================
+
+########## 1) PoolBasics ##########
+== 环境 ==
+CPU 12 核 / JVM 最大堆 4030 MB / Windows 11
+
+== A. 一万个任务：new Thread 每个任务一个线程， vs 固定 8 线程池 ==
+  逐个 new Thread + join :    620 ms
+  固定 8 线程池           :     13 ms
+  → 差 47.7 倍，全部差在「创建 / 销毁」上，不在「干活」上
+
+== B. 线程名：默认名什么都看不出来，线上必须自己命名 ==
+  默认名 → pool-3-thread-2
+  默认名 → pool-3-thread-1
+  默认名 → pool-3-thread-2
+  默认名 → pool-3-thread-1
+  注：默认名里的 pool-3 是**全局线程池序号**（前面 A 段开过两个），跟业务毫无关系；
+      后面那个 1/2 只是线程编号轮转 —— 从堆栈里根本看不出这是哪个业务的哪批任务。
+  自命名 → order-task-1
+  自命名 → order-task-2
+  自命名 → order-task-1
+  自命名 → order-task-2
+
+== C. keepAliveTime：只有「非核心线程」会被回收 ==
+  配置 core=2 max=4 queue=1 keepAlive=300ms
+  4 个任务堵住时: poolSize=3 queue=1
+    +  0 ms  poolSize=3
+    +150 ms  poolSize=3
+    +400 ms  poolSize=2
+    +800 ms  poolSize=2
+  —— 再开 allowCoreThreadTimeOut(true)，核心线程也会死 ——
+    刚跑完 2 个任务: poolSize=2
+    再等 500 ms    : poolSize=0  ← 全死光，线程池空了
+
+== D. 四种拒绝策略：core=1 max=1 queue=1，连提 5 个任务 ==
+  AbortPolicy(默认):       [抛异常#3, 抛异常#4, 抛异常#5, 跑#1@pool-6-thread-1, 跑#2@pool-6-thread-1]
+  CallerRunsPolicy:      [跑#3@main, 跑#1@pool-7-thread-1, 跑#5@main, 跑#2@pool-7-thread-1, 跑#4@pool-7-thread-1]
+  DiscardPolicy:         [跑#1@pool-8-thread-1, 跑#2@pool-8-thread-1]
+  DiscardOldestPolicy:   [跑#1@pool-9-thread-1, 跑#5@pool-9-thread-1]
+  逐个看这 5 个任务的下场：
+    Abort（默认）  → #3#4#5 抛 RejectedExecutionException，被我 catch 住了，所以线程池还能继续干活
+    CallerRuns    → 一个都没丢，但 #3#5 是在 **main 线程**里跑的：提交线程被自己的任务拖住 = 天然背压
+    Discard       → 只跑了 #1#2，#3#4#5 静默消失，**没有异常、没有日志**，最危险
+    DiscardOldest → 队列里最老的 #2 被挤掉，接着 #3#4 也被后来的挤掉，最后只剩 #1 和 #5
+
+== E. 关线程池：shutdown 收尾，shutdownNow 掀桌 ==
+  shutdown()    : 5 个排队任务全部跑完 → 完成 5 个
+  shutdownNow() : 返回未执行 4 个，跑完 0 个，被中断 1 个
+
+
+########## 2) PoolFlow（今天的主菜）##########
+== 任务在四步里怎么走：核心线程 → 队列 → 非核心线程 → 拒绝 ==
+（每个任务都堵在同一道门上，所以状态能稳住；提交一个拍一张快照）
+
+【S1 标准】core=2 max=4 queue=Array(2)，连提 10 个任务
+  序号       1     2     3     4     5     6     7     8     9    10
+  线程数     1     2     2     2     3     4     4     4     4     4
+  队列       0     0     1     2     2     2     2     2     2     2
+  结果      ok    ok    ok    ok    ok    ok   REJ   REJ   REJ   REJ
+  → 实际执行 6 个 / 拒绝 4 个 / 峰值线程 4 / 结束时队列里还剩 2 个
+
+【S2 无界】core=2 max=4 queue=Linked(无界)，连提 10 个任务
+  序号       1     2     3     4     5     6     7     8     9    10
+  线程数     1     2     2     2     2     2     2     2     2     2
+  队列       0     0     1     2     3     4     5     6     7     8
+  结果      ok    ok    ok    ok    ok    ok    ok    ok    ok    ok
+  → 实际执行 10 个 / 拒绝 0 个 / 峰值线程 2 / 结束时队列里还剩 8 个
+
+【S3 无核】core=2 max=2 queue=Array(2)，连提 10 个任务
+  序号       1     2     3     4     5     6     7     8     9    10
+  线程数     1     2     2     2     2     2     2     2     2     2
+  队列       0     0     1     2     2     2     2     2     2     2
+  结果      ok    ok    ok    ok   REJ   REJ   REJ   REJ   REJ   REJ
+  → 实际执行 4 个 / 拒绝 6 个 / 峰值线程 2 / 结束时队列里还剩 2 个
+
+【S4 core0】core=0 max=4 queue=Array(2)，连提 10 个任务
+  序号       1     2     3     4     5     6     7     8     9    10
+  线程数     1     1     2     3     4     4     4     4     4     4
+  队列       1     2     2     2     1     2     2     2     2     2
+  结果      ok    ok    ok    ok    ok    ok   REJ   REJ   REJ   REJ
+  → 实际执行 6 个 / 拒绝 4 个 / 峰值线程 4 / 结束时队列里还剩 2 个
+
+【S5 不排】core=2 max=4 queue=SynchronousQueue，连提 10 个任务
+  序号       1     2     3     4     5     6     7     8     9    10
+  线程数     1     2     3     4     4     4     4     4     4     4
+  队列       0     0     0     0     0     0     0     0     0     0
+  结果      ok    ok    ok    ok   REJ   REJ   REJ   REJ   REJ   REJ
+  → 实际执行 4 个 / 拒绝 6 个 / 峰值线程 4 / 结束时队列里还剩 0 个
+
+== 一张表看完 ==
+  场景       core  max  queue             提交  执行  拒绝  峰值  剩余
+  S1 标准        2    4  Array(2)          10     6     4     4     2
+  S2 无界        2    4  Linked(无界)        10    10     0     2     8
+  S3 无核        2    2  Array(2)          10     4     6     2     2
+  S4 core0     0    4  Array(2)          10     6     4     4     2
+  S5 不排        2    4  SynchronousQueue   10     4     6     4     0
+
+== 四条结论 ==
+  1. S1 的线程数是这样长的：1→2（核心满）→2,2（任务进队列）→3→4（队满才开非核心）→拒绝。
+     顺序是「核心 → 队列 → 非核心 → 拒绝」，不是「先开满线程再排队」。
+  2. S2 用无界队列，max=4 一次都没生效（峰值线程恒为 2）。
+     所以 newFixedThreadPool(n) 的 n 就是真实并发上限，max 参数形同虚设。
+  3. S3 core=max，没有非核心阶段：队列一满就直接拒绝，线程数不会再多一个。
+  4. S5 用 SynchronousQueue（容量 0），队列永远「满」，于是任务一个个直接开线程，
+     开到 max 就拒绝 —— 这就是 newCachedThreadPool 的形态（它的 max 是 Integer.MAX_VALUE）。
+
+  S4 那个 core=0 是特例：任务先进队，再借一个线程来消化（JDK 的补丁行为），
+  所以它的第一格线程数可能是 1、队列可能是 0，取决于工作线程抢得有多快 —— 看结论就好。
+
+########## 3) PoolTraps ##########
+== 环境：JVM 最大堆 4030 MB ==
+
+== T1. newFixedThreadPool(2) 提交 5 万个空任务 ==
+  队列峰值 33714 个任务，总耗时 20 ms，线程数始终 = 2
+  → 这个队列没有上界（LinkedBlockingQueue 默认容量 Integer.MAX_VALUE）。
+    消费端一慢，任务全堆在队列里，堆就这么被吃完了 —— 而且 max 参数完全没参与。
+
+== T2. newSingleThreadExecutor：一个慢任务堵死后面所有人 ==
+  3 个「瞬间就能跑完」的任务，从提交到全部完成花了 513 ms
+  → 它们没在等自己，在等前面那个 sleep(500)。单线程池没有并发，只有排队。
+
+== T3. newCachedThreadPool：线程数没有上限 ==
+  500 个 60 ms 的任务 → 峰值线程数 500（maximumPoolSize=2147483647）
+  → 每个任务一个线程，因为 SynchronousQueue 不存任务，只能现开一个线程来接。
+    60 秒 keepAlive 之内这些线程全活着。低峰期看不出来，活动一来就 thread 暴涨 / CPU 打满。
+
+== T4. submit 吞异常，execute 不吞 —— 这条最容易在生产上踩 ==
+  [execute] 任务里直接抛异常 → 异常被打印到控制台（下面那行就是）
+Exception in thread "pool-4-thread-1" java.lang.IllegalStateException: execute 里的异常：炸了 1
+	at com.newt.java48.w04.day1.PoolTraps.lambda$t4$4(PoolTraps.java:130)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1136)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:635)
+	at java.base/java.lang.Thread.run(Thread.java:842)
+  [execute] 下一个任务的线程名 = pool-4-thread-2 ← 旧线程已经死了，这是新补的
+  [submit ] 同样的异常，不调用 get() → 控制台什么都不会打印
+  [submit ] 上面这行之后没有任何堆栈 —— 异常被存在 Future 里了
+  [submit ] get() 才拿到：ExecutionException(cause=IllegalStateException: submit 里的异常：也炸了)
+  → 线程池里「任务没跑 / 跑了没生效」，第一步先查 Future 有没有人 get。
+
+== T5. 线程池复用线程 → ThreadLocal 串味 ==
+  请求A[pool-5-thread-1] 设置后读到: 用户A的登录信息
+  请求B[pool-5-thread-1] 读到        : 用户A的登录信息  ← 上一个请求的残留
+  请求B[pool-5-thread-1] remove 之后 : null
+  → 线程是复用的，ThreadLocal 是挂在线程上的，不 remove 就跟着线程活到下一次任务。
+    所以「用完必须 remove」不是洁癖，是正确性要求（尤其是租户 ID / 用户身份这类上下文）。
+
+
+########## 4) PoolTraps oom（-Xmx64m，无界队列）##########
+== T6. OOM 实测（mode=oom，最大堆 64 MB）==
+  提交到第 176 个任务时炸了: OutOfMemoryError
+  结果：成功入池 175 个 / 被拒绝 0 个 / 队列里还压着 173 个
+  → 无界队列：没有人拒绝，直到堆先撑不住。前面「一切正常」，最后一步全崩。
+    这就是阿里手册那条「线程池不允许使用 Executors 去创建」的实测现场。
+
+########## 5) PoolTraps oom-fixed（-Xmx64m，有界队列 50）##########
+== T6. OOM 实测（mode=oom-fixed，最大堆 64 MB）==
+  结果：成功入池 52 个 / 被拒绝 99948 个 / 队列里还压着 50 个
+  → 队列有界 + 默认 AbortPolicy：拒绝得很干脆，堆稳稳的。
+    代价是调用方要处理拒绝（降级 / 重试 / 返回 429），这是「必须做的功课」。

@@ -469,3 +469,142 @@
 > 或者醒来时任务已经被别人抢走，它拿着 `null` 继续往下跑，看起来像「任务丢了」。
 > 改成 `while` 之后消失。
 > **教训：`wait` 的 `if` 是自己给自己埋雷，编译器不会拦，测试也很难覆盖 —— 只能靠写的时候守住。**
+
+---
+
+### 9. 线程池提交一个任务，是先开线程还是先入队？把七个参数的联动说一遍。
+
+**我的回答（自己的话）：**
+
+> **核心线程没满 → 直接开线程；核心线程满了 → 先入队；队列满了 → 才开非核心线程；
+> 两边都满 → 拒绝。** 顺序是「核心 → 队列 → 非核心 → 拒绝」。
+>
+> 大多数人会答成「先开到 `maximumPoolSize`，再排队」—— 正好反了。
+>
+> 实测（`w04-threadpool-completablefuture/day1`，core=2 max=4 queue=2，连提 10 个任务，
+> 每个任务都堵在同一道门上，所以状态能稳住，提交一个拍一张快照）：
+>
+> ```text
+>   序号       1     2     3     4     5     6     7     8     9    10
+>   线程数     1     2     2     2     3     4     4     4     4     4
+>   队列       0     0     1     2     2     2     2     2     2     2
+>   结果      ok    ok    ok    ok    ok    ok   REJ   REJ   REJ   REJ
+> ```
+>
+> `#3 #4` 只让队列长了，线程数一动不动；`#5` 是分水岭 —— 队列刚满（2/2），线程数才从 2 跳到 3。
+> 最终执行 6 个、拒绝 4 个，峰值线程正好等于 max。
+>
+> 源码也是这三步（`ThreadPoolExecutor.execute()`）：
+>
+> ```java
+> if (workerCountOf(c) < corePoolSize) { if (addWorker(command, true)) return; }   // 1 核心
+> if (isRunning(c) && workQueue.offer(command)) { ... }                            // 2 入队
+> else if (!addWorker(command, false)) reject(command);                            // 3 非核心，再失败就拒绝
+> ```
+>
+> 类文档原话：`a new thread will be created to handle the request **only if the queue is full**`。
+>
+> **为什么这个顺序值得背**：它决定了 `maximumPoolSize` 在什么条件下才生效。
+> 队列无界 → 永远不满 → **永远走不到第 3 步**，`max` 就是摆设。
+> 实测 core=2 max=4 提交 10 个：峰值线程**恒为 2**，8 个任务全在队列里躺着。
+> 所以 `newFixedThreadPool(n)` 的 n 就是真实并发上限，`maximumPoolSize` 形同虚设。
+>
+> 七个参数的联动，一句话一个：
+>
+> | 参数 | 管什么 | 坑 |
+> | :--- | :--- | :--- |
+> | `corePoolSize` | 常驻线程，默认不回收 | 不是「最小线程」，是「先填满的这一档」 |
+> | `maximumPoolSize` | 线程上限 | 只在**队列满**之后才起作用 |
+> | `keepAliveTime` + `unit` | 空闲回收 | 只管非核心；核心要 `allowCoreThreadTimeOut(true)` |
+> | `workQueue` | 排队策略 | **它决定整个池的性格** |
+> | `threadFactory` | 怎么造线程 | 默认名 `pool-3-thread-1`，堆栈里什么都看不出来 |
+> | `handler` | 满了怎么办 | 默认 Abort（抛异常）；`Discard*` 静默丢，基本不能用 |
+> | `runState`（隐含） | 池子生命周期 | `shutdown` 之后所有 `execute` 直接走拒绝 |
+
+**可能的追问：**
+
+- `keepAliveTime` 对核心线程生效吗？（默认不生效。实测 core=2 max=4 queue=1：4 个任务堵住时 `poolSize=3`，
+  任务结束后 +400 ms 掉回 2 就停住了；开 `allowCoreThreadTimeOut(true)` 之后才归 0）
+- 四种拒绝策略分别什么行为？（Abort 抛 `RejectedExecutionException`；CallerRuns 在**提交线程**里跑，
+  实测 `#3#5` 跑在 `main` 上，是天然背压；Discard 静默丢；DiscardOldest 丢队头并**重试**，
+  实测只跑了 `#1` 和 `#5` —— 它连丢了 `#2#3#4`，不是只丢一个）
+- `newCachedThreadPool` 是什么形态？（core=0、max=`Integer.MAX_VALUE`、`SynchronousQueue`。
+  队列容量 0 → 永远「满」→ 每个任务都得现开一个线程接。实测 500 个 60 ms 的任务 → 峰值 500 线程）
+- `corePoolSize = 0` 会怎样？（第一个任务会**先进队**，再借一个线程来消化 ——
+  `execute()` 第 2 步里的 `else if (workerCountOf(recheck) == 0) addWorker(null, false)`）
+- 队列满了、线程也到 max 了，新任务去哪？（走 `handler`。注意 `shutdown` 之后也一样，
+  不管队列空不空，`execute` 一律拒绝）
+- `SynchronousQueue` 和 `LinkedBlockingQueue` 怎么选？（前者「不存任务、直接交接」，适合任务短、并发高；
+  后者能缓冲，但要**指定容量**，否则就是 OOM 蓄水池）
+
+**项目里的实际案例：**
+
+> 场景：任务平台的下发线程池。第一版是 `Executors.newFixedThreadPool(16)`，上线半年没事。
+> 大促那天上游推送量翻了 20 倍、下游接口变慢，任务开始在队列里堆 —— 堆到 300 多万个任务、
+> 堆内存打满，Full GC 之后直接 OOM，整个应用重启。
+> 复盘：`newFixedThreadPool` 的队列是 `LinkedBlockingQueue`（无界），**它永远不拒绝，只会一直堆**，
+> 所以「拒绝数」这个指标一直是 0，监控上什么都看不出来。
+> 改成 `new ThreadPoolExecutor(16, 32, 60s, new ArrayBlockingQueue<>(2000), namedFactory, AbortPolicy)`，
+> 再把「拒绝次数」接到告警上 —— 之后大促会拒绝、会降级，但不会 OOM。
+> **教训：无界队列的问题不是「会 OOM」，是「OOM 之前一切正常」。**
+
+---
+
+### 10. `Executors` 的四个工厂方法为什么被阿里手册禁用？线程数到底怎么定？
+
+**我的回答（自己的话）：**
+
+> 禁用理由只有一条：**那四个方法把「队列」和「线程数上限」配成了危险组合，而这两个才是决定生死的参数。**
+>
+> | 工厂 | 实际配置 | 危险在哪（实测） |
+> | :--- | :--- | :--- |
+> | `newFixedThreadPool(n)` | core=max=n，`LinkedBlockingQueue` 无界 | 队列无上界：`-Xmx64m` 下每个任务 256 KB，**第 176 个任务**就 OOM，之前拒绝数一直是 0 |
+> | `newSingleThreadExecutor()` | 同上，n=1 | 一个慢任务堵死全部：前面 `sleep(500)`，后面 3 个「瞬间完成」的任务等了 **513 ms** |
+> | `newCachedThreadPool()` | core=0，max=`Integer.MAX_VALUE`，`SynchronousQueue` | 任务一多线程暴涨：500 个 60 ms 的任务 → **峰值 500 线程** |
+> | `newScheduledThreadPool(n)` | `DelayedWorkQueue`（无界） | 同上，排队任务无上界；单线程调度器一个任务卡住全部 |
+>
+> 对照实验：同样的 64 MB 堆，换成 `ArrayBlockingQueue(50)` + 默认 `AbortPolicy`，
+> **拒绝 99948 次、队列稳定在 50、堆稳稳的**。所以问题不在「任务多」，在「没有上界、没人拒绝」。
+>
+> 正确姿势是自己 `new ThreadPoolExecutor(...)`，四个数想清楚：
+>
+> 1. **队列必须有界** —— 队列容量就是「允许多少任务在等」，这个数必须是你愿意接受的最大积压；
+> 2. **拒绝策略必须出声** —— Abort + 上层兜底，或 CallerRuns 背压；`Discard*` 基本不能用；
+> 3. **线程数**：CPU 密集 `N+1`、IO 密集 `N × (1 + 等待/计算)` —— 但这是起点，最终靠压测；
+> 4. **线程命名 + 指标** —— 默认名 `pool-3-thread-1` 的 `3` 是全局池序号，跟业务无关；
+>    还要把 `getActiveCount` / `getQueue().size()` / 拒绝次数上报，没有指标就没法判断池子够不够。
+>
+> 另外两个每天都在坑人的点：
+>
+> - **`submit` 吞异常**：`execute` 里抛的异常走 `UncaughtExceptionHandler`，控制台能看到堆栈，
+>   而且线程死了会被替换（实测线程名 `thread-1` → `thread-2`）；`submit` 把异常塞进 `Future`，
+>   **没人 `get` 就等于没发生**，一行日志都没有。所以「任务提交了没生效」第一步查 Future 有没有人 get。
+> - **线程池里的 `ThreadLocal` 会串味**：线程复用，`ThreadLocal` 挂在线程上。
+>   实测单线程池里请求 B 读到了请求 A 的 `用户A的登录信息`，`remove()` 之后才是 `null`。
+>   租户 ID / 用户身份 / `TraceId` 必须 `try { ... } finally { remove(); }`。
+
+**可能的追问：**
+
+- 线程池怎么优雅关闭？（`shutdown()` 跑完队列再退出 —— 实测 5 个排队任务全部跑完；
+  `shutdownNow()` 返回未执行的 4 个、并**尽力**中断正在跑的 1 个。
+  标准姿势：`shutdown()` → `awaitTermination(30s)` → 还没完再 `shutdownNow()`）
+- `shutdownNow` 一定能把任务停下来吗？（不一定。它只是 `interrupt()`，任务里不检查中断标志、
+  不响应 `InterruptedException` 的照样跑完 —— 所以「中断」是协作式的）
+- IO 密集为什么是 `2N`？（`N × (1 + W/C)`，W/C 是等待时间/计算时间。纯 IO 时 W/C ≈ 1 → 2N。
+  公式只是起点：真实比值只能压测，压测时看「拒绝率 + 队列长度 + P99」三条线）
+- 线程池满了但业务不能丢任务怎么办？（两条路：① `CallerRunsPolicy` 背压，让上游变慢；
+  ② 落库/落 MQ 再做异步补偿。前者简单，后者可靠 —— 但要接受「拒绝是常态」这个事实）
+- 一个应用应该有几个线程池？（按「业务隔离 + 快慢隔离」拆，别所有任务共用一个池：
+  一个慢任务能把整个池占满。同名同参数的池也要拆开，否则一个抖全部抖）
+- 为什么 `newFixedThreadPool` 的 `maximumPoolSize` 没用？（因为队列无界，`workQueue.offer` 永远成功，
+  代码走不到第 3 步 —— `execute()` 里 `else if (!addWorker(command, false))` 这条分支永不执行）
+
+**项目里的实际案例：**
+
+> 场景：导出功能。第一版直接把导出任务丢进 `newCachedThreadPool()`，平时很快。
+> 有一次运营一次性点了 200 个导出，每个都要拉 50 万行 → 200 个线程同时抢数据库连接，
+> 连接池瞬间打满，**整个应用的所有接口开始超时**（不只是导出）。
+> 复盘：cached 池的 max 是 `Integer.MAX_VALUE`，等于「没有上限」，它不会保护任何下游。
+> 改成独立的导出线程池（core=2 max=4 有界队列 20，满了直接给用户提示「当前排队过多，请稍后再试」），
+> 并且和业务线程池**物理隔离** —— 之后导出再慢，也不会把主业务拖死。
+> **教训：线程池的第一职责不是「跑得快」，是「把故障关在笼子里」。**

@@ -114,11 +114,22 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > | 2026-11-05 | **W03 Day 2 · `synchronized` 锁的是谁** | `day2/LockTarget`（实例锁 this / 静态锁 Class / `new Object()` 等于没锁 / 字符串常量全局锁）+ `day2/Deadlock`（交叉死锁 + `ThreadMXBean` 检测 / 可重入 / 活锁 4/5 + 随机退避 + 全局定序）+ `day2-result.txt`（116 行）+ `day2-deadlock-jstack.txt`（jstack 原件 142 行）；笔记 Day 2 整节（8 小节）+ 踩坑 5 条 + 参考要点「锁的是谁」「死锁怎么排查」；`Java并发.md` 2 → **4 题**；`cheatsheets/JVM排查命令.md` 补「死锁」小节 |
 > | 2026-11-06 | **W03 Day 3 · `volatile` 内存语义 + happens-before + DCL** | `day3/HappensBefore`（Dekker litmus 测出 `(0,0)` 16%~40% / monitor 传可见性 / volatile 发布订阅 5/5 vs 对照组 0/5 / start-join 抢跑 151/500 / `set` vs `lazySet` 5.8 倍）+ `day3/DclSingleton`（50 轮 × 6 线程压力 0 次 + 手工重排抓到 `{a=1,b=null,c=0}` + `Unsafe.allocateInstance`）+ `day3-result.txt`（86 行）+ `day3-bytecode.txt`（170 行，含 `lock addl` 原文）；笔记 Day 3 整节（8 小节）+ 踩坑 6 条 + 面试 9 条 + 参考要点 2 题；`Java并发.md` 4 → **6 题** |
 > | 2026-11-11 | **W03 Day 4 · `Lock` / AQS / `wait-notify`**，W03 封板 | `day4/WaitNotify`（ISE / `if` vs `while` / `notify` 只叫一个 → 剩 1 件货 + 1 人 WAITING / `wait` 释放锁 0 ms vs `sleep` 414 ms / 中断清标志）+ `day4/MiniAqs`（**手写 state + CLH 队列 + park**，200 万次对拍零丢失；两次 CAS 与 park 重查的实测 1 / 87742 / 175075 / 87500；临界区 1 ns 慢 5.8 倍 → 0.5 µs 只慢 1.13 倍）+ `day4/LockCompare`（公平锁 41 倍、插队 154582 vs 445、最长等待反而更大；`Condition` 无效唤醒 11 vs 7666）+ `day4-result.txt`（129 行）+ `day4-bytecode.txt`（75 行）；笔记 Day 4 整节（10 小节）+ 踩坑 5 条 + 面试 14 条 + 参考要点 2 题；`Java并发.md` 6 → **8 题** |
+> | 2026-11-12 | **W04 Day 1 · 线程池**（`w04-threadpool-completablefuture/` 从 `.gitkeep` 建工程） | `day1/PoolBasics`（A~E：1 万个任务 `new Thread` 620 ms vs 池 13 ms = 47.7 倍 / 线程命名 / keepAlive 只收非核心 3→2 / 四种拒绝策略 / shutdown 5 个跑完 vs shutdownNow 倒出 4 个）+ `day1/PoolFlow`（**S1~S5 五张快照表**：任务顺序「核心 → 队列 → 非核心 → 拒绝」；无界队列下 max 恒为 2 是摆设；core=max / core=0 / SynchronousQueue 三种形态）+ `day1/PoolTraps`（T1~T6：队列峰值 33714 / 单线程堵死 513 ms / cached 峰值 500 线程 / `submit` 吞异常而 `execute` 打印且换线程 / `ThreadLocal` 串味 / **OOM 第 176 个任务** vs 有界队列拒绝 99948 次不 OOM）+ `day1-result.txt`（164 行）+ `day1-jdk-source.txt`（execute 三步 + 排队三条规则原文）；笔记 Day 1 整节（11 小节）+ 踩坑 5 条 + 面试 12 条 + 参考要点 2 题；`Java并发.md` 8 → **10 题** |
 >
 > **W02 已封板（2026-11-03）**，六天全部完成。**W03 已封板（2026-11-11）**，四天全部完成。
-> 题库 M1 只要 8 道，现在 24（Java基础）+ 8（Java并发）＝ **32 道，M1 题量已达标**。
-> 当前在 **M1**，五个知识点（`Thread`/`synchronized`/`volatile`/`Lock`/线程安全成因）全部勾完，
-> 下一步 **W04 线程池 · CompletableFuture**（`w04-threadpool-completablefuture/` 从 `.gitkeep` 建工程）。
+> 题库 M1 只要 8 道，现在 24（Java基础）+ 10（Java并发）＝ **34 道，M1 题量已超标**。
+> 当前在 **M1**，W04 已开（线程池 Day 1 完成），**下一步 W04 Day 2 = CompletableFuture**
+> （`supplyAsync` / `thenApply` vs `thenCompose` / `thenCombine` / `allOf` / 异常与 `handle` / 默认用哪个线程池）。
+>
+> W04 Day 1 最值钱的三条结论（全部有实测数字）：
+>
+> 1. **任务顺序是「核心 → 队列 → 非核心 → 拒绝」**，不是「先开满线程再排队」。
+>    实测 core=2 max=4 queue=2 提 10 个：线程数 `1→2→2→2→3→4→4`，队列 `0→0→1→2→2`。
+>    JDK 类文档原话 `only if the queue is full`。这个顺序不看代码想不出来，也是最高频的追问。
+> 2. **队列决定了 `maximumPoolSize` 是否生效**：无界队列 → 永远不满 → 永远走不到「开非核心」，
+>    实测 max=4 峰值线程恒为 2。所以 `newFixedThreadPool(n)` 的 n 就是真实并发上限。
+> 3. **无界队列的问题不是「会 OOM」，是「OOM 之前一切正常」**：`-Xmx64m` 下第 176 个任务才炸，
+>    之前拒绝数一直是 0；换有界 50 + Abort 则拒绝 99948 次、堆稳稳的。
 >
 > W02 六天里最值钱的五条结论（讲课时直接能用，全部有实测数字）：
 >
@@ -231,8 +242,26 @@ D `wait` 释放锁：旁观者排队 0 ms vs 持锁 `sleep` 414 ms；E 中断时
 最凶的插队者是「刚 `unlock` 转头又 `lock`」的线程；② 手写 AQS 慢的不是队列是**挂起**
 （4.2 µs/次），临界区一变长差距就没了；③ 公平锁换来的不是「等得更短」而是「**等得有上界**」。
 
-下一个时间盒（60 分钟）：**W04 Day 1 · 线程池** ——
-① `ThreadPoolExecutor` 七个参数怎么配、任务在「核心 / 队列 / 非核心 / 拒绝」四步里怎么走；
-② 队列填满 vs 线程到上限，两种触发拒绝的路径实测；③ `Executors` 那几个工厂方法为什么被禁用（`newFixedThreadPool` 的无限队列）；
-④ 输出 `w04/day1-result.txt` + 勾掉「线程池」。
+**W04 Day 1 已完成（2026-11-12）· 线程池**：`day1/PoolBasics`（A 1 万个任务：逐个 `new Thread` + `join`
+620 ms vs 固定 8 线程池 13 ms＝**47.7 倍**，折合 62 µs / 线程；B 默认名 `pool-3-thread-1` 的 `3` 是全局池序号；
+C `keepAlive` 只管非核心：堵住时 `poolSize=3`，+400 ms 回落到 2，`allowCoreThreadTimeOut(true)` 才归 0；
+D 四种拒绝策略：Abort 抛 `#3#4#5` / CallerRuns 让 `#3#5` 在 `main` 里跑 / Discard 只跑 `#1#2` /
+DiscardOldest 只跑 `#1#5`（连丢 `#2#3#4`）；E `shutdown` 5 个全跑完 vs `shutdownNow` 倒出 4 个 + 中断 1 个）
++ `day1/PoolFlow`（**S1~S5 五张快照表**，每提交一个拍一张 `poolSize` / `queueSize` / 是否被拒；
+S1 线程数 `1→2→2→2→3→4→4`、队列 `0→0→1→2→2`；S2 无界队列峰值线程恒为 2 → **max 是摆设**；
+S3 core=max 没有非核心阶段；S4 core=0 先进队再借线程；S5 `SynchronousQueue` 等于 `cached` 形态）
++ `day1/PoolTraps`（T1 队列峰值 33714；T2 单线程池堵死 513 ms；T3 cached 峰值 500 线程；
+T4 **`execute` 打印堆栈且线程被替换 `thread-1`→`thread-2`，`submit` 不 get 一个字都不打**；
+T5 `ThreadLocal` 串味读到上一个人的登录信息；T6 `-Xmx64m` 下**第 176 个任务 OOM** / 有界 50 拒绝 99948 次不 OOM）。
+产出 `day1-result.txt`（164 行）+ `day1-jdk-source.txt`（`execute()` 三步注释 + 类文档「排队三条规则」原文）。
+
+三条核心结论：① **顺序是「核心 → 队列 → 非核心 → 拒绝」**，JDK 原话 `only if the queue is full`；
+② **队列决定 `maximumPoolSize` 是否生效** —— 无界队列永远不满，永远走不到「开非核心」；
+③ **无界队列的问题不是「会 OOM」，是「OOM 之前一切正常」**（拒绝数一直是 0）。
+
+下一个时间盒（60 分钟）：**W04 Day 2 · CompletableFuture** ——
+① `supplyAsync` 默认用哪个线程池（`ForkJoinPool.commonPool()`）以及为什么工程里必须显式传自己的池；
+② `thenApply` vs `thenCompose`（嵌套 `CompletableFuture` 的坑）、`thenCombine` / `allOf` 等所有；
+③ 异常链：`exceptionally` / `handle` / `whenComplete` 各自在哪一层生效；
+④ 输出 `w04/day2-result.txt` + 勾掉「CompletableFuture」。
 时间盒见 `00-plan/today.md`（每天开工前先打开它，收工时覆盖）。
