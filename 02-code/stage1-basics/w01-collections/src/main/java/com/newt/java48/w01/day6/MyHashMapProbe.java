@@ -2,6 +2,7 @@ package com.newt.java48.w01.day6;
 
 import java.util.HashMap;
 import java.util.Random;
+import java.util.concurrent.Future;
 
 /**
  * MyHashMap 验收实验：四个实验，每个都回答一个"面试会问"的问题。
@@ -175,7 +176,6 @@ public class MyHashMapProbe {
                 b.put(keys[i], i);
             }
         }
-
         long t0 = System.nanoTime();
         MyHashMap<Integer, Integer> woDe = new MyHashMap<>();
         for (int i = 0; i < n; i++) {
