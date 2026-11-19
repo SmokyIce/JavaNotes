@@ -1,8 +1,9 @@
 # W04 · 线程池与 CompletableFuture · 实验工程
 
-> 目标：**回答「`new Thread` 到底错在哪」，以及「`ThreadPoolExecutor` 那七个参数各自负责什么」。**
+> 目标：**回答「`new Thread` 到底错在哪」，以及「`ThreadPoolExecutor` 那七个参数各自负责什么」；
+> 再回答「异步跑完之后怎么接」—— `CompletableFuture` 的默认线程池、类型嵌套、异常链。**
 >
-> 前面 W03 所有实验都是「手动 `new Thread`」，而工程里没人这么干 —— 今天把这个落差补上。
+> Day 1 补的是「W03 全靠手动 `new Thread`」这个落差；Day 2 补的是「跑完就 join」这个落差。
 >
 > 本周笔记：[`../../../01-notes/stage1-basics/W04-线程池与CompletableFuture.md`](../../../01-notes/stage1-basics/W04-线程池与CompletableFuture.md)
 
@@ -14,9 +15,12 @@
 
 ```bash
 # Git Bash / macOS / Linux
-./run.sh                        # 默认跑 PoolBasics
+./run.sh                        # 默认跑 PoolBasics（day1）
 ./run.sh PoolFlow               # 短名 -> day1 包
-./run.sh day1.PoolFlow          # 带点号 -> 完整类名
+./run.sh day1.PoolFlow          # 带点号 -> 按完整路径解析
+./run.sh day2.AsyncBasics       # Day 2 三个入口都要带 day2. 前缀
+./run.sh day2.ChainShape
+./run.sh day2.AsyncErrors
 ```
 
 ```bat
@@ -24,6 +28,9 @@ rem Windows
 run.bat
 run.bat PoolFlow
 run.bat day1.PoolTraps
+run.bat day2.AsyncBasics
+run.bat day2.ChainShape
+run.bat day2.AsyncErrors
 ```
 
 OOM 实测必须单独给堆，两条命令都跑一遍才有对照：
@@ -51,15 +58,30 @@ java -Dfile.encoding=UTF-8 -cp out com.newt.java48.w04.day1.PoolTraps
 
 ```text
 w04-threadpool-completablefuture/
-├── run.bat / run.sh                        一键编译 + 运行
-├── day1-result.txt                         Day 1 全部实测（5 条命令整体重定向，164 行）
+├── run.bat / run.sh                        一键编译 + 运行（短名默认在 day1 包里找）
+├── day1-result.txt                         Day 1 全部实测（164 行）
 ├── day1-jdk-source.txt                     Day 1 源码取证（ThreadPoolExecutor 的 3 步 + 排队三条规则）
+├── day2-result.txt                         Day 2 全部实测（215 行，含编译错误原文）
+├── day2-jdk-source.txt                     Day 2 源码取证（uniWhenComplete / reportJoin / commonPool 并行度）
+├── compile-errors/
+│   └── ChainTypeErrors.java                故意写错：thenApply 套错 / thenCompose 反着用（不参与编译）
 └── src/main/java/com/newt/java48/w04/
-    └── day1/
-        ├── PoolBasics.java                 A~E：1 万个任务对照 / 线程命名 / keepAlive / 四种拒绝策略 / 关闭
-        ├── PoolFlow.java                   S1~S5：任务在「核心 → 队列 → 非核心 → 拒绝」四步里怎么走
-        └── PoolTraps.java                  T1~T6：Executors 四个工厂的坑（无界队列 / 单线程堵死 / 线程暴涨 / 吞异常 / ThreadLocal / OOM）
+    ├── day1/
+    │   ├── PoolBasics.java                 A~E：1 万个任务对照 / 线程命名 / keepAlive / 四种拒绝策略 / 关闭
+    │   ├── PoolFlow.java                   S1~S5：任务在「核心 → 队列 → 非核心 → 拒绝」四步里怎么走
+    │   └── PoolTraps.java                  T1~T6：Executors 四个工厂的坑
+    └── day2/
+        ├── AsyncBasics.java                A~E：默认池是谁 / 阻塞任务排队 / runAsync vs supplyAsync / 自建池 / 三种现成 CF
+        ├── ChainShape.java                 A~F：thenApply vs thenCompose 的类型 / Async 变体 / combine / allOf / anyOf / 串并对比
+        └── AsyncErrors.java                A~H：异常链三种写法 / suppressed 挂哪层 / join vs get / unwrap / 超时
 ```
+
+> `compile-errors/` 不在 `src/main/java` 下，`run.sh` 的 `find` 不会把它捞进去。
+> 要单独编它看报错（注释用英文，否则 javac 回显源码行会在 Git Bash 里变 GBK 乱码）：
+>
+> ```bash
+> javac -J-Duser.language=en -J-Duser.country=US -encoding UTF-8 -d /tmp/ce compile-errors/ChainTypeErrors.java
+> ```
 
 ## Day 1 做了什么
 
@@ -162,3 +184,83 @@ S1（core=2 max=4 queue=2，连提 10 个）拍出来的就是这个：
 - **`DiscardOldestPolicy` 会连丢多个。** 实测只跑了 `#1` 和 `#5`：`#3` 进来时挤掉 `#2`，
   `#4` 进来时挤掉 `#3`，`#5` 进来时挤掉 `#4` —— JDK 文档里那句
   `retried (which can fail again, causing this to be repeated)` 说的就是这个。
+
+---
+
+## Day 2 做了什么
+
+> 主题：**CompletableFuture**。线程池解决「在哪跑」，它解决「跑完之后怎么接」。
+>
+> Day 1 留了两个伏笔，今天正好收：`submit` 吞异常（CF 一样吞）、线程复用导致 `ThreadLocal` 串味
+> （换成 CF 的默认池范围更大 —— 全 JVM）。
+
+### `AsyncBasics` —— 不传 executor，任务落在谁身上
+
+| 段 | 内容 | 实测 |
+| :-- | :--- | :--- |
+| A | 默认池是谁、几个线程 | `ForkJoinPool.commonPool()`，并行度 **11**（12 核 → `max(1, 核数-1)`）；30 个任务只用到 **11 个** worker；刚启动 `getPoolSize()=0` |
+| B | 14 个 300 ms 阻塞任务 | 公共池 **623 ms**（分 2 批）vs 自建 `fixed(14)` **308 ms** |
+| C | `runAsync` vs `supplyAsync` | 前者返回 `null`（`Void`）；后者提交一个必抛异常的任务，**100 ms 后控制台一个字都没有**，`join()` 才抛 |
+| D | 自建两个池 | `order-1` / `stock-1`，池子隔离 + 线程名可读 |
+| E | 三种现成的 CF | `completedFuture`（不占线程）/ `failedFuture` / 手动 `complete`；`complete` 两次只有第一次返回 `true` |
+
+三个必须记住的点：
+
+1. **`commonPool` 是「核数 - 1」，而且全 JVM 只有一个。** 所有 `parallelStream()`、
+   所有没传 executor 的 `*Async` 共用它 —— 阻塞任务占满之后，**跟它毫无关系的并行流一起卡住**。
+2. **阻塞的代价是「排队」不是「变慢」**：623 ms ≈ `ceil(14/11) × 300`。
+   所以生产上「只要任务里有 IO，就必须传自己的 executor」。
+3. **`thenApplyAsync` 不传池子也回 `commonPool`**（D 段的对照组就是它）——
+   默认池的伏击有两次：一次在起点，一次在每个忘了传池的中间节点。
+
+### `ChainShape` —— 把类型打出来
+
+| 段 | 内容 | 实测 |
+| :-- | :--- | :--- |
+| A | `thenApply` 里返回 CF | 得到 `CF<CF<String>>`，`join()` 打印 `CompletableFuture@<hash>[Completed normally]`，**要 join 两次**；`thenCompose` 一次到位 |
+| B | 三种 `thenApply` | 不带 Async 的跑在 **`main`**（上游已完成）；`thenApplyAsync` 在 `commonPool-worker-1`；指定池在 `biz-2` |
+| C | `thenCombine` | 两路各 400 ms → **411 ms**；串行写法 **816 ms** |
+| D | `allOf` | 300/200/100 ms → **306 ms**，`join()` 返回 **`null`**，结果要自己 `map(join)` 收 |
+| E | `anyOf` | 300/50 ms → **58 ms**，类型 `Object`（泛型救不了） |
+| F | 串 vs 并 | 三次 `thenCompose` **631 ms**；三路并行 + `allOf` **215 ms** |
+
+一句话：**`thenApply` 返回「值」、`thenCompose` 返回「异步」，用错了不报错，只是悄悄套一层盒子。**
+这和 W02 的 `map` / `flatMap` 是同一个形状 —— 容器套容器的 API 永远有这一对。
+
+### `AsyncErrors` —— 异常到底被谁吃了
+
+| 段 | 内容 | 实测 |
+| :-- | :--- | :--- |
+| A | 上游失败后 | 后面两段 `thenApply` **一行日志都没打**，异常复制到最后一站 |
+| B | `exceptionally` | 只在失败时跑；成功路径下不执行 |
+| C | `handle` | 成功 `ex=null`、失败 `r=null, ex=CompletionException`，两条都能吞 |
+| D | `whenComplete` | 打了日志、也「处理」了，`join()` **照样抛** |
+| E | 三者互相抛异常 | 见下表 |
+| F | `join` vs `get` | `CompletionException` vs 受检的 `ExecutionException`；`get` 支持超时 |
+| G | `exceptionally` 返回值没人接 | 原 CF **仍然异常**（CF 不可变） |
+| H | `orTimeout` / `completeOnTimeout` | 212 ms 抛 / 211 ms 返回降级值；**后台任务不会被中断** |
+
+E 段三种场景（今天最值钱的一条，因为直觉全错）：
+
+| 场景 | cause | suppressed |
+| :--- | :--- | :--- |
+| 上游失败 + `whenComplete` 抛 | **原始异常**（原始赢） | 外层 **1**，cause 自己 0 |
+| 上游成功 + `whenComplete` 抛 | **新异常**（成功变失败） | — |
+| 上游失败 + `exceptionally` 抛 | **新异常** | 0 / 0 → **原始异常彻底丢失** |
+
+源码依据：`uniWhenComplete` 的 catch 是 `x.addSuppressed(ex)`，随后 `completeThrowable(x, r)`
+在 `x` 就是 `r` 里那个实例时直接返回 `r`（`day2-jdk-source.txt` 第 4 节）。
+
+## Day 2 踩的坑
+
+- **先写注释「whenComplete 抛异常会覆盖原始异常」，实测是原始异常胜出。** 这条是典型的「断言先于实测」，
+  跑完才发现写反了 —— 顺带把 `suppressed` 打出来，才看清新异常挂在**外层包装**上而不是 cause 上。
+- **查 suppressed 查错了对象。** 第一次打 `e.getCause().getSuppressed()` 得到 0，和源码的 `addSuppressed`
+  矛盾；改成同时打两层（外层 1 / cause 0）才对上。**测异常结构先想清楚测的是哪一层对象。**
+- **`e instanceof IllegalStateException` 编译不过。** `e` 声明成 `CompletionException`，
+  两个类没有继承关系，`instanceof` 在编译期就被判为不可能 —— 想演示「匹配不到」，得先用 `Throwable` 接住。
+- **`Runtime.availableProcessors()` 不是静态方法**（第一次编译就撞上），要 `Runtime.getRuntime().availableProcessors()`。
+- **`nested.join()` 的 `toString` 会抖。** 内层 CF 可能还没跑完，于是同一份代码有时打印
+  `[...Completed normally]`、有时 `[Not completed]`。改成先 `join().join()` 再把外层打印出来才稳定 ——
+  「会抖的格子不能当证据」这条 Day 1 已经踩过（S4），今天又踩一次。
+- **跑 `day2.*` 必须带包名前缀。** `run.sh` 的短名规则只认 `day1`，写 `./run.sh AsyncBasics` 会 `ClassNotFoundException`。

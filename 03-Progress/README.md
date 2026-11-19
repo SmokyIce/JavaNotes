@@ -13,7 +13,7 @@ created: 2026-11-06
 | 原规则目录 | 本仓库实际位置 | 说明 |
 | :--- | :--- | :--- |
 | `01-Knowledge` | `01-notes/stageX-*/WNN-*.md` | 已有 12 份周笔记，按 W 编号 |
-| `02-Questions` | `04-interview/question-bank/*.md` | 已有 8 个题库文件（Java基础 24 题、Java并发 6 题等） |
+| `02-Questions` | `04-interview/question-bank/*.md` | 已有 8 个题库文件（Java基础 24 题、Java并发 12 题等） |
 | `03-Progress` | **本目录** | 新建。`03-project/` 已占用 03 前缀，故并列存在 |
 | `04-Projects` | `03-project/` | 长期项目「异步任务管理平台」 |
 

@@ -96,7 +96,7 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 | :--- | :--- | :--- | :--- |
 | 泛型 · 异常 · Optional · Stream | `W02-泛型-异常-Stream.md` | `w02-generics-stream/` | Java基础 +3 |
 | Java 并发基础 | `W03-Java并发基础.md` | `w03-concurrency-basics/` | Java并发 +8（✅ 已 8 道） |
-| 线程池 · CompletableFuture | `W04-线程池与CompletableFuture.md` | `w04-threadpool-completablefuture/` | Java并发 +2 |
+| 线程池 · CompletableFuture | `W04-线程池与CompletableFuture.md` | `w04-threadpool-completablefuture/` | Java并发 +2（✅ 已 12 道） |
 
 **M1 解锁标准**：三份笔记各自「核心问题」有个人回答 + 三个工程能一条命令跑起来 + 题库 8 道题有内容。
 
@@ -115,11 +115,24 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > | 2026-11-06 | **W03 Day 3 · `volatile` 内存语义 + happens-before + DCL** | `day3/HappensBefore`（Dekker litmus 测出 `(0,0)` 16%~40% / monitor 传可见性 / volatile 发布订阅 5/5 vs 对照组 0/5 / start-join 抢跑 151/500 / `set` vs `lazySet` 5.8 倍）+ `day3/DclSingleton`（50 轮 × 6 线程压力 0 次 + 手工重排抓到 `{a=1,b=null,c=0}` + `Unsafe.allocateInstance`）+ `day3-result.txt`（86 行）+ `day3-bytecode.txt`（170 行，含 `lock addl` 原文）；笔记 Day 3 整节（8 小节）+ 踩坑 6 条 + 面试 9 条 + 参考要点 2 题；`Java并发.md` 4 → **6 题** |
 > | 2026-11-11 | **W03 Day 4 · `Lock` / AQS / `wait-notify`**，W03 封板 | `day4/WaitNotify`（ISE / `if` vs `while` / `notify` 只叫一个 → 剩 1 件货 + 1 人 WAITING / `wait` 释放锁 0 ms vs `sleep` 414 ms / 中断清标志）+ `day4/MiniAqs`（**手写 state + CLH 队列 + park**，200 万次对拍零丢失；两次 CAS 与 park 重查的实测 1 / 87742 / 175075 / 87500；临界区 1 ns 慢 5.8 倍 → 0.5 µs 只慢 1.13 倍）+ `day4/LockCompare`（公平锁 41 倍、插队 154582 vs 445、最长等待反而更大；`Condition` 无效唤醒 11 vs 7666）+ `day4-result.txt`（129 行）+ `day4-bytecode.txt`（75 行）；笔记 Day 4 整节（10 小节）+ 踩坑 5 条 + 面试 14 条 + 参考要点 2 题；`Java并发.md` 6 → **8 题** |
 > | 2026-11-12 | **W04 Day 1 · 线程池**（`w04-threadpool-completablefuture/` 从 `.gitkeep` 建工程） | `day1/PoolBasics`（A~E：1 万个任务 `new Thread` 620 ms vs 池 13 ms = 47.7 倍 / 线程命名 / keepAlive 只收非核心 3→2 / 四种拒绝策略 / shutdown 5 个跑完 vs shutdownNow 倒出 4 个）+ `day1/PoolFlow`（**S1~S5 五张快照表**：任务顺序「核心 → 队列 → 非核心 → 拒绝」；无界队列下 max 恒为 2 是摆设；core=max / core=0 / SynchronousQueue 三种形态）+ `day1/PoolTraps`（T1~T6：队列峰值 33714 / 单线程堵死 513 ms / cached 峰值 500 线程 / `submit` 吞异常而 `execute` 打印且换线程 / `ThreadLocal` 串味 / **OOM 第 176 个任务** vs 有界队列拒绝 99948 次不 OOM）+ `day1-result.txt`（164 行）+ `day1-jdk-source.txt`（execute 三步 + 排队三条规则原文）；笔记 Day 1 整节（11 小节）+ 踩坑 5 条 + 面试 12 条 + 参考要点 2 题；`Java并发.md` 8 → **10 题** |
+> | 2026-11-19 | **W04 Day 2 · CompletableFuture**，W04 封板 | `day2/AsyncBasics`（A 默认池 `commonPool` 并行度 11 = 核数-1，30 任务只用 11 个 worker / B 14 个 300 ms 阻塞任务：公共池 **623 ms** vs 自建池 **308 ms** / C `runAsync` 返回 null、异常静默 / D 自建池 `order-1` / `stock-1` 隔离 / E `completedFuture` / `failedFuture` / 手动 complete 的 CAS 只赢一次）+ `day2/ChainShape`（A `thenApply` 给出 `CF<CF<String>>`，`join()` 打印出 `CompletableFuture@<hash>`，要 join 两次；B 不带 Async 的 `thenApply` 在 **main** 里跑完；C combine 411 ms vs 串行 816 ms；D `allOf` 返回 null、306 ms；E `anyOf` 58 ms、类型擦成 `Object`；F 三次串联 631 ms vs 三路并行 215 ms）+ `day2/AsyncErrors`（A 失败后两段 thenApply 全跳过 / B `exceptionally` 只在失败时跑 / C `handle` 两路都进 / D `whenComplete` 打断点也照样抛 / **E1 上游失败 + whenComplete 抛 → 原始异常胜出、新异常只进外层 suppressed=1**；E2 上游成功 + whenComplete 抛 → 成功变失败；E3 `exceptionally` 抛 → 覆盖且原始异常彻底丢失 / F `join` vs `get` 包装不同 + 双层嵌套 + `unwrap` / G 返回值没人接 → 原 CF 仍失败 / H `orTimeout` 212 ms vs `completeOnTimeout` 211 ms）+ `compile-errors/ChainTypeErrors`（3 条 `incompatible types` 原文）+ `day2-result.txt`（215 行）+ `day2-jdk-source.txt`（`uniWhenComplete` / `reportJoin` / `commonPool` 并行度原文）；笔记 Day 2 整节（9 小节）+ 踩坑 4 条 + 面试 9 条 + 参考要点 Q3/Q4；`Java并发.md` 10 → **12 题** |
 >
 > **W02 已封板（2026-11-03）**，六天全部完成。**W03 已封板（2026-11-11）**，四天全部完成。
-> 题库 M1 只要 8 道，现在 24（Java基础）+ 10（Java并发）＝ **34 道，M1 题量已超标**。
-> 当前在 **M1**，W04 已开（线程池 Day 1 完成），**下一步 W04 Day 2 = CompletableFuture**
-> （`supplyAsync` / `thenApply` vs `thenCompose` / `thenCombine` / `allOf` / 异常与 `handle` / 默认用哪个线程池）。
+> **W04 已封板（2026-11-19）**，两天全部完成 —— 五个知识点全勾，M1 的 W02/W03/W04 三份笔记与三个工程全部齐活。
+> 题库 M1 只要 8 道，现在 24（Java基础）+ 12（Java并发）＝ **36 道，M1 题量已超标**。
+> 当前在 **M1**，W04 已完成，**下一步 W05 = Spring IOC/DI**（`w05-spring-ioc-di/` 还是 `.gitkeep`，
+> 且本机无 Maven —— W05 的第一件事是补 `pom.xml`，见 MEMORY 的工程约定）。
+>
+> W04 Day 2 最值钱的三条结论（全部有实测数字）：
+>
+> 1. **不传 executor 的 `supplyAsync` 落在 `ForkJoinPool.commonPool()`，并行度 = 核数-1**（12 核 → 11），
+>    且**全 JVM 共享**。14 个 300 ms 阻塞任务：公共池 623 ms（分两批）、自建池 308 ms ——
+>    这是「为什么 `@Async` 必须指定线程池」最硬的证据。
+> 2. **`thenApply` 与 `thenCompose` 的差别是静态类型，但编译器不拦**：前者 `U` 会被推成
+>    `CompletableFuture<String>`，结果 `CF<CF<String>>`，`join()` 打印 `CompletableFuture@<hash>`。
+>    和 W02 的 `map` / `flatMap` 同构。
+> 3. **`whenComplete` 物理上吞不掉异常**（`BiConsumer` 无返回值）：上游已失败时它抛的异常只进
+>    外层 `suppressed`（实测 = 1），原始异常胜出；而 `exceptionally` 里抛异常会**覆盖并使原始异常彻底丢失**。
 >
 > W04 Day 1 最值钱的三条结论（全部有实测数字）：
 >
@@ -259,9 +272,25 @@ T5 `ThreadLocal` 串味读到上一个人的登录信息；T6 `-Xmx64m` 下**第
 ② **队列决定 `maximumPoolSize` 是否生效** —— 无界队列永远不满，永远走不到「开非核心」；
 ③ **无界队列的问题不是「会 OOM」，是「OOM 之前一切正常」**（拒绝数一直是 0）。
 
-下一个时间盒（60 分钟）：**W04 Day 2 · CompletableFuture** ——
-① `supplyAsync` 默认用哪个线程池（`ForkJoinPool.commonPool()`）以及为什么工程里必须显式传自己的池；
-② `thenApply` vs `thenCompose`（嵌套 `CompletableFuture` 的坑）、`thenCombine` / `allOf` 等所有；
-③ 异常链：`exceptionally` / `handle` / `whenComplete` 各自在哪一层生效；
-④ 输出 `w04/day2-result.txt` + 勾掉「CompletableFuture」。
+**W04 Day 2 已完成（2026-11-19）· CompletableFuture**：`day2/AsyncBasics`（A 默认池 `commonPool`
+并行度 11，30 个任务只用到 11 个 worker；B 14 个 300 ms 阻塞任务：公共池 623 ms / 自建池 308 ms；
+C 异常静默直到 `join`；D 自建池线程名 `order-1` / `stock-1`；E 三种现成 CF + complete 的 CAS）
++ `day2/ChainShape`（A `thenApply` → `CF<CF<String>>` 实测 vs `thenCompose` → `String`；
+B 不带 Async 的 `thenApply` 在 `main` 里跑；C combine 411 ms vs 串行 816 ms；D `allOf` 306 ms、返回 null；
+E `anyOf` 58 ms、类型 `Object`；F 三次串联 631 ms vs 三路并行 215 ms）
++ `day2/AsyncErrors`（A 失败后后续节点全跳过；B/C/D 三种写法的吞与不吞；
+E 三段对照 **whenComplete 抛异常时原始异常胜出（suppressed=1）/ exceptionally 抛异常时原始异常丢失**；
+F `join` vs `get` + 双层包装 + `unwrap`；G 返回值没人接；H `orTimeout` 212 ms / `completeOnTimeout` 211 ms）。
+产出 `day2-result.txt`（215 行）+ `day2-jdk-source.txt`（`uniWhenComplete` 844-877 / `reportJoin` /
+`ForkJoinPool` 并行度 2564）+ `compile-errors/ChainTypeErrors.java`（3 条报错原文）。
+
+三条核心结论：① **默认池是 `commonPool`，并行度 = 核数-1，全 JVM 共享** —— 阻塞任务必须自带线程池；
+② **`thenApply` 用错不报错**，只是悄悄给你 `CF<CF<T>>`，`join()` 拿到一个 Future 对象；
+③ **`whenComplete` 是围观不是修复**（`void` 无出口），上游失败时它的异常只能挂在 suppressed 上。
+
+下一个时间盒（60 分钟）：**W05 Day 1 · Spring IOC / DI** ——
+① 本机没有 Maven，先用 `javac` + `lib/*.jar` 手搭一个最小可运行工程（`pom.xml` 留给 W05 收尾）；
+② 先写「不用 Spring 的版本」：手工 `new` 三层依赖，再改成构造器注入，量出「改一个类要动几处」；
+③ 用 `AnnotationConfigApplicationContext` 跑同一份代码，对比 Bean 是谁 `new` 的、什么时候 `new` 的；
+④ 输出 `w05/day1-result.txt` + 勾掉「Bean / IOC / DI」。
 时间盒见 `00-plan/today.md`（每天开工前先打开它，收工时覆盖）。

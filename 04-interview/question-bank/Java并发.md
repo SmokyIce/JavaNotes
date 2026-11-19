@@ -608,3 +608,128 @@
 > 改成独立的导出线程池（core=2 max=4 有界队列 20，满了直接给用户提示「当前排队过多，请稍后再试」），
 > 并且和业务线程池**物理隔离** —— 之后导出再慢，也不会把主业务拖死。
 > **教训：线程池的第一职责不是「跑得快」，是「把故障关在笼子里」。**
+
+### 11. `CompletableFuture` 不传线程池用的是什么？为什么这算事故隐患？
+
+**我的回答（自己的话）：**
+
+> 用的是 `ForkJoinPool.commonPool()`，源码里叫 `ASYNC_POOL`：
+>
+> ```java
+> private static final Executor ASYNC_POOL = USE_COMMON_POOL ?
+>     ForkJoinPool.commonPool() : new ThreadPerTaskExecutor();
+> ```
+>
+> 它的关键属性有三个，每一个都是坑：
+>
+> 1. **线程数 = `max(1, 核数 - 1)`**（`ForkJoinPool.java:2564`）。实测 12 核机器 → 并行度 **11**；
+> 2. **全 JVM 唯一** —— 所有 `parallelStream()`、所有没传 executor 的 `supplyAsync` 共用它；
+> 3. **它不区分「计算任务」和「阻塞任务」** —— 阻塞住一个线程，就少一个 worker。
+>
+> 阻塞的代价实测（14 个 `sleep(300)` 任务，并行度 11）：
+>
+> | 提交到哪 | 耗时 | 现象 |
+> | :--- | ---: | :--- |
+> | `commonPool` | **623 ms** | 分 2 批跑，多出来的 3 个只能等 |
+> | 自建 `newFixedThreadPool(14)` | **308 ms** | 14 个线程同时睡 |
+>
+> 所以真正的风险不是「慢一点」，是**污染范围**：你在订单服务里 `supplyAsync` 调一个 2 秒的 RPC，
+> 占掉的就是这 11 个坑之一；占满之后，**同一 JVM 里跟它毫无关系的 `parallelStream` 一起卡住**。
+> 这种故障最难查 —— 报错的接口和闯祸的接口根本没有调用关系。
+>
+> 规矩：**只要任务里有 IO（查库 / RPC / 文件 / 锁等待），就必须传自己的 executor**，
+> 而且要用 `ThreadFactory` 命名（实测 `order-1` / `stock-1`，`jstack` 里一眼能看出是谁）。
+
+**可能的追问：**
+
+- `commonPool` 的线程能不能调大？（能，`-Djava.util.concurrent.ForkJoinPool.common.parallelism=N`，
+  但这是在**全局**加线程 —— 治的是「并行度不够」，治不了「阻塞型任务不该进公共池」。
+  正确的解法永远是给阻塞任务一个自己的池）
+- 核数只有 1 的机器会怎样？（`max(1, 1-1)` = 1，但 `USE_COMMON_POOL` 的判断是
+  `getCommonPoolParallelism() > 1`，为 false 时退化成 `ThreadPerTaskExecutor` ——
+  一个任务一个 `new Thread`，更糟）
+- `parallelStream` 和 `supplyAsync` 真的抢同一个池吗？（是。都走 `ForkJoinPool.commonPool()`。
+  所以「我在业务里用一下异步，结果报表的并行流变慢了」是完全可能的）
+- 那 `thenApplyAsync` 呢？（不传 executor 时**同样**回到 `commonPool` —— 实测线程名
+  `ForkJoinPool.commonPool-worker-1`。这是第二次伏击：你以为换了线程，其实只是换到公共池）
+- `thenApply` 不带 Async 就一定在异步线程吗？（不一定。实测上游已完成时，它在**调用者线程**里跑完 ——
+  我这里是 `main`。所以「写在异步链里」和「跑在异步线程上」是两件事）
+
+**项目里的实际案例：**
+
+> 场景：商品详情页要并行拉「价格 / 库存 / 促销」三个服务，图省事直接 `supplyAsync` 三次 + `allOf`。
+> 平时 80 ms 返回，大促时 P99 飙到 3 秒，而且**同机器的定时任务（用 `parallelStream` 算日报）也跟着卡**。
+> 复盘：三个 RPC 都是阻塞调用，全塞进了 `commonPool`（8 核机器只有 7 个 worker），
+> QPS 一上来 7 个 worker 全堵在等 RPC 上，后面排队的任务只能干等；
+> 更要命的是日报的 `parallelStream` 抢的是同一个池，于是「详情页慢」传导成「日报跑不完」。
+> 改成专用的 `price-pool`（core=8 max=32 有界队列 200 + Abort），两件事同时消失。
+> **教训：`commonPool` 是给「纯 CPU 的短任务」准备的，任何会阻塞的东西都不属于它。**
+
+---
+
+### 12. `thenApply` 和 `thenCompose` 有什么区别？用错了为什么不报错？
+
+**我的回答（自己的话）：**
+
+> **`thenApply` 的函数返回「值」，`thenCompose` 的函数返回「另一个异步」。**
+> 差别就写在签名里：
+>
+> ```java
+> thenApply<U>   (Function<? super T, ? extends U>                   fn)
+> thenCompose<U> (Function<? super T, ? extends CompletionStage<U>>  fn)
+> ```
+>
+> `thenCompose` 的参数类型里多了 `CompletionStage` 那一层，于是 `U` 的推导停在「值」上，外面那层被拍平。
+>
+> **为什么用错了不报错**：`thenApply(user -> fetchOrders(user))` 里 `fetchOrders` 返回
+> `CompletableFuture<String>`，`U` 顺理成章被推成 `CompletableFuture<String>`，
+> 结果类型成了 `CompletableFuture<CompletableFuture<String>>` —— **这是合法的泛型嵌套，编译器没有理由拦你**。
+>
+> 实测（`ChainShape` A 段）：
+>
+> | 写法 | `join()` 的值 | `join()` 的类型 |
+> | :--- | :--- | :--- |
+> | `thenApply` | `CompletableFuture@<hash>[Completed normally]` | `CompletableFuture` |
+> | `thenCompose` | `用户:42 的订单共 3 笔` | `String` |
+>
+> 也就是说：**它能编译、能跑、不抛异常，只是「值」变成了「装着值的盒子」**，
+> 然后这个盒子一路往下传，最后在日志里打印出 `CompletableFuture@1b6d3586` ——
+> 线上看到这种东西，八成就是套错了。
+>
+> 什么时候才会被编译器抓住？只有你显式声明了类型：
+>
+> ```text
+> error: incompatible types: inference variable U has incompatible bounds
+>     equality constraints: String
+>     lower bounds: CompletableFuture<String>
+> ```
+>
+> 顺带一条同源的坑：**不带 `Async` 的 `thenApply` 不一定在异步线程上跑**。
+> 它的规则是「在完成上游的那个线程上执行」，而上游**早已完成**时，「那个线程」就是
+> **调用 `thenApply` 的线程**（实测在 `main` 里跑完）。要真异步，必须 `thenApplyAsync` + 自己的池。
+
+**可能的追问：**
+
+- 那 `map` / `flatMap` 跟这是一回事吗？（是同一个形状。`Stream.map` 返回 `R`、`flatMap` 返回
+  `Stream<R>`；`Optional.map` 返回 `U`、`flatMap` 返回 `Optional<U>`。
+  **凡是「容器套容器」的 API 都有这一对**，认形状比背名字有用）
+- `thenCombine` / `allOf` / `anyOf` 分别什么时候用？（两路→`thenCombine`；N 路都要→`allOf`
+  （注意返回 `CF<Void>`，结果要自己 `join` 收）；N 路谁先回来算谁→`anyOf`（类型擦成 `Object`）。
+  实测：两路各 400 ms 的 `thenCombine` 是 **411 ms**，串行写法 **816 ms**）
+- 串行链和并行编排差多少？（实测三次各 200 ms 的 `thenCompose` 链 **631 ms**；
+  同样三件事改成三路并行 + `allOf` **215 ms**。**有依赖才串，没依赖就并**）
+- `allOf` 之后为什么 `join()` 是 `null`？（签名是 `CompletableFuture<Void>`，
+  它只表达「都完成了」，不携带结果。要结果就把 `List<CompletableFuture<T>>` 留着，再 `map(join)`）
+- 那用 `thenCompose` 串起来会不会阻塞？（不会，`thenCompose` 只是「等上一个完成再接下一个」，
+  不占线程。真正会占线程的是拿 `.join()` 的返回值在中间插一脚 —— 那就退化成阻塞等待了）
+
+**项目里的实际案例：**
+
+> 场景：下单流程写成「校验 → 扣库存 → 发券 → 通知」，四步都返回 `CompletableFuture`，
+> 有人用 `thenApply` 一路接下去，测试全过、日志正常，就是最后拿到的对象
+> `toString()` 是 `CompletableFuture@6d06d69c`。
+> 排查花了半天：因为中间每一步都「成功」了，没有任何异常，
+> 只是每隔一层就多套一个盒子，最后 `.get()` 拿到的是盒子不是数据。
+> 换成 `thenCompose` 之后一次 `join()` 到位。
+> 后来在 `Code Review` 清单里加了一条硬规矩：**看到 `thenApply` 的 lambda 里有 `Async` 后缀的方法调用，
+> 必须确认返回类型** —— 因为那几乎一定是 `thenCompose` 该出现的地方。

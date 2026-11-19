@@ -1,0 +1,183 @@
+==================================================================
+ W04 Day 2 · 源码取证（JDK 17 src.zip）
+------------------------------------------------------------------
+ 抽取方式：
+   jar xf "C:/Program Files/Java/jdk-17/lib/src.zip" \
+       java.base/java/util/concurrent/CompletableFuture.java
+   （前缀必须是 java.base/，少了它 jar 报 'no such entry'）
+==================================================================
+
+################ 1. commonPool 的并行度怎么算 ################
+ForkJoinPool.java:2558-2578 —— 专供 commonPool 的私有构造器
+
+
+    /**
+     * Constructor for common pool using parameters possibly
+     * overridden by system properties
+     */
+    private ForkJoinPool(byte forCommonPoolOnly) {
+        int parallelism = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+        ForkJoinWorkerThreadFactory fac = null;
+        UncaughtExceptionHandler handler = null;
+        try {  // ignore exceptions in accessing/parsing properties
+            fac = (ForkJoinWorkerThreadFactory) newInstanceFromSystemProperty(
+                "java.util.concurrent.ForkJoinPool.common.threadFactory");
+            handler = (UncaughtExceptionHandler) newInstanceFromSystemProperty(
+                "java.util.concurrent.ForkJoinPool.common.exceptionHandler");
+            String pp = System.getProperty
+                ("java.util.concurrent.ForkJoinPool.common.parallelism");
+            if (pp != null)
+                parallelism = Integer.parseInt(pp);
+        } catch (Exception ignore) {
+        }
+        this.ueh = handler;
+
+实测对齐：availableProcessors()=12 → parallelism=11（max(1, 12-1)）
+          → 30 个 supplyAsync 任务只用到 11 个不同的 worker 线程。
+可用 -Djava.util.concurrent.ForkJoinPool.common.parallelism=N 覆盖。
+
+################ 2. supplyAsync 不传 executor 时提交给谁 ################
+CompletableFuture.java:430-441 —— ASYNC_POOL（默认 executor）
+
+    private static final boolean USE_COMMON_POOL =
+        (ForkJoinPool.getCommonPoolParallelism() > 1);
+
+    /**
+     * Default executor -- ForkJoinPool.commonPool() unless it cannot
+     * support parallelism.
+     */
+    private static final Executor ASYNC_POOL = USE_COMMON_POOL ?
+        ForkJoinPool.commonPool() : new ThreadPerTaskExecutor();
+
+    /** Fallback if ForkJoinPool.commonPool() cannot support parallelism */
+    static final class ThreadPerTaskExecutor implements Executor {
+
+CompletableFuture.java:1762-1776 —— AsyncSupply.run()
+
+        public void run() {
+            CompletableFuture<T> d; Supplier<? extends T> f;
+            if ((d = dep) != null && (f = fn) != null) {
+                dep = null; fn = null;
+                if (d.result == null) {
+                    try {
+                        d.completeValue(f.get());
+                    } catch (Throwable ex) {
+                        d.completeThrowable(ex);
+                    }
+                }
+                d.postComplete();
+            }
+        }
+    }
+
+读法：executor 为 null 时走 ASYNC_POOL = commonPool（除非 commonPool 并行度 <= 1，
+那时退化成 ThreadPerTaskExecutor，一个任务一个线程）。
+
+################ 3. thenApply / thenCompose 的签名差别 ################
+CompletableFuture.java:2166-2168
+    public <U> CompletableFuture<U> thenApply(
+        Function<? super T,? extends U> fn) {
+        return uniApplyStage(null, fn);
+
+CompletableFuture.java:2307-2309
+    public <U> CompletableFuture<U> thenCompose(
+        Function<? super T, ? extends CompletionStage<U>> fn) {
+        return uniComposeStage(null, fn);
+
+  thenApply<U>   : Function<? super T, ? extends U>                   → U 是「值」
+  thenCompose<U> : Function<? super T, ? extends CompletionStage<U>>  → U 是「值」
+  差别只在参数里多了那一层 CompletionStage —— U 的推导方式完全不同：
+  前者 U 会推成 CompletableFuture<String>（于是 CF<CF<String>>），后者 U 还是 String。
+
+################ 4. whenComplete 的异常为什么吞不掉 ################
+CompletableFuture.java:848-877 —— uniWhenComplete
+
+    final boolean uniWhenComplete(Object r,
+                                  BiConsumer<? super T,? super Throwable> f,
+                                  UniWhenComplete<T> c) {
+        T t; Throwable x = null;
+        if (result == null) {
+            try {
+                if (c != null && !c.claim())
+                    return false;
+                if (r instanceof AltResult) {
+                    x = ((AltResult)r).ex;
+                    t = null;
+                } else {
+                    @SuppressWarnings("unchecked") T tr = (T) r;
+                    t = tr;
+                }
+                f.accept(t, x);
+                if (x == null) {
+                    internalComplete(r);
+                    return true;
+                }
+            } catch (Throwable ex) {
+                if (x == null)
+                    x = ex;
+                else if (x != ex)
+                    x.addSuppressed(ex);
+            }
+            completeThrowable(x, r);
+        }
+        return true;
+    }
+
+关键在 catch 块（868-874）：
+            } catch (Throwable ex) {
+                if (x == null)
+                    x = ex;
+                else if (x != ex)
+                    x.addSuppressed(ex);
+            }
+            completeThrowable(x, r);
+
+读法：
+  · x == null（上游成功）→ x = ex，新异常成为结果 → 成功变失败        【E2 段实测】
+  · x != null（上游已失败）→ x.addSuppressed(ex) 后 completeThrowable(x, r)
+    而 encodeThrowable(x, r)（line 330-336）在 x 就是 r 里的那个异常时直接返回 r，
+    所以原始异常原封不动往外传，新异常只挂在包装层的 suppressed 上
+                                                                  【E1 段实测 suppressed=1】
+  · 结论：whenComplete 的 action 是 void，它没有「返回值」这个出口，物理上吞不掉异常。
+
+################ 5. join() 与 get() 抛的不是同一个东西 ################
+CompletableFuture.java:404-417 —— reportJoin：直接把内部那个 CompletionException 抛出来
+
+    private static Object reportJoin(Object r) {
+        if (r instanceof AltResult) {
+            Throwable x;
+            if ((x = ((AltResult)r).ex) == null)
+                return null;
+            if (x instanceof CancellationException)
+                throw (CancellationException)x;
+            if (x instanceof CompletionException)
+                throw (CompletionException)x;
+            throw new CompletionException(x);
+        }
+        return r;
+    }
+
+
+CompletableFuture.java:383-398 —— reportGet：先拆一层，再包成 ExecutionException
+
+    private static Object reportGet(Object r)
+        throws InterruptedException, ExecutionException {
+        if (r == null) // by convention below, null means interrupted
+            throw new InterruptedException();
+        if (r instanceof AltResult) {
+            Throwable x, cause;
+            if ((x = ((AltResult)r).ex) == null)
+                return null;
+            if (x instanceof CancellationException)
+                throw (CancellationException)x;
+            if ((x instanceof CompletionException) &&
+                (cause = x.getCause()) != null)
+                x = cause;
+            throw new ExecutionException(x);
+        }
+        return r;
+
+所以同一个失败任务：
+  join() → CompletionException(cause = ISE)      —— 多一层，但不用 throws
+  get()  → ExecutionException(cause = ISE)       —— 也一层，但要 try/catch 受检异常
+  嵌套链路里两边都会越套越深，所以生产代码里一定要有 unwrap()。

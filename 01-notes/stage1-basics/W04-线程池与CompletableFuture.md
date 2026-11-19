@@ -1,7 +1,7 @@
 # W04 · 线程池与 CompletableFuture
 
 > **第一阶段 · 打基础（W01–W12）** ｜ 预计投入 ≈ 7 小时（每天 60 分钟）
-> 状态：🟨 进行中（Day 1 完成，2026-11-12）　｜　开始日期：2026-11-12　｜　完成日期：____-__-__
+> 状态：🟩 已完成（Day 1 11-12，Day 2 11-19）　｜　开始日期：2026-11-12　｜　完成日期：2026-11-19
 
 > 💡 周六小程序：任务提交 → 线程池 → 异步执行 → 结果返回。给后面学 @Async 打基础。
 
@@ -12,13 +12,18 @@
 - [x] Executor
 - [x] ThreadPoolExecutor
 - [x] 线程池参数
-- [ ] CompletableFuture
-- [ ] 异步结果返回练习
+- [x] CompletableFuture
+- [x] 异步结果返回练习
 
 > Day 1 勾了前三格：`Executor` / `ThreadPoolExecutor` / 线程池参数。
 > 判断标准不是「背得出七个参数的名字」，而是**能画出任务在「核心 → 队列 → 非核心 → 拒绝」四步里的走向**，
 > 并且能解释「为什么无界队列会让 `maximumPoolSize` 变成摆设」。
 > 这两条现在有实测表（S1~S5）和 JDK 源码原文（`execute()` 三步注释）两重证据。
+>
+> Day 2 勾后两格：`CompletableFuture` / 异步结果返回练习。
+> 判断标准同样不是「背得出几个 thenXxx」，而是三条：**默认线程池是谁（以及为什么这是坑）**、
+> **`thenApply` 与 `thenCompose` 的返回类型差在哪（要能当场写出两种类型）**、
+> **异常在链上被谁吃掉（`whenComplete` 为什么吞不掉）**。
 
 ## 二、核心问题（能用自己的话脱稿讲出来，才算学会）
 
@@ -39,6 +44,14 @@ Day 1（已完成 11-12）  线程池：1 万个任务 new Thread vs 池（620 m
                        + Executors 四个工厂的坑：无界队列 OOM（第 176 个任务）/ 单线程堵死
                          / cached 线程暴涨 500 / submit 吞异常 / ThreadLocal 串味
                        + shutdown vs shutdownNow
+Day 2（已完成 11-19）  CompletableFuture：默认池是 commonPool（并行度 = 核数-1，实测 11 个线程）
+                       + 阻塞任务进公共池 = 排队（14×300ms：公共池 623ms vs 自建池 308ms）
+                       + thenApply vs thenCompose 的嵌套类型（CF<CF<String>>，join 两次）
+                       + thenCombine / allOf / anyOf 三种编队（411ms vs 816ms 串行）
+                       + 异常链 exceptionally / handle / whenComplete 三者的吞与不吞
+                       + whenComplete 抛异常时原始异常仍胜出（挂 suppressed，不是覆盖）
+                       + join vs get 的包装差异 + unwrap 的必要性
+                       + orTimeout / completeOnTimeout
 ```
 
 ### Day 1 · 2026-11-12（周三）· 线程池：任务先入队，还是先开线程
@@ -251,6 +264,252 @@ core=1 max=1 queue=1，连提 5 个任务（`#1` 在跑、`#2` 在队列、`#3#4
 
 `2N` 这种公式只是起点，真正的数只能压测出来 —— 因为「等待时间/计算时间」这个比值只能实测。
 
+### Day 2 · 2026-11-19（周四）· CompletableFuture：跑完之后怎么接
+
+| 时间 | 做什么 | 产出 |
+| -: | :--- | :--- |
+| 10 分钟 | 复述 Day 1：任务四步顺序 / 为什么无界队列让 max 失效 / `submit` 与 `execute` 的异常差别 | 口头过 |
+| 15 分钟 | `supplyAsync` / `runAsync`：**默认线程池是谁**、几个线程、阻塞任务塞进去会怎样 | `day2/AsyncBasics.java` |
+| 20 分钟 | **`thenApply` vs `thenCompose`**：把类型打出来；`thenCombine` / `allOf` / `anyOf` | `day2/ChainShape.java` |
+| 10 分钟 | 异常链三种写法：`exceptionally` / `handle` / `whenComplete` 各自能不能吞 | `day2/AsyncErrors.java` |
+| 5 分钟 | 输出 `day2-result.txt` + 源码取证 + 本节笔记 + 勾掉后两格 | 笔记 + 快照 |
+
+实测快照：`w04-threadpool-completablefuture/day2-result.txt`（215 行）
+源码取证：`w04-threadpool-completablefuture/day2-jdk-source.txt`（`uniWhenComplete` / `reportJoin` / `commonPool` 并行度）
+编译错误原文：`compile-errors/ChainTypeErrors.java`（3 条 `incompatible types`）
+
+> 一句话分工：**线程池解决「在哪跑」，`CompletableFuture` 解决「跑完之后怎么接」**。
+> Day 1 留在那儿的两条伏笔今天都用上了 —— `submit` 吞异常（换成 CF 一样吞）、
+> 线程复用导致 `ThreadLocal` 串味（换成 CF 的默认池一样串，而且范围更大：全 JVM）。
+
+#### 1. 不传 executor，任务落在 `ForkJoinPool.commonPool()` 上
+
+```java
+CompletableFuture.supplyAsync(() -> "x");   // 没有第二个参数
+```
+
+跑出来是什么：
+
+| 观测点 | 实测（12 核机器） |
+| :--- | :--- |
+| `Runtime.getRuntime().availableProcessors()` | 12 |
+| `ForkJoinPool.commonPool().getParallelism()` | **11** = `max(1, 核数 - 1)` |
+| 刚启动时 `getPoolSize()` | 0（按需创建，不是一开始就 11 个） |
+| `supplyAsync` 里的线程名 | `ForkJoinPool.commonPool-worker-1` |
+| 30 个任务用到几个不同线程 | **11 个**（worker-1 ~ worker-11） |
+
+源码对齐（`ForkJoinPool.java:2564`）：
+
+```java
+private ForkJoinPool(byte forCommonPoolOnly) {
+    int parallelism = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+```
+
+`CompletableFuture.java:430-438` 则说明了默认池是谁：
+
+```java
+private static final Executor ASYNC_POOL = USE_COMMON_POOL ?
+    ForkJoinPool.commonPool() : new ThreadPerTaskExecutor();
+```
+
+**为什么要强调「-1」**：留一个核给调用者（主线程）本身，否则提交者自己都抢不到 CPU。
+这个设计对「短小的 CPU 任务」是对的，对「阻塞的 IO 任务」是灾难 —— 见下一节。
+
+#### 2. 阻塞任务进公共池：不是变慢，是排队
+
+14 个任务（并行度 11 + 3），每个 `sleep(300)`：
+
+| 提交到哪 | 耗时 | 解释 |
+| :--- | ---: | :--- |
+| `commonPool`（并行度 11） | **623 ms** | 分 2 批 × 300 ms —— 多出来的 3 个只能等 |
+| 自建 `newFixedThreadPool(14)` | **308 ms** | 14 个线程同时睡，一批跑完 |
+
+这就是那句「不是慢一点，是排队」的实证。而真正的生产事故是**污染范围**：
+
+- `commonPool` 是**全 JVM 唯一**的，所有 `parallelStream()`、所有没传 executor 的 `supplyAsync` 共用它；
+- 你在订单服务里 `supplyAsync` 调一个 2 秒的 RPC，占掉的就是这 11 个坑之一；
+- 占满之后，**同 JVM 里跟它毫无关系的 `parallelStream` 也会卡住** —— 它们抢的是同一个池。
+
+所以规矩很简单：**只要任务里有 IO（查库、RPC、文件、锁等待），就必须传自己的 executor。**
+Spring 的 `@Async` 必须配 `TaskExecutor` 是同一个道理，只是它默认还会退化成 `SimpleAsyncTaskExecutor`（一个任务一个线程，更糟）。
+
+#### 3. 传自己的池：线程名是唯一的排查线索
+
+```java
+.supplyAsync(this::loadOrder, orderPool)        // order-1
+.thenApplyAsync(this::checkStock, stockPool);   // stock-1
+```
+
+实测两个阶段分别落在 `order-1` 和 `stock-1` —— 池子隔离 + 名字可读。
+默认的 `pool-3-thread-1` 在 `jstack` 里什么信息都没有，线上排查时等于瞎的。
+
+#### 4. `thenApply` vs `thenCompose`：差别只在签名里的那一层
+
+```java
+thenApply<U>   (Function<? super T, ? extends U>                   fn)
+thenCompose<U> (Function<? super T, ? extends CompletionStage<U>>  fn)
+```
+
+参数里多了 `CompletionStage` 那一层，导致 **`U` 的推导方向完全不同**。
+业务是「查用户 → 查他的订单」，第二阶段本身是异步的：
+
+```java
+CompletableFuture<CompletableFuture<String>> nested =
+        CompletableFuture.supplyAsync(() -> "用户:42")
+                         .thenApply(user -> fetchOrders(user));   // fetchOrders 返回 CF
+```
+
+实测三条：
+
+| 写法 | `join()` 拿到什么 | 类型 |
+| :--- | :--- | :--- |
+| `thenApply` | `java.util.concurrent.CompletableFuture@<hash>[Completed normally]` | `CompletableFuture`，**还要再 `join()` 一次** |
+| `thenCompose` | `用户:42 的订单共 3 笔` | `String`，一次到位 |
+
+这不是「风格问题」，是**类型问题**，而且**编译器不拦**（`ChainTypeErrors.java` 里我故意赋值给 `CF<String>` 才拦下来）：
+
+```text
+error: incompatible types: inference variable U has incompatible bounds
+    equality constraints: String
+    lower bounds: CompletableFuture<String>
+```
+
+> 注意这条报错**不是**「cannot be converted」，而是「U 的边界冲突」——
+> 目标类型把 `U` 钉死成 `String`，lambda 体却给出 `CF<String>`，两边打架。
+> 所以真实代码里最常见的形状是：**它编译通过了**，因为你没写中间变量的类型，
+> 然后 `join()` 打印出一个 `CompletableFuture@1b6d3586`，日志里全是这个鬼东西。
+
+同一件事在 W02 叫 `map` vs `flatMap`；在 `Optional` 里叫 `map` vs `flatMap`；
+在这里叫 `thenApply` vs `thenCompose`。**凡是「容器套容器」的 API 都有这一对。**
+
+#### 5. `thenApply` 不带 Async：可能根本不在异步线程上
+
+同一个上游 `supplyAsync(..., biz)`，三种接法：
+
+| 写法 | 实测线程 | 说明 |
+| :--- | :--- | :--- |
+| `thenApply` | `main` | 上游已经完成 → **就在调用者线程里同步跑完** |
+| `thenApplyAsync` | `ForkJoinPool.commonPool-worker-1` | 又回到公共池（默认池的第二次伏击） |
+| `thenApplyAsync(..., biz)` | `biz-2` | 指定池子 |
+
+「不带 Async 的 `thenXxx` 在完成上游的那个线程上执行」这句话是对的，但要补一句：
+**上游早已完成时，「完成上游的那个线程」就是调用 `thenApply` 的线程**（这里是 `main`）。
+所以「我明明写了异步，怎么做完一看耗时全在 main 里」不是玄学，是这一条。
+
+#### 6. 三种编队：combine / allOf / anyOf
+
+| API | 实测 | 要点 |
+| :--- | :--- | :--- |
+| `thenCombine` 两路各 400 ms | **411 ms**（串行写法 816 ms） | 两路是并行的，不是相加 |
+| `allOf` 三个任务 300/200/100 ms | **306 ms**，`join()` 返回 `null` | 等最慢的；返回 `CF<Void>`，**结果要自己 `join` 收** |
+| `anyOf` 300 ms 与 50 ms 两路 | **58 ms**，值类型 `Object` | 只等最快的；**类型信息被擦成 `Object`** |
+| 三次 `thenCompose`（有依赖） | **631 ms** | 有依赖，必须串 |
+| 三路并行 + `allOf`（无依赖） | **215 ms** | 没依赖就别串 |
+
+`allOf` 的用法是固定的两段式：
+
+```java
+CompletableFuture.allOf(f1, f2, f3).join();      // 1. 等全部完成（返回值是 null）
+List<R> rs = List.of(f1, f2, f3).stream().map(CompletableFuture::join).toList();  // 2. 再收
+```
+
+第二段的 `join()` 不会阻塞 —— 因为第一段已经保证它们全完成了。
+**顺手能记住的一条**：`anyOf` 返回 `CF<Object>`，想拿回原类型只能强转，泛型在这里救不了你。
+
+#### 7. 异常链：谁能吞，谁吞不掉
+
+先看失败怎么传播：上游抛异常之后，链上所有「不处理异常」的节点**全部被跳过**（实测两段 `thenApply` 一行日志都没打），
+异常沿途复制到最后一站，`join()` 抛 `CompletionException`，`getCause()` 才是真身。
+
+三个方法的分工：
+
+| 方法 | 什么时候执行 | 能不能把失败变成功 | 实测证据 |
+| :--- | :--- | :--- | :--- |
+| `exceptionally` | **只在失败时** | 能（返回兜底值） | 成功路径下不执行 |
+| `handle` | 成功失败都执行 | 能（`ex == null` 分支） | `r=null, ex=CompletionException` |
+| `whenComplete` | 成功失败都执行 | **不能** | 打了日志，`join()` 照样抛 |
+
+`whenComplete` 为什么吞不掉？因为它签名的返回值是 `void` —— **没有出口**。
+源码 `uniWhenComplete`（`CompletableFuture.java:848-877`）的 catch 块：
+
+```java
+} catch (Throwable ex) {
+    if (x == null)
+        x = ex;                 // 上游成功 → 新异常成为结果（成功变失败）
+    else if (x != ex)
+        x.addSuppressed(ex);    // 上游已失败 → 只能挂 suppressed
+}
+completeThrowable(x, r);
+```
+
+三段实测正好把这三种情况钉死：
+
+| 场景 | 结果 |
+| :--- | :--- |
+| E1 上游失败 + `whenComplete` 又抛 | cause 仍是**原始异常**（原始赢），外层 `suppressed = 1`，挂上来的正是新抛的那个 |
+| E2 上游成功 + `whenComplete` 又抛 | cause 是**新异常** —— 把成功变成了失败 |
+| E3 上游失败 + `exceptionally` 又抛 | cause 是**新异常**，原始异常既不在 cause 也不在 suppressed → **彻底丢了** |
+
+> 所以「用 `whenComplete` 兜底」从来兜不住；而 `exceptionally` 里自己的代码一旦抛异常，
+> 会把原始异常**覆盖掉且不留痕** —— 这就是线上「只看到兜底 NPE，看不到真正的业务异常」的成因。
+
+#### 8. `join` / `get` 与「异常越套越深」
+
+| 调用 | 抛什么 | 备注 |
+| :--- | :--- | :--- |
+| `join()` | `CompletionException` | 非受检，方法不用 `throws` |
+| `get()` | `ExecutionException` | 受检，必须处理；内部还会先拆一层 |
+| `get(100, MS)` | `TimeoutException` | `join` 没有超时版本 |
+
+嵌套链路里包装层数会累加。实测这条链：
+
+```text
+CompletionException(RuntimeException: 兜底崩了)
+  <- RuntimeException(兜底崩了)
+    <- CompletionException(IllegalStateException: 内层)
+      <- IllegalStateException(内层)
+```
+
+两个后果：
+
+1. **`exceptionally` / `handle` 拿到的 `ex` 是 `CompletionException`**，不是你的业务异常 ——
+   实测 `ex.getMessage()` 是 `java.lang.IllegalStateException: 库存服务 500`（带类名的拼装串），
+   `ex.getCause()` 才是业务异常本体。所以打日志直接打 `ex.getMessage()` 只会得到一堆没信息量的包装。
+2. **`instanceof` 判断要拆到底**：实测 `e instanceof IllegalStateException → false`，
+   `e.getCause() instanceof → true`，但失败两次之后一层 `getCause()` 又不够了 —— 必须用 `while` 循环的 `unwrap()`：
+
+```java
+static Throwable unwrap(Throwable t) {
+    while ((t instanceof CompletionException || t instanceof ExecutionException) && t.getCause() != null)
+        t = t.getCause();
+    return t;
+}
+```
+
+#### 9. 两个高频写法错误
+
+**① `exceptionally` 的返回值没人接。**
+
+```java
+CompletableFuture<String> cf = failing();
+cf.exceptionally(ex -> "兜底");   // ← 返回值被丢掉
+cf.join();                        // 仍然抛：库存服务 500
+```
+
+`CompletableFuture` 是**不可变**的：每个 `thenXxx` / `exceptionally` 都返回**新的** CF，
+老的那个状态一点没变。这跟 `String` / `Stream` 是同一个约定，但 CF 的「不可变」更容易忘，
+因为它的方法名看起来像「设置处理器」。
+
+**② 超时只是让 CF 提前完成，后台任务还在跑。**
+
+| 写法 | 实测 |
+| :--- | :--- |
+| `orTimeout(200ms)` | 约 **212 ms** 抛 `TimeoutException` |
+| `completeOnTimeout("降级值", 200ms)` | 约 **211 ms** 返回降级值，不抛 |
+
+两者都**不会中断**那个 800 ms 的后台任务 —— 它照样跑完，只是没人要它的结果了。
+要真正停下来，得把 `Future` 拿回来 `cancel(true)`，而且任务本身得响应中断。
+
 ## 四、踩坑与 Bug 复盘
 
 | 现象 | 原因 | 排查过程 | 解决 | 底层原理 |
@@ -260,6 +519,10 @@ core=1 max=1 queue=1，连提 5 个任务（`#1` 在跑、`#2` 在队列、`#3#4
 | `PoolFlow` 的 S4（core=0）第一格「线程数 1 / 队列 1」，换一次运行变成「线程数 1 / 队列 0」 | `execute()` 入队之后还会 `recheck` 一次（`workerCountOf == 0` 就补一个线程），补线程和「工作线程从队列里取任务」是两条并发路径 | 同一份代码连跑三次，这一格三种结果 | 结论只写「先进队、再借线程」，并在输出里显式声明「这一格会抖」 | 快照类实验只能保证「不变的那部分」是结论；**会抖的格子要标注，不能当证据** |
 | 以为 `DiscardOldestPolicy` 只丢一个（队列里最老的那一个） | 它丢完会**重试**，重试还可能失败，于是接着丢 —— `#3` 挤掉 `#2`，`#4` 挤掉 `#3`，`#5` 挤掉 `#4` | 实测只跑了 `#1` 和 `#5`，跟「只丢一个」的预期对不上，回头翻 JDK 文档 | 按实测改成「连丢多个」，并把文档原话抄进 `day1-jdk-source.txt` | 拒绝策略是**循环**不是单次：`retried (which can fail again, causing this to be repeated)` |
 | 一开始想用 `newFixedThreadPool(2)` 的返回值调 `getQueue()`，编译不过 | `ExecutorService` 接口上没有 `getQueue()`，那是 `ThreadPoolExecutor` 的方法 | `javac` 报「找不到符号」 | 强转 `(ThreadPoolExecutor) p` | `Executors` 返回的确实是 `ThreadPoolExecutor`，但换成 `ForkJoinPool`（`newWorkStealingPool`）就炸 —— **强转能过是工厂方法的实现细节，不是契约** |
+| Day 2：先写注释「`whenComplete` 里抛异常会覆盖原始异常」，实测是**原始异常胜出** | 源码 `uniWhenComplete` 的 catch 把新异常 `addSuppressed` 到包装层，而 `encodeThrowable(x, r)` 在 `x` 就是 `r` 里那个实例时直接返回 `r` | 输出里 cause 仍是「原始异常」，跟注释打架 | 按实测改文案，并把 `suppressed` 一起打出来定位 | action 异常只在「上游本来没事」时才有话语权 |
+| Day 2：查 `suppressed` 打印了 `e.getCause().getSuppressed()`，得到 0，一度以为「新异常被丢弃」 | suppressed 挂在**外层 `CompletionException`** 上，不在 cause 上 | 源码明明有 `addSuppressed`，实测却是 0 —— 两边矛盾，说明是测量位置错了 | 同时打两层：外层 = 1，cause 自己 = 0 | **测「异常结构」时，先想清楚你测的是哪一层对象**；`e` 和 `e.getCause()` 是两个东西 |
+| Day 2：`e instanceof IllegalStateException` 编译报「不可转换的类型」 | `e` 声明成 `CompletionException`，和 `IllegalStateException` 没有继承关系，编译期就被判定不可能 | 想演示「匹配不到」，结果连编译都过不去 | 用 `Throwable e = ce;` 声明，`instanceof` 才合法 | `instanceof` 的可达性检查在编译期做；演示运行时行为要先用宽类型接住 |
+| Day 2：`nested.join()` 有时打印 `[Completed normally]`，有时打印 `[Not completed]` | 内层 CF 是 `supplyAsync` 提交的，打印那一刻它可能还没跑完 —— `toString` 里的状态本身就是一个竞态 | 重跑三次看到两种状态，改笔记时才发现「证据会抖」 | 先 `join().join()` 把内层等到完成，再打印外层 | **和 Day 1 的 S4 同一类错误：会抖的格子不能当证据。** 要举证「类型是 Future」，打 `getClass()` 而不是 `toString()` |
 
 ---
 
@@ -283,6 +546,22 @@ core=1 max=1 queue=1，连提 5 个任务（`#1` 在跑、`#2` 在队列、`#3#4
   **先定有界队列 + 出声的拒绝策略，再压测定数**）
 - 线程池怎么做监控？（`getActiveCount` / `getQueue().size()` / 自定义 `handler` 计拒绝次数，
   再上报到指标系统；这些数才是「池子够不够」的唯一依据）
+- `CompletableFuture.supplyAsync` 不传线程池，用的是哪个池？几个线程？（`ForkJoinPool.commonPool()`，
+  并行度 `max(1, 核数-1)`，实测 12 核 → 11 个 worker；**全 JVM 共享**）
+- 为什么阿里手册要求 `@Async` / `supplyAsync` 必须指定线程池？（阻塞任务占满公共池，
+  连无关的 `parallelStream` 一起卡住；实测 14 个 300 ms 任务：公共池 623 ms vs 自建池 308 ms）
+- `thenApply` 和 `thenCompose` 有什么区别？（前者 `T -> R`，后者 `T -> CF<R>` 会拍平；
+  用错的后果是 `CF<CF<String>>`，**编译不报错**，`join()` 打印出一个 `CompletableFuture@1b6d3586`）
+- 不带 `Async` 的 `thenApply` 在哪个线程跑？（完成上游的那个线程；上游已完成时就是**调用者线程**，
+  实测在 `main` 里跑完）
+- `exceptionally` / `handle` / `whenComplete` 三者区别？（前两个能给兜底值、能吞异常；
+  后者签名返回 `void`，**吞不掉**，上游已失败时它的异常只能挂 `suppressed`）
+- `whenComplete` 里抛异常会覆盖原始异常吗？（不会。实测 cause 仍是原始异常，新异常只进 suppressed；
+  但 `exceptionally` 里抛会覆盖，**且原始异常彻底丢失**）
+- `join` 和 `get` 的区别？（`CompletionException` vs 受检的 `ExecutionException`；
+  `get` 支持超时；嵌套链路里都会越套越深，要写 `unwrap()`）
+- 为什么 `exceptionally` 写了却没生效？（忘了接返回值 —— CF 不可变，每个 `thenXxx` 都返回新对象）
+- `orTimeout` 会中断任务吗？（不会。只是让 CF 提前完成，后台任务继续跑完）
 
 ## 六、一句话总结
 
@@ -295,7 +574,7 @@ core=1 max=1 queue=1，连提 5 个任务（`#1` 在跑、`#2` 在队列、`#3#4
 | 日期 | 星期 | 学习内容 | 用时 | 产出物 | ✅ |
 | :--- | :--- | :--- | ---: | :--- | :--: |
 | 2026-11-12 | 三 | Day 1 线程池：1 万个任务 `new Thread` 620 ms vs 池 13 ms（47.7 倍）/ 任务四步走 S1~S5（核心→队列→非核心→拒绝）/ 无界队列让 max 失效 / keepAlive 只收非核心 / 四种拒绝策略 / `submit` 吞异常 / `ThreadLocal` 串味 / OOM 第 176 个任务 / shutdown vs shutdownNow | 60 min | `PoolBasics` / `PoolFlow` / `PoolTraps` / `day1-result.txt` / `day1-jdk-source.txt` | ✅ |
-|  | 四 |  |  |  |  |
+| 2026-11-19 | 四 | Day 2 CompletableFuture：默认池 commonPool（并行度 11，30 任务只用 11 线程）/ 阻塞任务排队（623 ms vs 308 ms）/ `thenApply` vs `thenCompose` 的 `CF<CF<String>>` / combine 411 ms vs 串行 816 ms / allOf 返回 null / 异常三种写法 + `whenComplete` 吞不掉 / suppressed 位置 / unwrap / orTimeout | 60 min | `AsyncBasics` / `ChainShape` / `AsyncErrors` / `day2-result.txt` / `day2-jdk-source.txt` / `compile-errors/ChainTypeErrors.java` | ✅ |
 |  | 五 |  |  |  |  |
 |  | 六 |  |  |  |  |
 |  | 日 |  |  |  |  |
@@ -351,3 +630,65 @@ core=1 max=1 queue=1，连提 5 个任务（`#1` 在跑、`#2` 在队列、`#3#4
 所以队列有界 + 拒绝出声 + 有指标，三件事缺一不可。
 
 ---
+
+**Q3 · `thenApply` 和 `thenCompose` 的区别，为什么用错了不报错？**
+
+**`thenApply` 的函数返回「值」，`thenCompose` 的函数返回「另一个异步」。**
+区别在签名里：`thenCompose` 的参数是 `Function<? super T, ? extends CompletionStage<U>>`，
+参数类型里多了 `CompletionStage` 这一层，正是它让 `U` 的推导停在「值」上，把外面那层拍平。
+
+用错了**为什么不报错**：因为你写的是 `thenApply(user -> fetchOrders(user))`，
+`fetchOrders` 返回 `CompletableFuture<String>`，于是 `U` 顺理成章被推成 `CompletableFuture<String>`，
+结果类型成为 `CompletableFuture<CompletableFuture<String>>` —— **这是合法的泛型嵌套**。
+
+只有在三种情况下才会露馅：
+
+1. 你显式声明了中间变量 `CompletableFuture<String> cf = ...` →
+   `incompatible types: inference variable U has incompatible bounds / lower bounds: CompletableFuture<String>`；
+2. 你在 `join()` 之后继续调下游方法 → `cannot find symbol: method length()`；
+3. 运行时打印 → `java.util.concurrent.CompletableFuture@<hash>[Completed normally]`。
+
+实测（`ChainShape` A 段）：
+
+| 写法 | `join()` 的值 | `join()` 的类型 |
+| :--- | :--- | :--- |
+| `thenApply` | `CompletableFuture@<hash>[Completed normally]` | `java.util.concurrent.CompletableFuture` |
+| `thenCompose` | `用户:42 的订单共 3 笔` | `java.lang.String` |
+
+**判断口诀**：看 `join()` 的返回类型 —— 拿到 `CompletableFuture` 就是套错了。
+这和 W02 的 `map` / `flatMap`、`Optional` 的 `map` / `flatMap` 是同一个形状：
+**容器套容器的 API，永远有「会不会拍平」这一对。**
+
+---
+
+**Q4 · `whenComplete` 为什么兜不住异常？`exceptionally` 里抛异常又会怎样？**
+
+**因为 `whenComplete` 的 action 是 `BiConsumer`，返回值 `void` —— 它没有「返回值」这个出口。**
+`exceptionally` / `handle` 的函数都返回 `T`，那个返回值就是新的结果（可以把失败变成功）；
+`whenComplete` 只能「看」，结果由上游决定。
+
+源码 `uniWhenComplete`（`CompletableFuture.java:848-877`）的 catch 块把这件事写得很直白：
+
+```java
+} catch (Throwable ex) {
+    if (x == null) x = ex;              // 上游成功 → 新异常成为结果
+    else if (x != ex) x.addSuppressed(ex);  // 上游已失败 → 只能挂 suppressed
+}
+completeThrowable(x, r);
+```
+
+三种场景的实测（`AsyncErrors` E 段）：
+
+| 场景 | cause | suppressed |
+| :--- | :--- | :--- |
+| 上游失败 + `whenComplete` 抛 | **原始异常** | 外层 1（= 新抛的那个），cause 自己 0 |
+| 上游成功 + `whenComplete` 抛 | 新异常 | —— （把成功变成了失败） |
+| 上游失败 + `exceptionally` 抛 | **新异常** | 0 / 0，**原始异常彻底丢失** |
+
+最后一行是最凶的：兜底代码自己挂了，原始业务异常**既不在 cause 也不在 suppressed**。
+所以写 `exceptionally` 的正确姿势是**兜底逻辑自己 try-catch**，或者在链上再挂一层 `exceptionally`，
+否则线上只能看到「兜底 NPE」，看不到真正的故障原因。
+
+顺带一条：`exceptionally` / `handle` 拿到的 `ex` 是 **`CompletionException`**（不是业务异常），
+`ex.getMessage()` 是 `java.lang.IllegalStateException: xxx` 这种拼装串，
+`ex.getCause()` 才是本体；嵌套两层之后一层 `getCause()` 也不够，要 `while` 循环的 `unwrap()`。

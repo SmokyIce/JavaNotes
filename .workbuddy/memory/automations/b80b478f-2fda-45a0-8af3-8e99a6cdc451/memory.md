@@ -153,3 +153,22 @@
 - 本次踩坑（已进 MEMORY.md）：`catch(OOM)` 里直接 printf 会二次 OOM（先预留内存再打印）；
   `ThreadLocal` 串味实验必须 `fixed(1)`（`fixed(2)` 两个请求落到不同线程，残留根本没发生）；
   `DiscardOldestPolicy` 连丢多个；`PoolFlow` 的 core=0 那格会抖 → 输出里标注；`ExecutorService` 无 `getQueue()`。
+
+## 2026-11-19（第十二次执行 · W04 Day 2，W04 封板）
+- 开工回归：清空 `out/` 重编 w04（6 文件）+ 跑 day1 三入口，全 exit=0、无回归、**无中断代码**；
+  `01-notes` 未勾项只剩 W04 的两格（= 今天的任务），`02-code` 只剩 `w05-` 起的 `.gitkeep` → 无遗留需补。
+- 推进 W04 Day 2：新建 `day2/AsyncBasics`（A~E）、`day2/ChainShape`（A~F）、`day2/AsyncErrors`（A~H）
+  + `compile-errors/ChainTypeErrors.java`（3 条 `incompatible types`）+ `day2-result.txt`（215 行）
+  + `day2-jdk-source.txt`（`uniWhenComplete` / `reportJoin` / `commonPool` 并行度 / `ASYNC_POOL`）。
+- 题库 `Java并发.md` 10 → 12（Q11 默认池与污染 / Q12 thenApply vs thenCompose）。
+- 同步：W04 笔记（Day 2 九小节 + 踩坑 4 + 面试 9 + 参考要点 Q3/Q4 + 打卡 + 后两格打勾 + 🟩）、
+  `README.md`（目录树 + Day 2 三节 + 五个坑）、`today.md`（11-19 + 下一时间盒）、
+  `MILESTONES.md`（进展表 + W04 封板 + 三条结论 + 下一时间盒）。
+- **W04 已封板**。下次起点：**W05 Day 1 = Spring IOC/DI**；`w05-spring-ioc-di/` 需从 `.gitkeep` 建工程，
+  且**本机无 Maven** → 先手工下 `spring-core`/`beans`/`context`/`expression`/`commons-logging` 到 `lib/`。
+- 本次自查抓回 4 处（都靠实跑输出对不上发现）：① 「whenComplete 抛异常会覆盖原始异常」写反了，
+  实测原始异常胜出、新异常只进外层 suppressed；② 查 suppressed 查错层（`e.getCause()` 而非 `e`）；
+  ③ `nested.join()` 的 toString 会抖（`[Not completed]`/`[Completed normally]`）→ 改成先 `join().join()`，
+  并把文档里硬编码的 `@1218025c` 全换成 `@<hash>`；④ `e instanceof ISE` 编译不过（`e` 是 CompletionException）。
+- 环境：`run.sh` 短名只认 day1，跑 day2 必须写 `day2.AsyncBasics`；
+  编译错误取证加 `-J-Duser.language=en -J-Duser.country=US` 才不是 GBK 乱码。

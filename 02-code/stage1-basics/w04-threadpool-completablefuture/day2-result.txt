@@ -1,0 +1,215 @@
+==================================================================
+ W04 Day 2 · CompletableFuture · 全部实测
+ JDK 17 / 12 核 (commonPool 并行度 11) / Windows 11
+ 生成时间：2026-11-19
+==================================================================
+
+##############################################################
+# [1] AsyncBasics —— 默认线程池是谁 / 阻塞任务会不会排队
+##############################################################
+$ ./run.sh day2.AsyncBasics
+
+== A. 不传 executor，任务落在哪个线程上？==
+  Runtime.getRuntime().availableProcessors() = 12
+  ForkJoinPool.commonPool().getParallelism() = 11
+  ForkJoinPool.commonPool().getPoolSize()     = 0   （池子按需创建，刚启动时可能还是 0）
+  supplyAsync 里看到的线程名 = ForkJoinPool.commonPool-worker-1
+  30 个任务用到的不同线程数 = 11   → [ForkJoinPool.commonPool-worker-1, ForkJoinPool.commonPool-worker-10, ForkJoinPool.commonPool-worker-11, ForkJoinPool.commonPool-worker-2, ForkJoinPool.commonPool-worker-3, ForkJoinPool.commonPool-worker-4, ForkJoinPool.commonPool-worker-5, ForkJoinPool.commonPool-worker-6, ForkJoinPool.commonPool-worker-7, ForkJoinPool.commonPool-worker-8, ForkJoinPool.commonPool-worker-9]
+  → 名字都是 ForkJoinPool.commonPool-worker-N，说明没有新建线程池，全在一个公共池里。
+
+== B. 阻塞任务塞进 commonPool：不是变慢，是排队 ==
+  14 个任务，每个阻塞 300 ms
+  commonPool（并行度 11）耗时 = 619 ms  ≈ 分 2 批 × 300 ms
+  自建 fixed(14)                    耗时 = 308 ms
+  → 公共池只有那么几个线程，多出来的任务只能排队等，不是被并行执行。
+  → 生产事故的典型形状：业务里 supplyAsync 调 RPC，把 commonPool 占满，
+    同 JVM 里无关的 parallelStream 全部卡住 —— 它们抢的是同一个池。
+
+== C. runAsync vs supplyAsync：一个没有返回，一个异常也照样躺着 ==
+  runAsync 跑完了，返回 CompletableFuture<Void>
+  run.join() 的返回值 = null   （Void 就是 null）
+  supplyAsync 结果 = 42，类型 CompletableFuture<Integer>
+  提交了一个一定抛异常的任务，100 ms 后控制台什么都没有 —— 异常躺在 CF 里
+  join() 才抛：CompletionException / cause = java.lang.IllegalStateException: 下游服务 500
+  → 这就是 Day 1 T4「submit 吞异常」的同一件事，只是换了个壳。
+
+== D. 传自己的 executor：线程名能读懂，池子能隔离 ==
+  查订单，线程 = order-1
+  查库存，线程 = stock-1（换了池子）
+  结果 = ORDER-9527 / 有货
+  → 线上排查「这个异步任务跑在哪」全靠线程名，默认的 pool-N-thread-M 什么也看不出来。
+
+== E. 不一定非得异步起：三种现成的 CompletableFuture ==
+  completedFuture.join()      = 缓存命中   isDone=true（不占线程，直接就是完成态）
+  failedFuture.isCompletedExceptionally() = true
+  手动 complete 之前 isDone = false，join 会阻塞……
+  join() = 回调线程塞进来的结果（由 callback-thread 完成）
+  complete 两次：第一次 true，第二次 false，值仍是 第一次（CAS 语义，只有一个赢家）
+
+
+  一句话：不传 executor 的 *Async 方法，默认都在 commonPool 上跑；
+  commonPool 的线程数 = 核数 - 1，且全 JVM 共享 —— 所以阻塞任务必须自带线程池。
+
+##############################################################
+# [2] ChainShape —— thenApply vs thenCompose / combine / allOf
+##############################################################
+$ ./run.sh day2.ChainShape
+
+== A. 同一个业务：查用户 → 查他的订单，两种写法两种类型 ==
+  thenApply 的静态类型 = CompletableFuture<CompletableFuture<String>>
+  nested.join() 的类型 = java.util.concurrent.CompletableFuture   ← 不是 String
+  nested.join().join() = 用户:42 的订单共 3 笔   ← 要 join 两次才拿到值
+  此时再看 nested.join() = java.util.concurrent.CompletableFuture@776ec8df[Completed normally]（外层已完成，打印才稳定）
+     （能赋给 CompletableFuture<CompletableFuture<String>> 形参 → 编译期类型就是嵌套的）
+  thenCompose 的静态类型 = CompletableFuture<String>
+  flat.join()          = 用户:42 的订单共 3 笔
+  flat.join() 的类型    = java.lang.String   ← 一次 join 到位
+
+== B. thenApply / thenApplyAsync / thenApply(executor)：在哪一层跑 ==
+  上游 supplyAsync        线程 = biz-1
+  thenApply（同步）        线程 = biz-1  ← 上游已完成，于是直接在调用线程原地执行
+  thenApplyAsync（默认池）  线程 = ForkJoinPool.commonPool-worker-1  ← 又回到 commonPool
+  thenApplyAsync(biz)     线程 = biz-2  ← 指定池子
+  三个结果 = AB / AC / AD
+  → 规则：不带 Async 的 thenXxx 在「完成上游的那个线程」上跑 —— 上游早已完成时，
+    它就在调用的那个线程（这里是 main）上同步跑完，跟异步一点关系都没有。
+
+== C. thenCombine：两路并行，再合并（不是串行相加）==
+  两路各 400 ms，合并结果 = 用户A 有 1280 积分
+  总耗时 = 409 ms  → 两路是并行的，不是 800 ms
+  若是「先 join 再提交下一个」= 815 ms   （用户A / 1280）← 串行相加
+
+== D. allOf：返回的是 CompletableFuture<Void>，结果得自己收 ==
+  三个任务 300/200/100 ms，allOf().join() 返回值 = null   （Void，没有结果）
+  总耗时 = 321 ms ≈ 最慢的那个（300 ms），不是三者之和
+  收集结果 = [订单, 库存, 优惠券]   ← join 在这里不会阻塞，因为 allOf 已经保证全完成了
+  拼起来 = 订单+库存+优惠券
+
+== E. anyOf：谁先回来用谁，返回类型被擦成 Object ==
+  anyOf 的静态类型 = CompletableFuture<Object>，值 = 快接口（String）
+  耗时 = 65 ms → 只等最快的那个
+  → 代价：类型信息丢了。要拿回 String 得自己强转，泛型在这里救不了你。
+
+== F. 串联三次 vs 并行三路：同一个业务的两种编队 ==
+  三次 thenCompose（有依赖，必须串） = 631 ms   下单→扣库存→发券
+  三路并行（无依赖，可以并）       = 209 ms   下单/扣库存/发券
+  → 有依赖才串，没依赖就并。把「能并的」写成 thenCompose 链是最常见的性能自残。
+
+
+  一句话：返回值是「值」用 thenApply，返回值是「另一个异步」用 thenCompose；
+  分不清的时候看 join() 的返回类型 —— 拿到 CompletableFuture 就是套错了。
+
+##############################################################
+# [3] AsyncErrors —— 异常被谁吃了
+##############################################################
+$ ./run.sh day2.AsyncErrors
+
+== A. 上游失败 → 后面的 thenApply 整个被跳过 ==
+  上游任务：抛 IllegalStateException
+  join() 抛 CompletionException，cause = java.lang.IllegalStateException: 库存服务 500
+  → 失败之后链上所有「不处理异常」的节点全部跳过，异常沿途复制到最后一站。
+
+== B. exceptionally：只在失败时跑，返回值就是兜底结果 ==
+  上游任务：抛 IllegalStateException
+  exceptionally 收到 CompletionException / java.lang.IllegalStateException: 库存服务 500
+  join() = 兜底：返回缓存里的库存   ← 不再抛异常，链变成「成功」
+  成功路径下 exceptionally 不执行，join() = 正常结果
+
+== C. handle：成功失败都进，靠 ex 是否为 null 分支 ==
+  成功分支：r = 正常结果，ex = null
+  join() = 加工后：正常结果
+  上游任务：抛 IllegalStateException
+  失败分支：r = null，ex = CompletionException
+  join() = 降级结果   ← 也把异常吃掉了
+
+== D. whenComplete：看着像处理了，其实一个都没吞 ==
+  上游任务：抛 IllegalStateException
+  whenComplete 收到 r = null，ex = CompletionException
+  我在这里打了日志、也「处理」了 —— 但下面照样抛
+  join() 仍然抛 CompletionException：cause = java.lang.IllegalStateException: 库存服务 500
+  成功时也会执行，r = A，ex = null
+  成功路径 join() = A（whenComplete 的返回值被忽略，原值继续往下走）
+  → 它的签名是 (T, Throwable) -> void，没有返回值，所以物理上就没法兜底。
+
+== E. 在 whenComplete / exceptionally 里自己抛：原始异常会不会被顶掉 ==
+  -- E1 上游已经失败 + whenComplete 又抛 --
+  拿到 cause = 原始异常   ← 原始异常赢了，新抛的没能顶掉它
+  外层 CompletionException 的 suppressed = 1，cause 自己的 suppressed = 0
+  被挂上来的正是：whenComplete 里又抛了一个（只是挂在包装层，不是原因）
+  -- E2 上游成功 + whenComplete 又抛 --
+  拿到 cause = 日志逻辑写挂了   ← 这次新异常生效了，把成功变成了失败
+  → 结论：whenComplete 的异常只在「上游本来没事」时才起作用。
+    上游已失败时它只能当配角：JDK 把它 addSuppressed 到外层包装异常上（源码 line 872），
+    真正往外传的还是原始异常 —— 所以「用 whenComplete 兜底」从来兜不住。
+  -- E3 上游失败 + exceptionally 又抛 --
+  拿到 cause = 兜底逻辑也挂了   ← 覆盖了原始异常
+  外层 suppressed = 0，cause 自己的 suppressed = 0
+  → 原始异常既不在 cause 里，也不在 suppressed 里 —— 彻底丢了。
+    因为 exceptionally 抛异常时走的是 completeThrowable(ex)，直接 new 了一个新的包装。
+  → 兜底代码本身也会失败。要么它自己 try-catch，要么链上再挂一层 exceptionally。
+
+== F. join() vs get()：包装的异常类型不一样 ==
+  上游任务：抛 IllegalStateException
+  join() → CompletionException（RuntimeException，方法不用 throws）
+  上游任务：抛 IllegalStateException
+  get()  → ExecutionException（受检异常，必须 throws / catch）
+  get(100ms) → TimeoutException：get 支持超时，join 不支持
+  嵌套后的异常链 = CompletionException(java.lang.RuntimeException: 兜底崩了) <- RuntimeException(兜底崩了) <- CompletionException(java.lang.IllegalStateException: 内层) <- IllegalStateException(内层)
+  → 每经过一次异步边界就多包一层，所以打日志直接打 ex.getMessage() 只能看到
+    「java.util.concurrent.CompletionException: ...」这种没有信息量的东西。
+  上游任务：抛 IllegalStateException
+  handle 里的 ex 类型 = java.util.concurrent.CompletionException
+    ex.getMessage() = java.lang.IllegalStateException: 库存服务 500
+    ex.getCause()   = java.lang.IllegalStateException: 库存服务 500
+    拆一层后 = java.lang.IllegalStateException: 库存服务 500
+  上游任务：抛 IllegalStateException
+  所以类型判断要往下拆一层，否则永远匹配不到自己的业务异常：
+    e                     instanceof IllegalStateException → false
+    e.getCause()          instanceof IllegalStateException → true
+    但线程池里失败两次就会套两层，只拆一层不够 → unwrap(e) 用 while 循环：
+    unwrap(e)             instanceof IllegalStateException → true
+
+== G. 最常见的写法错误：exceptionally 的返回值没人接 ==
+  上游任务：抛 IllegalStateException
+  原 CF 仍然异常：库存服务 500
+  → CompletableFuture 是不可变的：每个 then/exceptionally 都返回「新的」CF，
+    老的那个状态一点没变。所有链式 API 都是这个约定，没有例外。
+
+== H. 超时：orTimeout / completeOnTimeout（JDK 9+）==
+  orTimeout(200ms) → 约 211 ms 后抛 TimeoutException
+  completeOnTimeout(200ms) → 211 ms 后拿到 "超时降级值"（不抛，直接给默认值）
+  → 区别就是「抛」和「给默认值」。给 RPC 调用兜底时，前者要 catch，后者不用。
+  → 注意：超时只是让 CF 提前完成，后台那个慢任务还在跑，它不会被中断。
+
+
+  一句话：exceptionally / handle 是「修复」，whenComplete 是「围观」；
+  要兜底就用前两个，只想记日志就别指望它把异常咽下去。
+
+##############################################################
+# [4] compile-errors/ChainTypeErrors.java —— javac 原文
+##############################################################
+$ javac -J-Duser.language=en -J-Duser.country=US -encoding UTF-8 \
+        -d /tmp/ce compile-errors/ChainTypeErrors.java
+
+compile-errors\ChainTypeErrors.java:32: error: incompatible types: inference variable U has incompatible bounds
+                .thenApply(u -> orderOf(u));
+                          ^
+    equality constraints: String
+    lower bounds: CompletableFuture<String>
+  where U,T are type-variables:
+    U extends Object declared in method <U>thenApply(Function<? super T,? extends U>)
+    T extends Object declared in class CompletableFuture
+compile-errors\ChainTypeErrors.java:43: error: cannot find symbol
+                .length();
+                ^
+  symbol:   method length()
+  location: class CompletableFuture<String>
+compile-errors\ChainTypeErrors.java:52: error: incompatible types: cannot infer type-variable(s) U
+                .thenCompose(u -> u + "-order");
+                            ^
+    (argument mismatch; bad return type in lambda expression
+      String cannot be converted to CompletionStage<U>)
+  where U,T are type-variables:
+    U extends Object declared in method <U>thenCompose(Function<? super T,? extends CompletionStage<U>>)
+    T extends Object declared in class CompletableFuture
+3 errors

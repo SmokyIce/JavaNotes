@@ -24,10 +24,11 @@
 - W02 泛型/异常/Optional/Lambda/Stream/收集器 ✅ **已封板（11-03）**
 - W03 并发 ✅ **已封板（11-11）**：Day 1 线程基础 / Day 2 锁的是谁 /
   Day 3 volatile + happens-before + DCL / Day 4 `Lock` + 手写 AQS + `wait-notify`
-- W04 线程池/CF 🟨 **Day 1 完成（11-12）**：线程池七个参数 + 任务四步顺序 + Executors 四个工厂的坑
-- **下一步：W04 Day 2 = CompletableFuture**（`day2/`；`supplyAsync` 默认 `commonPool` /
-  `thenApply` vs `thenCompose` 的嵌套 Future / 异常链三种写法）
-- 题库：`Java基础.md` 24 题、`Java并发.md` 10 题（M1 只要 8 道，**已超标**）
+- W04 线程池/CF ✅ **已封板（11-19）**：Day 1 线程池七个参数 + 任务四步顺序 + Executors 四个工厂的坑 /
+  Day 2 `commonPool` 并行度 = 核数-1 + `thenApply` vs `thenCompose` + 异常链三种写法
+- **下一步：W05 Day 1 = Spring IOC/DI**（`w05-spring-ioc-di/` 仍是 `.gitkeep`；先解决「本机没有 Maven」：
+  手工下 `spring-core` / `spring-beans` / `spring-context` / `spring-expression` / `commons-logging` 放 `lib/`）
+- 题库：`Java基础.md` 24 题、`Java并发.md` 12 题（M1 只要 8 道，**已超标**）
 
 ## 目录职责
 
@@ -104,6 +105,22 @@
   ⑤ **`submit` 吞异常**（不 get 一个字不打，`execute` 打印且线程被替换 `thread-1`→`thread-2`）；
   `ThreadLocal` 在池里串味（必须 `fixed(1)` 才能复现）；`keepAlive` 只管非核心线程。
 
+- **CompletableFuture（W04 Day 2）**：
+  ① 不传 executor 就是 `ForkJoinPool.commonPool()`，并行度 = `max(1, 核数-1)`（12 核 → 11），
+     **全 JVM 唯一**（和 `parallelStream` 同一个池）。14×300 ms 阻塞任务：公共池 623 ms vs 自建池 308 ms
+     —— 阻塞的代价是「排队」（`ceil(14/11)×300`），不是变慢。`thenApplyAsync` 不传池也回 commonPool。
+  ② `thenApply` 返回「值」、`thenCompose` 返回「异步」；用错**编译通过**，只得到 `CF<CF<T>>`，
+     `join()` 拿到的是 Future 对象（要 join 两次）。和 `map`/`flatMap` 同构。
+  ③ 不带 `Async` 的 `thenXxx` 在「完成上游的那个线程」上跑 —— 上游已完成时就是**调用者线程**（实测 main）。
+  ④ 编队：combine 两路 400 ms → 411 ms（串行 816）；`allOf` 返回 **null**、耗时=最慢那路；
+     `anyOf` 类型擦成 `Object`；三次串联 631 ms vs 三路并行 215 ms。
+  ⑤ **`whenComplete` 吞不掉异常**（`BiConsumer` 返回 void，没有出口）。三段实测：上游失败+它抛 →
+     **原始异常胜出**，新异常只进**外层** `suppressed`（=1，`uniWhenComplete` 的 `addSuppressed`）；
+     上游成功+它抛 → 新异常生效；`exceptionally` 里抛 → **原始异常彻底丢失**（cause 与 suppressed 都没有）。
+  ⑥ `join` 抛 `CompletionException`、`get` 抛 `ExecutionException`（且先拆一层）；嵌套越套越深，
+     `exceptionally`/`handle` 里拿到的 `ex` 就是 `CompletionException`，业务类型判断必须 `unwrap()`（while）。
+  ⑦ `exceptionally` 的返回值必须接 —— CF 不可变；`orTimeout` 只让 CF 提前完成，**不中断**后台任务。
+
 ## 工作方式上的硬教训（每条都踩过两次以上）
 
 - **断言先于实测**：已连续五天抓到自己「先写结论再验证」（`sorted` 屏障、`Predicate` 优先级、
@@ -144,3 +161,10 @@
 - 技术细节导向，不要冗长叙述；喜欢「结论 + 实测数字 + 反直觉点」
 - 「带我完成第 N 天」= 当天时间盒 + 可运行代码 + 笔记回填，而不是讲一段道理
 - 喜欢**反直觉但可验证**的结论；对「我本地跑不出来」这类问题接受「物理原因」解释
+- **会抖的输出不能当证据**（11-12 踩 S4 一次，11-19 又踩）：`nested.join().toString()` 里是
+  `[Not completed]` 还是 `[Completed normally]` 取决于内层任务跑没跑完。举证「类型」要打 `getClass()`；
+  要打状态就先 `join()` 到底。文档里也别粘 `@1b6d3586` 这种身份哈希（每次运行都变）。
+- **测异常结构先想清楚测的是哪一层对象**（11-19 踩）：`e.getSuppressed()` 与 `e.getCause().getSuppressed()`
+  是两个数，我打了后者得 0，与源码 `addSuppressed` 矛盾了半天，其实新异常挂在外层包装上。
+- 收集编译错误要加 `-J-Duser.language=en -J-Duser.country=US`，否则 Git Bash 下全是 GBK 乱码；
+  `compile-errors/` 里的注释也必须是英文（javac 会回显源码行）。
