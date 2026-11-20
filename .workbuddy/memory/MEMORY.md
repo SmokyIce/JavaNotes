@@ -18,7 +18,7 @@
 
 ## 当前状态
 
-**M0 已封板（10-27）；M1（Java 地基）进行中。**
+**M0 已封板（10-27）；M1 已封板（11-20）；当前在 M2 · Spring 内核。**
 
 - W01 集合 ✅（`MyHashMap` 对拍 20 万次 0 处不一致）
 - W02 泛型/异常/Optional/Lambda/Stream/收集器 ✅ **已封板（11-03）**
@@ -26,9 +26,19 @@
   Day 3 volatile + happens-before + DCL / Day 4 `Lock` + 手写 AQS + `wait-notify`
 - W04 线程池/CF ✅ **已封板（11-19）**：Day 1 线程池七个参数 + 任务四步顺序 + Executors 四个工厂的坑 /
   Day 2 `commonPool` 并行度 = 核数-1 + `thenApply` vs `thenCompose` + 异常链三种写法
-- **下一步：W05 Day 1 = Spring IOC/DI**（`w05-spring-ioc-di/` 仍是 `.gitkeep`；先解决「本机没有 Maven」：
-  手工下 `spring-core` / `spring-beans` / `spring-context` / `spring-expression` / `commons-logging` 放 `lib/`）
-- 题库：`Java基础.md` 24 题、`Java并发.md` 12 题（M1 只要 8 道，**已超标**）
+- W05 Spring IOC/DI 🟨 **Day 1 已完成（11-20）**：手工装配 vs 容器装配（3 处 → 0 处 / 3 份仓储 → 1 份）、
+  谁 new 的（栈指纹）、什么时候 new 的（`refresh` 内）、循环依赖（字段能解 / 构造器不能）
+- **下一步：W05 Day 2 = Bean 生命周期**（六个回调打时间戳 + 两个 `BeanPostProcessor`；
+  之后 Day 3 作用域，Day 4~ AOP 交给 W06）
+- 题库：`Java基础.md` 24 题、`Java并发.md` 12 题、`Spring.md` **3 题**（M1 只要 8 道，已远超）
+
+## W05 工程（唯一需要 jar 的工程）
+
+- `lib/` 六个 jar，Spring **5.3.39**：core / beans / context / expression / aop / **spring-jcl**
+  （Spring 5 自带 jcl，**不是** commons-logging；照老教程下后者会多一个 jar，也能跑）
+- `run.sh` 的 classpath 是 `out;lib/*`（Windows 分号，Git Bash 里也别改冒号）；`javac -cp "lib/*"`
+- `@Configuration` 被 CGLIB 代理（`AppConfig$$EnhancerBySpringCGLIB$$…`），CGLIB 在 `spring-core` 内，无需额外 jar
+- `pom.xml` 仍未补（本机没 Maven，写了验证不了）→ 推到 W05 收尾
 
 ## 目录职责
 
@@ -45,7 +55,8 @@
 
 - 目录小写 ASCII `wNN-topic`；包名 `com.newt.java48.wNN`；**Maven 布局**（`src/main/java`），
   即使暂时不需要依赖 —— W05 补 `pom.xml` 即可，不挪文件
-- **本机没有 Maven/Gradle**：W01~W04 用纯 `javac` + `run.bat` / `run.sh`（第 2 个参数透传给程序）
+- **本机没有 Maven/Gradle**：W01~W05 用纯 `javac` + `run.bat` / `run.sh`（第 2 个参数透传给程序）；
+  W05 起 classpath 带 `lib/*`，Windows 分隔符是 `;`（Git Bash 里也别改冒号）
 - JDK 目录有 1.8 / 17 / 23 / 25，**默认 JDK 17**
 - 中文输出：编译 `-encoding UTF-8`，运行 `-Dfile.encoding=UTF-8`
 - 笔记骨架：`一、本周知识点 / 二、核心问题 / 三、代码·实验 / 四、踩坑与 Bug 复盘 / 五、面试会怎么问 / 六、一句话总结 / 每日打卡`
@@ -121,6 +132,28 @@
      `exceptionally`/`handle` 里拿到的 `ex` 就是 `CompletionException`，业务类型判断必须 `unwrap()`（while）。
   ⑦ `exceptionally` 的返回值必须接 —— CF 不可变；`orTimeout` 只让 CF 提前完成，**不中断**后台任务。
 
+- **Spring IOC/DI（W05 Day 1）**：
+  ① **IOC 的价值不是「少写 new」，是「3 个调用点 → 1 个装配点」**：手写版三个入口各 `new` 一次
+     （`new JdbcOrderRepository` 3 / `new PriceCalculator` 3），Spring 版入口代码 0；
+     但 `@Bean` 里仍然 `new`（实测 1 次）——「一个装配点」≠「零个 new」。
+  ② **手写版的真实代价是 3 个连接池**：A 段造出 3 个仓储实例（哈希三个不同），集中装配后 1 个。
+     这条比「改 3 处」硬 —— 它会体现在连接数、缓存命中率、计数器上。
+  ③ **「谁 new 的」只能在栈上读**：手写版 `直接调用者 = ManualWiring.webEntry:28`；
+     Spring 版 `BeanUtils.instantiateClass:213` + `createBeanInstance:1222/1232` + `preInstantiateSingletons:955`
+     + `getSingleton:234`。这几个行号**都能在 5.3.39 的 sources jar 里对上**（1222 = autowireConstructor
+     构造器注入 / 1232 = instantiateBean 无参构造，同一份输出里两种都出现）。
+  ④ **Bean 在 `refresh()` 里就造完了**：构造 `+312~338 ms`，「容器创建完成」`+354 ms`；
+     那 312 ms 是类加载 + ASM 扫包，不是 `new`（对象几十微秒）。`preInstantiateSingletons`
+     三个条件：非 abstract + singleton + 非 lazy。
+  ⑤ **单例池的三个数**：定义 13 / 实例 19（13 里 2 个没造 = 11，另有 8 个「有实例没定义」的容器内部单例）；
+     取过 prototype + lazy 之后定义仍 13、单例只 +1 → **原型造完连账都不记**。
+  ⑥ **循环依赖的差别只有三行顺序**：`createBeanInstance`(582) → `addSingletonFactory`(613) →
+     `populateBean`(619)。字段注入吃到「先造空壳再灌」的时间差（实测构造时字段全 null、之后 `b.a == a`）；
+     构造器注入参数先于对象 → `BeanCurrentlyInCreationException`（判据：`singletonsCurrentlyInCreation.add` 失败就抛）。
+  ⑦ **注解不是元数据是注册指令**：同一个类 `@Autowired` 字段，`new` 出来是 `null`，注册给容器后是 `jdbc`。
+     不写 `@Component` 的两种失败：`NoSuchBeanDefinitionException`（根）/ `UnsatisfiedDependencyException`（被包一层，
+     多一句 `expected at least 1 bean which qualifies as autowire candidate`）。
+
 ## 工作方式上的硬教训（每条都踩过两次以上）
 
 - **断言先于实测**：已连续五天抓到自己「先写结论再验证」（`sorted` 屏障、`Predicate` 优先级、
@@ -149,6 +182,19 @@
   控制台只剩 `thrown from the UncaughtExceptionHandler`。先预留 4 MB，catch 到就 `reserve = null; System.gc();` 再打。
 - **用线程池做实验也会被调度骗**：想演示「线程复用 / ThreadLocal 串味」，必须 `fixed(1)`，
   否则两个任务落到不同线程，「复用」根本没发生（这个坑和「并发实验先让人睡着」是同一个毛病）。
+
+- **自指统计要把针脚藏起来**（11-20 踩）：数「源码里 `new X(` 出现几次」时，针脚字符串写在被数的文件里，
+  统计代码自己就被数进去（SpringWiring 明明 0 个 new，数出 3）。改成在工具类内部拼 `"new " + name + "("`。
+- **`getBeanDefinitionNames()` + `getBean(name)` 会触发构造**（11-20 踩）：想枚举 bean 名单就用了 `getBean`，
+  结果把 `@Lazy` 和 prototype 提前造了，后面「refresh 时没造」的结论直接不成立。
+  读注册表用 `getBeanDefinition(name).getBeanClassName()`。
+- **`GenericApplicationContext` 只能 refresh 一次**（11-20 踩）：`new ...(Config.class)` 之后再 `register + refresh`
+  → `does not support multiple refresh attempts`。要动态加定义：先 `new AnnotationConfigApplicationContext()`，
+  `register(配置类, 额外类)`，再 `refresh()`。
+- **同名重载看栈必须对行号**（11-20 踩）：`getSingleton` 有两个重载，栈上的 234 是 `singletonFactory.getObject()`
+  （真正开始造对象），查三级缓存的在 180 行起。差 50 多行，看错结论就反了。
+- **Spring 的栈行号能和 sources jar 对撞**：下 `spring-beans-5.3.39-sources.jar` → `jar xf` → 行号逐一对上
+  （1222/1232/955/234/582/613/619 全部验证过）。「读过源码」和「看过总结」的区别就在这一步。
 
 ## 断档与恢复的口径
 

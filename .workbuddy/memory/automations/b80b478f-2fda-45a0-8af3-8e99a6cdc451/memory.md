@@ -172,3 +172,24 @@
   并把文档里硬编码的 `@1218025c` 全换成 `@<hash>`；④ `e instanceof ISE` 编译不过（`e` 是 CompletionException）。
 - 环境：`run.sh` 短名只认 day1，跑 day2 必须写 `day2.AsyncBasics`；
   编译错误取证加 `-J-Duser.language=en -J-Duser.country=US` 才不是 GBK 乱码。
+
+## 2026-11-20（第十三次执行 · M1 封板，开 M2 / W05 Day 1）
+- 开工回归：清空 `out/` 重编 w04（6 文件）+ 跑六个入口，全 exit=0、行数 45/57/35/40/43/80 与 11-19 一致，
+  **无中断代码**；`01-notes` 未勾项只剩 W05 剩余 3 格 + W06 起未解锁内容，`02-code` 只剩 `w05-` 起的 `.gitkeep` → 无遗留需补。
+- **M1 判定封板**：4 份笔记 + 4 个可运行工程 + 题库 24 + 12 = 36 道（要求 8 道），全部超额 → MILESTONES 改 M1 ✅ / M2 🟨。
+- 推进 W05 Day 1：`w05-spring-ioc-di/` 从 `.gitkeep` 建工程（21 个 java / 24 个 class）。
+  工具链：curl 从 repo1.maven.org 下 Spring 5.3.39 六个 jar 到 `lib/`（**用 spring-jcl，不是 commons-logging**），
+  `run.sh` 用 `-cp "out;lib/*"`（Windows 分号）。三个入口：`ManualWiring` / `SpringWiring` / `ContainerQuestions`。
+- 产出：`day1-result.txt`（355 行）+ `day1-spring-source.txt`（6 段源码，行号与栈逐一对撞：
+  1222 autowireConstructor / 1232 instantiateBean / 955 getBean / 234 singletonFactory.getObject() /
+  582-613-619 doCreateBean 三步）。
+- 同步：W05 笔记（Day 1 九小节 + 踩坑 4 + 面试 10 + 参考要点 Q1~Q3 + 打卡 + 勾第一格）、
+  `Spring.md` 0 → 3 题、`today.md`（11-20 + 下一时间盒 W05 Day 2）、`MILESTONES.md`（M1 封板 + 进展行 + 下一步）、
+  工程 `README.md`。
+- 下次起点：**W05 Day 2 = Bean 生命周期**（六种 init/destroy 回调打时间戳 + 两个 `BeanPostProcessor`；
+  三个追问：`@PostConstruct` 谁调的 / prototype 销毁回调 / BPP 自己被不被后处理）。
+- 本次踩坑（已进 MEMORY.md）：① 自指统计（针脚字符串写在被数文件里 → 0 个 new 数出 3）；
+  ② `GenericApplicationContext` 只能 refresh 一次；③ `getBeanDefinitionNames()` + `getBean(name)` 会把 `@Lazy` 提前造，
+  要让「refresh 时没造」成立必须读 `getBeanDefinition().getBeanClassName()`；
+  ④ 栈上 `getSingleton:234` 是 `singletonFactory.getObject()`，不是查三级缓存那个重载。
+- 口径提醒：时间戳每次跑抖 ±30 ms，文档里的 `+312/+338/+354 ms` 是当次快照，改代码后重新生成快照再抄数字。

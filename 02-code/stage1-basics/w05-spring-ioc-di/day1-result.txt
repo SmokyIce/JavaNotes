@@ -1,0 +1,355 @@
+================================================================
+ W05 Day 1 · Spring IOC / DI · 实测快照
+ 环境：Windows 11 / JDK 17.0.12 / Spring 5.3.39（手工 lib/*.jar，无 Maven）
+ 机器：12 核
+ 复现：./run.sh ManualWiring | ./run.sh SpringWiring | ./run.sh ContainerQuestions
+================================================================
+
+################ 1. ManualWiring（没有 Spring 的版本）################
+
+[   0 ms] ManualWiring 启动（没有 Spring，没有容器）
+
+=== A. 三个入口各自 new：三份仓储 = 三个连接池 ===
+  [构造] JdbcOrderRepository  thread=main           t=+19 ms  url=jdbc:mysql://localhost:3306/shop
+          ↑ 直接调用者 = com.newt.java48.w05.day1.ManualWiring.webEntry:28
+  [构造] PriceCalculator      thread=main           t=+31 ms
+          ↑ 直接调用者 = com.newt.java48.w05.day1.ManualWiring.webEntry:28
+  [构造] OrderService         thread=main           t=+31 ms  repo=jdbc
+          ↑ 直接调用者 = com.newt.java48.w05.day1.ManualWiring.webEntry:28
+  [构造] JdbcOrderRepository  thread=main           t=+31 ms  url=jdbc:mysql://localhost:3306/shop
+          ↑ 直接调用者 = com.newt.java48.w05.day1.ManualWiring.jobEntry:32
+  [构造] PriceCalculator      thread=main           t=+32 ms
+          ↑ 直接调用者 = com.newt.java48.w05.day1.ManualWiring.jobEntry:32
+  [构造] OrderService         thread=main           t=+32 ms  repo=jdbc
+          ↑ 直接调用者 = com.newt.java48.w05.day1.ManualWiring.jobEntry:32
+  [构造] JdbcOrderRepository  thread=main           t=+32 ms  url=jdbc:mysql://localhost:3306/shop
+          ↑ 直接调用者 = com.newt.java48.w05.day1.ManualWiring.testEntry:36
+  [构造] PriceCalculator      thread=main           t=+33 ms
+          ↑ 直接调用者 = com.newt.java48.w05.day1.ManualWiring.testEntry:36
+  [构造] OrderService         thread=main           t=+33 ms  repo=jdbc
+          ↑ 直接调用者 = com.newt.java48.w05.day1.ManualWiring.testEntry:36
+  入口一（Web）  : 订单#1 商品=goods-1 金额=700 仓储=jdbc
+  入口二（Job）  : 订单#1 商品=goods-1 金额=700 仓储=jdbc
+  入口三（Test） : 订单#1 商品=goods-1 金额=700 仓储=jdbc
+  ── 统计 ──
+  这一段造出的仓储实例数 = 3
+  三个入口拿到的仓储哈希   : 1198108795 / 214126413 / 396873410
+  结论：功能正确，但每个入口都开了一个『连接池』；缓存、计数、连接全部各存一份。
+
+=== B. 把装配收进 main：实例共享了，但责任也全落到人身上 ===
+  [构造] JdbcOrderRepository  thread=main           t=+43 ms  url=jdbc:mysql://localhost:3306/shop
+          ↑ 直接调用者 = com.newt.java48.w05.day1.ManualWiring.sectionB:60
+  [构造] PriceCalculator      thread=main           t=+43 ms
+          ↑ 直接调用者 = com.newt.java48.w05.day1.ManualWiring.sectionB:61
+  [构造] OrderService         thread=main           t=+43 ms  repo=jdbc
+          ↑ 直接调用者 = com.newt.java48.w05.day1.ManualWiring.webEntryShared:44
+  [构造] OrderService         thread=main           t=+44 ms  repo=jdbc
+          ↑ 直接调用者 = com.newt.java48.w05.day1.ManualWiring.jobEntryShared:48
+  [构造] OrderService         thread=main           t=+44 ms  repo=jdbc
+          ↑ 直接调用者 = com.newt.java48.w05.day1.ManualWiring.testEntryShared:52
+  入口一（Web）  : 订单#2 商品=goods-2 金额=700 仓储=jdbc
+  入口二（Job）  : 订单#2 商品=goods-2 金额=700 仓储=jdbc
+  入口三（Test） : 订单#2 商品=goods-2 金额=700 仓储=jdbc
+  ── 统计 ──
+  这一段造出的仓储实例数 = 1
+  三个入口拿到的仓储哈希   : 1706234378 / 1706234378 / 1706234378（同一个）
+  代价：main 成了唯一的装配点 —— 谁先 new、只 new 一次、并发下安全吗，全靠人记着。
+        再加第四个入口，回到这里改；再加一个依赖，三个入口全要改。
+
+=== C. 量化：换实现 / 加依赖分别要动几处（数本文件源码）===
+  待改的东西                          new JdbcOrderRepository  new PriceCalculator   new OrderService
+  A 段（每入口各来一份）                   3                        3                     3
+  B 段（装配集中到 main）                1                        1                     3
+
+  「换实现」（jdbc → memory）改的是 new JdbcOrderRepository( 那一行：A 段 3 处，B 段 1 处。
+  「加依赖」（给 OrderService 再塞一个参数）改的是 new OrderService( 那一行：A 段 3 处，B 段 3 处。
+  注意 B 段已经把「造仓储」收到 1 处了，但「造 OrderService」还是 3 处 ——
+  因为每个入口都要拿到装配好的 Service，这一步没人能替你省。
+  Spring 版的对照：入口代码里这两行出现 0 次，见 SpringWiring 的 C 段。
+
+################ 2. SpringWiring（同一套类交给容器）################
+
+[   0 ms] SpringWiring 启动（此时一个 Bean 都还没有）
+  [构造] JdbcOrderRepository  thread=main           t=+312 ms  url=jdbc:mysql://localhost:3306/shop
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1232
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] PriceCalculator      thread=main           t=+334 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1232
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] OrderService         thread=main           t=+335 ms  repo=jdbc
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] OrderApiTest         thread=main           t=+336 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] OrderController      thread=main           t=+337 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] ReportJob            thread=main           t=+338 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+[ 354 ms] 容器创建完成：refresh() 返回，单例已经在池子里了
+
+=== A. 谁 new 的？什么时候 new 的？ ===
+  上面每条 [构造] 都是 refresh() 期间打的 —— 注意它们的时间戳都早于「容器创建完成」那行。
+  直接调用者不是我们，是 spring 的 BeanUtils.instantiateClass；
+  再往上命中 createBeanInstance（反射造对象）和 preInstantiateSingletons（预实例化单例）。
+  换句话说：new 发生在我们拿到容器之前，而不是第一次 getBean 的时候。
+  ── 容器里注册了多少个 bean 定义 ──
+  getBeanDefinitionCount() = 13
+  下面这份名单来自「bean 定义注册表」，读它不会触发构造 —— 所以 @Lazy / prototype 也列在这里。
+    appConfig              -> AppConfig$$EnhancerBySpringCGLIB$$8150fe30
+    jdbcOrderRepository    -> JdbcOrderRepository
+    lazyBean               -> LazyBean
+    orderApiTest           -> OrderApiTest
+    orderController        -> OrderController
+    orderService           -> OrderService
+    priceCalculator        -> PriceCalculator
+    prototypeTask          -> PrototypeTask
+    reportJob              -> ReportJob
+
+=== B. getBean 两次，是不是同一个对象 ===
+  s1 == s2 : true   hash: 96406857 / 96406857
+  仓储 r1 == r2 : true   impl=jdbc
+  默认作用域是 singleton：容器就是一张「bean 名 → 唯一实例」的缓存表。
+
+  ── 三个入口跑一遍（它们自己没 new 任何东西）──
+  HTTP 200 ← 订单#11 商品=goods-11 金额=800 仓储=jdbc
+  JOB 汇总完成 ← 订单#1001 商品=goods-1001 金额=1000 仓储=jdbc
+  TEST 断言通过 ← 订单#7 商品=goods-7 金额=700 仓储=jdbc
+
+=== C. 装配代码还剩几行（数源码）===
+  文件                                 new JdbcOrderRepository    new PriceCalculator    new OrderService
+  SpringWiring.java（三个入口）            0                          0                      0
+  AppConfig.java（扫包）                 0                          0                      0
+  MemoryConfig.java（换实现时才写 new）      0                          0                      0
+
+  MemoryConfig 里唯一的那行 new = 1 次（决定「配哪个实现」，不是「每个入口各配一次」）
+  同样的三行 new，手写版各出现 3 次，Spring 版在入口代码里出现 0 次。
+
+=== D. 换实现：只换装配配置，三个入口一个字没改 ===
+  [构造] MemoryOrderRepository thread=main           t=+399 ms  无注解版本
+          ↑ 直接调用者 = com.newt.java48.w05.day1.MemoryConfig.orderRepository:27
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1195
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] PriceCalculator      thread=main           t=+399 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1232
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] OrderService         thread=main           t=+400 ms  repo=memory
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] OrderApiTest         thread=main           t=+400 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] OrderController      thread=main           t=+401 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] ReportJob            thread=main           t=+402 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+[ 404 ms] 内存版容器就绪
+  仓储实现 = memory
+  HTTP 200 ← 订单#22 商品=memory-goods-22 金额=1500 仓储=memory
+  JOB 汇总完成 ← 订单#1001 商品=memory-goods-1001 金额=1700 仓储=memory
+  TEST 断言通过 ← 订单#7 商品=memory-goods-7 金额=1400 仓储=memory
+  注意 OrderService 构造器里打的 repo=memory —— 业务类零改动，只是注进来的东西换了。
+
+=== E. @Lazy：把「什么时候 new」推到第一次 getBean ===
+[ 406 ms] getBean(LazyBean) 之前，单例池里有 lazyBean 吗 = false
+  [构造] LazyBean             thread=main           t=+406 ms  @Lazy：refresh 时不造
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1232
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+[ 407 ms] getBean(LazyBean) 之后 = true
+  refresh 阶段它没被造（时间戳比「容器创建完成」晚），@Lazy 只是把构造推迟，不是取消。
+
+=== F. 原型作用域：每次 getBean 都给新的 ===
+  [构造] PrototypeTask        thread=main           t=+407 ms  第 1 个实例
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1232
+  [构造] PrototypeTask        thread=main           t=+408 ms  第 2 个实例
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1214
+  p1 == p2 : false   hash: 1762902523 / 1725008249   累计实例 2
+  单例池里有 prototypeTask 吗 = false（原型不进单例池，容器不负责销毁，只管造）
+[ 408 ms] close()
+
+################ 3. ContainerQuestions（四个问题）################
+
+[   0 ms] ContainerQuestions 启动
+
+=== Q1. 不写 @Component 会怎样 ===
+  [构造] JdbcOrderRepository  thread=main           t=+299 ms  url=jdbc:mysql://localhost:3306/shop
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1232
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] PriceCalculator      thread=main           t=+321 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1232
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] OrderService         thread=main           t=+323 ms  repo=jdbc
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] OrderApiTest         thread=main           t=+324 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] OrderController      thread=main           t=+325 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] ReportJob            thread=main           t=+326 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [1a] 直接 getBean 一个没注册的类：
+       org.springframework.beans.factory.NoSuchBeanDefinitionException
+       No qualifying bean of type 'com.newt.java48.w05.day1.ContainerQuestions$MissingDep' available
+  [1b] 被别人依赖时才炸（真实项目里通常是这种）：
+11月 20, 2026 9:57:39 上午 org.springframework.context.support.AbstractApplicationContext refresh
+警告: Exception encountered during context initialization - cancelling refresh attempt: org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'containerQuestions.BrokenService': Unsatisfied dependency expressed through constructor parameter 0; nested exception is org.springframework.beans.factory.NoSuchBeanDefinitionException: No qualifying bean of type 'com.newt.java48.w05.day1.ContainerQuestions$MissingDep' available: expected at least 1 bean which qualifies as autowire candidate. Dependency annotations: {}
+       - UnsatisfiedDependencyException: Error creating bean with name 'containerQuestions.BrokenService': Unsatisfied dependency expressed through constructor parameter 0; nested exception is org.springframework.beans.factory.NoSuchBeanDefinitionException: No qualifying bean of type 'com.newt.java48.w05.day1.ContainerQuestions$MissingDep' available: expected at least 1 bean which qualifies as autowire candidate. Dependency annotations: {}
+         - NoSuchBeanDefinitionException: No qualifying bean of type 'com.newt.java48.w05.day1.ContainerQuestions$MissingDep' available: expected at least 1 bean which qualifies as autowire candidate. Dependency annotations: {}
+  共同点：异常信息里都点名了「哪个类找不到 / 哪个构造器参数没东西可注」。
+
+=== Q2. 注解只对「容器造的对象」生效 ===
+  new NotManaged() 之后，@Autowired 字段 = null
+  [构造] JdbcOrderRepository  thread=main           t=+385 ms  url=jdbc:mysql://localhost:3306/shop
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1232
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] PriceCalculator      thread=main           t=+387 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1232
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] OrderService         thread=main           t=+388 ms  repo=jdbc
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] OrderApiTest         thread=main           t=+388 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] OrderController      thread=main           t=+389 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] ReportJob            thread=main           t=+390 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  交给容器注册后，@Autowired 字段 = jdbc
+  同一个类，同样的注解，差别只在「谁 new 的、以及有没有人处理注解」。
+
+=== Q3. 循环依赖：字段注入能过，构造器注入过不去 ===
+  [3a] 字段注入 A ⇄ B：
+  [构造] FieldA               thread=main           t=+395 ms  构造时 b=null
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1232
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] FieldB               thread=main           t=+396 ms  构造时 a=null
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1232
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+       a.b 非空 = true，b.a 非空 = true，b.a 是不是同一个 a = true
+       做法：先 new 出 A 的空壳暴露出去（早期引用），造完 B 再回头把 a 的字段灌满。
+  [3b] 构造器注入 A ⇄ B：
+11月 20, 2026 9:57:39 上午 org.springframework.context.support.AbstractApplicationContext refresh
+警告: Exception encountered during context initialization - cancelling refresh attempt: org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'ctorA': Unsatisfied dependency expressed through constructor parameter 0; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'ctorB': Unsatisfied dependency expressed through constructor parameter 0; nested exception is org.springframework.beans.factory.BeanCurrentlyInCreationException: Error creating bean with name 'ctorA': Requested bean is currently in creation: Is there an unresolvable circular reference?
+       - UnsatisfiedDependencyException: Error creating bean with name 'ctorA': Unsatisfied dependency expressed through constructor parameter 0; nested exception is org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'ctorB': Unsatisfied dependency expressed through constructor parameter 0; nested exception is org.springframework.beans.factory.BeanCurrentlyInCreationException: Error creating bean with name 'ctorA': Requested bean is currently in creation: Is there an unresolvable circular reference?
+         - UnsatisfiedDependencyException: Error creating bean with name 'ctorB': Unsatisfied dependency expressed through constructor parameter 0; nested exception is org.springframework.beans.factory.BeanCurrentlyInCreationException: Error creating bean with name 'ctorA': Requested bean is currently in creation: Is there an unresolvable circular reference?
+           - BeanCurrentlyInCreationException: Error creating bean with name 'ctorA': Requested bean is currently in creation: Is there an unresolvable circular reference?
+       没有空壳可暴露 —— 参数必须在 new 之前就位，于是无解。
+       这也是 Spring 官方推荐构造器注入、却要求「别写出环」的原因。
+
+=== Q4. 单例池里有什么 ===
+  [构造] JdbcOrderRepository  thread=main           t=+414 ms  url=jdbc:mysql://localhost:3306/shop
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1232
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] PriceCalculator      thread=main           t=+416 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1232
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] OrderService         thread=main           t=+416 ms  repo=jdbc
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] OrderApiTest         thread=main           t=+417 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] OrderController      thread=main           t=+417 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  [构造] ReportJob            thread=main           t=+419 ms
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1222
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultListableBeanFactory.preInstantiateSingletons:955
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  bean 定义数 = 13，单例池实例数 = 19
+  ── 有定义、没实例（= 还没轮到造）──
+     lazyBean
+     prototypeTask
+  ── 有实例、没定义（= 容器自己手动塞进去的）──
+     applicationEventMulticaster
+     applicationStartup
+     environment
+     lifecycleProcessor
+     messageSource
+     org.springframework.context.annotation.ConfigurationClassPostProcessor.importRegistry
+     systemEnvironment
+     systemProperties
+  [构造] PrototypeTask        thread=main           t=+422 ms  第 1 个实例
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1232
+  [构造] LazyBean             thread=main           t=+423 ms  @Lazy：refresh 时不造
+          ↑ 直接调用者 = org.springframework.beans.BeanUtils.instantiateClass:213
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBeanInstance:1232
+          ↑ Spring 帧命中 = org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton:234
+  取过 prototype 与 lazyBean 之后：定义数 13，单例数 20
+  → 单例池是一张 Map<beanName, instance>；原型造完就撒手，容器连账都不记。

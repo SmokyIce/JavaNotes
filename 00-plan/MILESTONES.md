@@ -50,8 +50,8 @@ daily: 60 分钟
 | 里程碑 | 一句话目标 | 解锁条件（硬标准） | 状态 |
 | :--- | :--- | :--- | :--: |
 | **M0 · 收尾** | 把 W01 剩余做完，找回手感 | 见下方「M0 待办」全部勾掉 | ✅ 已封板 2026-10-27 |
-| **M1 · Java 地基** | 集合 / 泛型 / 并发 / 线程池，能讲原理 | 4 份笔记 + 4 个可运行工程 + 8 道面试题进题库 | 🟨 进行中 |
-| **M2 · Spring 内核** | 事务 / AOP / 异步，能解释失效场景 | 4 份笔记 + 4 个可运行 Demo + 6 道面试题 | ⬜ |
+| **M1 · Java 地基** | 集合 / 泛型 / 并发 / 线程池，能讲原理 | 4 份笔记 + 4 个可运行工程 + 8 道面试题进题库 | ✅ 已封板 2026-11-20 |
+| **M2 · Spring 内核** | 事务 / AOP / 异步，能解释失效场景 | 4 份笔记 + 4 个可运行 Demo + 6 道面试题 | 🟨 进行中 |
 | **M3 · 数据层** | MySQL 索引 / EXPLAIN / 锁 + Redis 基础 | 3 份笔记 + 10 条 EXPLAIN 案例 + Redis Demo | ⬜ |
 | **M4 · 线上能力** | JVM 排查 / MQ / Linux / Docker | JVM 排查实验报告 + MQ 任务系统 + Docker 化跑通 | ⬜ |
 | **M5 · 系统设计** | 微服务 / 高并发 / 性能优化 | 项目微服务化 + 架构图 + 技术文档 | ⬜ |
@@ -116,12 +116,13 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > | 2026-11-11 | **W03 Day 4 · `Lock` / AQS / `wait-notify`**，W03 封板 | `day4/WaitNotify`（ISE / `if` vs `while` / `notify` 只叫一个 → 剩 1 件货 + 1 人 WAITING / `wait` 释放锁 0 ms vs `sleep` 414 ms / 中断清标志）+ `day4/MiniAqs`（**手写 state + CLH 队列 + park**，200 万次对拍零丢失；两次 CAS 与 park 重查的实测 1 / 87742 / 175075 / 87500；临界区 1 ns 慢 5.8 倍 → 0.5 µs 只慢 1.13 倍）+ `day4/LockCompare`（公平锁 41 倍、插队 154582 vs 445、最长等待反而更大；`Condition` 无效唤醒 11 vs 7666）+ `day4-result.txt`（129 行）+ `day4-bytecode.txt`（75 行）；笔记 Day 4 整节（10 小节）+ 踩坑 5 条 + 面试 14 条 + 参考要点 2 题；`Java并发.md` 6 → **8 题** |
 > | 2026-11-12 | **W04 Day 1 · 线程池**（`w04-threadpool-completablefuture/` 从 `.gitkeep` 建工程） | `day1/PoolBasics`（A~E：1 万个任务 `new Thread` 620 ms vs 池 13 ms = 47.7 倍 / 线程命名 / keepAlive 只收非核心 3→2 / 四种拒绝策略 / shutdown 5 个跑完 vs shutdownNow 倒出 4 个）+ `day1/PoolFlow`（**S1~S5 五张快照表**：任务顺序「核心 → 队列 → 非核心 → 拒绝」；无界队列下 max 恒为 2 是摆设；core=max / core=0 / SynchronousQueue 三种形态）+ `day1/PoolTraps`（T1~T6：队列峰值 33714 / 单线程堵死 513 ms / cached 峰值 500 线程 / `submit` 吞异常而 `execute` 打印且换线程 / `ThreadLocal` 串味 / **OOM 第 176 个任务** vs 有界队列拒绝 99948 次不 OOM）+ `day1-result.txt`（164 行）+ `day1-jdk-source.txt`（execute 三步 + 排队三条规则原文）；笔记 Day 1 整节（11 小节）+ 踩坑 5 条 + 面试 12 条 + 参考要点 2 题；`Java并发.md` 8 → **10 题** |
 > | 2026-11-19 | **W04 Day 2 · CompletableFuture**，W04 封板 | `day2/AsyncBasics`（A 默认池 `commonPool` 并行度 11 = 核数-1，30 任务只用 11 个 worker / B 14 个 300 ms 阻塞任务：公共池 **623 ms** vs 自建池 **308 ms** / C `runAsync` 返回 null、异常静默 / D 自建池 `order-1` / `stock-1` 隔离 / E `completedFuture` / `failedFuture` / 手动 complete 的 CAS 只赢一次）+ `day2/ChainShape`（A `thenApply` 给出 `CF<CF<String>>`，`join()` 打印出 `CompletableFuture@<hash>`，要 join 两次；B 不带 Async 的 `thenApply` 在 **main** 里跑完；C combine 411 ms vs 串行 816 ms；D `allOf` 返回 null、306 ms；E `anyOf` 58 ms、类型擦成 `Object`；F 三次串联 631 ms vs 三路并行 215 ms）+ `day2/AsyncErrors`（A 失败后两段 thenApply 全跳过 / B `exceptionally` 只在失败时跑 / C `handle` 两路都进 / D `whenComplete` 打断点也照样抛 / **E1 上游失败 + whenComplete 抛 → 原始异常胜出、新异常只进外层 suppressed=1**；E2 上游成功 + whenComplete 抛 → 成功变失败；E3 `exceptionally` 抛 → 覆盖且原始异常彻底丢失 / F `join` vs `get` 包装不同 + 双层嵌套 + `unwrap` / G 返回值没人接 → 原 CF 仍失败 / H `orTimeout` 212 ms vs `completeOnTimeout` 211 ms）+ `compile-errors/ChainTypeErrors`（3 条 `incompatible types` 原文）+ `day2-result.txt`（215 行）+ `day2-jdk-source.txt`（`uniWhenComplete` / `reportJoin` / `commonPool` 并行度原文）；笔记 Day 2 整节（9 小节）+ 踩坑 4 条 + 面试 9 条 + 参考要点 Q3/Q4；`Java并发.md` 10 → **12 题** |
+> | 2026-11-20 | **W05 Day 1 · Spring IOC / DI**（`w05-spring-ioc-di/` 从 `.gitkeep` 建工程，M2 开工） | 手工 `lib/` 放 Spring 5.3.39 六个 jar（本机无 Maven）；`day1/ManualWiring`（A 三入口各自 `new` → **3 份仓储**、B 集中装配 → 1 份、C 数源码：换实现 A 段 3 处 / B 段 1 处，加依赖 3 处）+ `day1/SpringWiring`（A 构造发生在 `+312~338 ms`、`refresh` 返回 `+354 ms`；栈上 `BeanUtils.instantiateClass:213` + `createBeanInstance:1222/1232` + `preInstantiateSingletons:955`；B `s1 == s2`；C 入口代码 `new X(` = **0**；D jdbc→memory 零改调用点；E `@Lazy` `containsSingleton` false→true；F prototype `p1 == p2 : false`、不进池）+ `day1/ContainerQuestions`（Q1 两种 `NoSuchBeanDefinitionException`；Q2 `@Autowired` 在 `new` 出来是 null、注册后是 jdbc；Q3a 字段注入解环成功 `b.a == a`、Q3b 构造器注入三层异常到 `BeanCurrentlyInCreationException`；Q4 定义 13 / 单例 19，取过 prototype+lazy 后 13/20）+ `day1-result.txt`（355 行）+ `day1-spring-source.txt`（6 段源码，行号与栈对撞）；笔记 W05 Day 1 整节（9 小节）+ 踩坑 4 条 + 面试 10 条 + 参考要点 Q1/Q2/Q3；`Spring.md` 0 → **3 题** |
 >
 > **W02 已封板（2026-11-03）**，六天全部完成。**W03 已封板（2026-11-11）**，四天全部完成。
-> **W04 已封板（2026-11-19）**，两天全部完成 —— 五个知识点全勾，M1 的 W02/W03/W04 三份笔记与三个工程全部齐活。
-> 题库 M1 只要 8 道，现在 24（Java基础）+ 12（Java并发）＝ **36 道，M1 题量已超标**。
-> 当前在 **M1**，W04 已完成，**下一步 W05 = Spring IOC/DI**（`w05-spring-ioc-di/` 还是 `.gitkeep`，
-> 且本机无 Maven —— W05 的第一件事是补 `pom.xml`，见 MEMORY 的工程约定）。
+> **W04 已封板（2026-11-19）**，两天全部完成 —— 五个知识点全勾。
+> **M1 已封板（2026-11-20）**：M1 要的「4 份笔记 + 4 个可运行工程 + 8 道面试题」全部超额
+> —— W01~W04 四份笔记、四个一条命令能跑起来的工程、题库 24（Java基础）+ 12（Java并发）＝ **36 道**。
+> 当前在 **M2 · Spring 内核**：W05 已开工（Day 1 完成），工程从 `.gitkeep` 建起，`lib/` 手工放 6 个 jar。
 >
 > W04 Day 2 最值钱的三条结论（全部有实测数字）：
 >
@@ -191,7 +192,7 @@ M3 之后的内容原封不动沿用 `java-48week-plan.md` 里的知识点清单
 
 ## 八、下一步
 
-**M0 已封板（2026-10-27），当前焦点是 M1 · Java 地基。**
+**M0 已封板（2026-10-27）、M1 已封板（2026-11-20），当前焦点是 M2 · Spring 内核。**
 
 **W02 Day 1 已完成（2026-10-28）**：`w02-generics-stream/` 工程建好，`ErasureProof` / `PecsDemo`
 两个 Demo + `compile-errors/GenericLimits.java` 四类报错原文跑通，笔记 Day 1 整节写完。
@@ -288,9 +289,29 @@ F `join` vs `get` + 双层包装 + `unwrap`；G 返回值没人接；H `orTimeou
 ② **`thenApply` 用错不报错**，只是悄悄给你 `CF<CF<T>>`，`join()` 拿到一个 Future 对象；
 ③ **`whenComplete` 是围观不是修复**（`void` 无出口），上游失败时它的异常只能挂在 suppressed 上。
 
-下一个时间盒（60 分钟）：**W05 Day 1 · Spring IOC / DI** ——
-① 本机没有 Maven，先用 `javac` + `lib/*.jar` 手搭一个最小可运行工程（`pom.xml` 留给 W05 收尾）；
-② 先写「不用 Spring 的版本」：手工 `new` 三层依赖，再改成构造器注入，量出「改一个类要动几处」；
-③ 用 `AnnotationConfigApplicationContext` 跑同一份代码，对比 Bean 是谁 `new` 的、什么时候 `new` 的；
-④ 输出 `w05/day1-result.txt` + 勾掉「Bean / IOC / DI」。
+**W05 Day 1 已完成（2026-11-20）· M2 开工**：Spring IOC / DI。
+`day1/ManualWiring`（A 三个入口各自 `new` → **3 份仓储 / 三个不同哈希**；B 装配收进 `main` → 1 份；
+C 数源码：换实现 A 段 3 处、B 段 1 处，加依赖 3 处）
++ `day1/SpringWiring`（A 构造 `+312~338 ms`、`refresh` 返回 `+354 ms`，栈上
+`BeanUtils.instantiateClass:213` / `createBeanInstance:1222·1232` / `preInstantiateSingletons:955`；
+B `s1 == s2`；C 入口代码 `new X(` = **0**，`MemoryConfig` 里唯一 1 个 `new`；
+D jdbc→memory 零改调用点；E `@Lazy` `containsSingleton` false→true；F prototype `p1 == p2 : false`）
++ `day1/ContainerQuestions`（Q1 两种 `NoSuchBeanDefinitionException`；Q2 `@Autowired` 在 `new` 出来是 null、
+注册后是 jdbc；Q3a 字段注入解环 `b.a == a`、Q3b 构造器注入三层异常到 `BeanCurrentlyInCreationException`；
+Q4 定义 13 / 单例 19，取过 prototype + lazy 后 13 / 20）。
+产出 `day1-result.txt`（355 行）+ `day1-spring-source.txt`（6 段源码，行号与栈对撞）。
+
+三条核心结论：① **IOC 的价值是「3 个调用点 → 1 个装配点」，不是「少写 new」**
+（`@Bean` 里仍然 `new`，实测计数 1）；② **Bean 在 `refresh()` 里就造完了**，
+时间戳全部早于「容器创建完成」，那 300 多毫秒是类加载 + 扫包而不是 `new`；
+③ **循环依赖的差别只有源码三行的顺序**（582 造对象 → 613 提前暴露 → 619 灌字段），
+字段注入吃到「时间差」，构造器注入连空壳都没有。
+
+下一个时间盒（60 分钟）：**W05 Day 2 · Bean 生命周期** ——
+① 一个 Bean 上同时挂 `@PostConstruct` / `AfterPropertiesSet` / `initMethod` / `@PreDestroy` /
+`DisposableBean` / `destroyMethod`，六个回调打时间戳，把顺序打出来而不是背出来；
+② 两个 `BeanPostProcessor`（Before / After），看它对**每个** Bean 都跑一遍 —— 这是 AOP 的入口；
+③ 三个追问：`@PostConstruct` 是哪个后处理器调的 / prototype 的销毁回调会不会被调 /
+`BeanPostProcessor` 自己会不会被后处理；
+④ 输出 `day2-result.txt` + 勾掉「Bean 生命周期」。
 时间盒见 `00-plan/today.md`（每天开工前先打开它，收工时覆盖）。

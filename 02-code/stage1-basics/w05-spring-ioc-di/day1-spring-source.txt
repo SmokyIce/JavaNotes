@@ -1,0 +1,187 @@
+================================================================
+ W05 Day 1 · Spring 源码取证（不是背书，是拿栈上的行号去对）
+ 来源：spring-beans-5.3.39-sources.jar / spring-context-5.3.39-sources.jar
+ 说明：下面每个行号都是 jar 里的原始行号，可以和 day1-result.txt 里
+       栈上打印的 createBeanInstance:1222 / :1232、preInstantiateSingletons:955
+       逐一对上 —— 这是「我读过这段」和「我看过别人总结」的区别。
+================================================================
+
+
+一、new 发生在 refresh 里，不是第一次 getBean 时
+    文件：DefaultListableBeanFactory.java:922  preInstantiateSingletons()
+
+	public void preInstantiateSingletons() throws BeansException {
+		if (logger.isTraceEnabled()) {
+			logger.trace("Pre-instantiating singletons in " + this);
+		}
+
+		// Iterate over a copy to allow for init methods which in turn register new bean definitions.
+		// While this may not be part of the regular factory bootstrap, it does otherwise work fine.
+		List<String> beanNames = new ArrayList<>(this.beanDefinitionNames);
+
+		// Trigger initialization of all non-lazy singleton beans...
+		for (String beanName : beanNames) {
+			RootBeanDefinition bd = getMergedLocalBeanDefinition(beanName);
+			if (!bd.isAbstract() && bd.isSingleton() && !bd.isLazyInit()) {
+				if (isFactoryBean(beanName)) {
+					...
+				}
+				else {
+					getBean(beanName);          // ← 栈上的 955 就是这一行
+				}
+			}
+		}
+
+    三个条件同时成立才会被预实例化：非抽象 + singleton + 非 lazy。
+    这解释了实测里两件事：@Lazy 的 LazyBean 和 @Scope("prototype") 的 PrototypeTask
+    在 refresh 之后都不在单例池里（Q4 里那两行「有定义、没实例」）。
+
+
+二、refresh 是谁调的
+    文件：AnnotationConfigApplicationContext.java:90
+
+	public AnnotationConfigApplicationContext(Class<?>... componentClasses) {
+		this();
+		register(componentClasses);
+		refresh();                       // ← 构造器里直接 refresh
+	}
+
+    所以 `new AnnotationConfigApplicationContext(AppConfig.class)` 这一行
+    返回时，所有非懒单例已经 new 完、依赖已经灌完、初始化回调已经跑完。
+    实测时间线：+330 ms 第一个 Bean 构造 → +479 ms「容器创建完成」。
+
+
+三、造对象的两条路：无参构造 vs 构造器解析
+    文件：AbstractAutowireCapableBeanFactory.java:1180  createBeanInstance()
+
+		if (autowireNecessary) {
+			return autowireConstructor(beanName, mbd, null, null);   // 1211
+		}
+		else {
+			return instantiateBean(beanName, mbd);                   // 1214
+		}
+		...
+		// Candidate constructors for autowiring?
+		Constructor<?>[] ctors = determineConstructorsFromBeanPostProcessors(beanClass, beanName);
+		if (ctors != null || mbd.getResolvedAutowireMode() == AUTOWIRE_CONSTRUCTOR ||
+				mbd.hasConstructorArgumentValues() || !ObjectUtils.isEmpty(args)) {
+			return autowireConstructor(beanName, mbd, ctors, args);  // 1222
+		}
+
+		// Preferred constructors for default construction?
+		ctors = mbd.getPreferredConstructors();
+		if (ctors != null) {
+			return autowireConstructor(beanName, mbd, ctors, null);
+		}
+
+		// No special handling: simply use no-arg constructor.
+		return instantiateBean(beanName, mbd);                       // 1232
+	}
+
+    实测对照（同一份输出里出现两个不同行号，正好是这两条分支）：
+      JdbcOrderRepository / PriceCalculator      → createBeanInstance:1232（instantiateBean，无参）
+      OrderService / OrderController / ReportJob → createBeanInstance:1222（autowireConstructor）
+    「有一个带参构造器就自动用它」不是什么约定俗成，而是
+    determineConstructorsFromBeanPostProcessors 找到了候选构造器（单构造器时直接命中）。
+
+
+四、对象造好之后才灌依赖 —— 循环依赖能解的前提
+    文件：AbstractAutowireCapableBeanFactory.java:573  doCreateBean()
+
+		// Instantiate the bean.
+		BeanWrapper instanceWrapper = null;
+		if (mbd.isSingleton()) {
+			instanceWrapper = this.factoryBeanInstanceCache.remove(beanName);
+		}
+		if (instanceWrapper == null) {
+			instanceWrapper = createBeanInstance(beanName, mbd, args);   // 582：先有对象
+		}
+		Object bean = instanceWrapper.getWrappedInstance();
+		...
+		boolean earlySingletonExposure = (mbd.isSingleton() && this.allowCircularReferences &&
+				isSingletonCurrentlyInCreation(beanName));
+		if (earlySingletonExposure) {
+			if (logger.isTraceEnabled()) {
+				logger.trace("Eagerly caching bean '" + beanName +
+						"' to allow for resolving potential circular references");
+			}
+			addSingletonFactory(beanName, () -> getEarlyBeanReference(beanName, mbd, bean));  // 613
+		}
+
+		// Initialize the bean instance.
+		Object exposedObject = bean;
+		try {
+			populateBean(beanName, mbd, instanceWrapper);       // 619：后灌字段
+			exposedObject = initializeBean(beanName, exposedObject, mbd);
+
+    两句话：createBeanInstance（582）在前，populateBean（619）在后。
+    中间那一步 addSingletonFactory（613）把「半成品」提前交出去 —— 这就是字段注入能解环的全部秘密。
+    构造器注入没有这个窗口：参数必须在 createBeanInstance 之前就位，那时对象还不存在。
+
+
+五、三级缓存到底是哪三级
+    先纠一个自己差点写错的点：实测栈上的 getSingleton:234 并不是这个「查三级缓存」的重载，
+    而是 getSingleton(beanName, ObjectFactory) 里第 234 行的 singletonFactory.getObject()
+    —— 那句话才是真正把 doCreateBean 叫起来的入口。两个重载同名，行号差 50 多行，别搞混。
+
+    下面这个是「查」的那一支：
+    文件：DefaultSingletonBeanRegistry.java:180  getSingleton(beanName, allowEarlyReference)
+
+	protected Object getSingleton(String beanName, boolean allowEarlyReference) {
+		// Quick check for existing instance without full singleton lock
+		Object singletonObject = this.singletonObjects.get(beanName);          // 一级：成品
+		if (singletonObject == null && isSingletonCurrentlyInCreation(beanName)) {
+			singletonObject = this.earlySingletonObjects.get(beanName);        // 二级：早期引用
+			if (singletonObject == null && allowEarlyReference) {
+				synchronized (this.singletonObjects) {
+					singletonObject = this.singletonObjects.get(beanName);
+					if (singletonObject == null) {
+						singletonObject = this.earlySingletonObjects.get(beanName);
+						if (singletonObject == null) {
+							ObjectFactory<?> singletonFactory = this.singletonFactories.get(beanName);  // 三级：工厂
+							if (singletonFactory != null) {
+								singletonObject = singletonFactory.getObject();
+								this.earlySingletonObjects.put(beanName, singletonObject);
+								this.singletonFactories.remove(beanName);
+							}
+						}
+					}
+				}
+			}
+		}
+		return singletonObject;
+	}
+
+    注意第三级存的是 ObjectFactory（一个能延迟产出的 lambda），不是对象本身 ——
+    为了 AOP 代理：真正要暴露的可能是代理对象，而代理要等 BeanPostProcessor 处理完才知道。
+    所以三级缓存不是「多加一层 Map」，是「把造对象这件事延迟到真的有人要」。
+
+
+六、循环依赖的抛点与那句原话
+    文件：DefaultSingletonBeanRegistry.java:353  beforeSingletonCreation()
+
+	protected void beforeSingletonCreation(String beanName) {
+		if (!this.inCreationCheckExclusions.contains(beanName) && !this.singletonsCurrentlyInCreation.add(beanName)) {
+			throw new BeanCurrentlyInCreationException(beanName);      // 355
+		}
+	}
+
+    文件：BeanCurrentlyInCreationException.java:36
+
+	public BeanCurrentlyInCreationException(String beanName) {
+		super(beanName,
+				"Requested bean is currently in creation: Is there an unresolvable circular reference?");
+	}
+
+    实现里就一句固定文案，判据也极简：往 singletonsCurrentlyInCreation 这个 Set 里 add 失败（= 已经在造了），就抛。
+    所以构造器注入的环异常信息里会出现两层 UnsatisfiedDependencyException 再套一个
+    BeanCurrentlyInCreationException —— 实测 Q3b 打出来的就是这条链。
+
+
+七、本机环境
+    JDK 17.0.12 / Spring 5.3.39（6 个 jar 手工放 lib/，没有 Maven）
+    spring-core 1490485 B / spring-beans 706684 B / spring-context 1276093 B
+    spring-expression 294249 B / spring-aop 385322 B / spring-jcl 25161 B
+    注意：Spring 5.x 用自带的 spring-jcl 而不是 commons-logging，
+    照老教程下 commons-logging 会多一个 jar 但也能跑（两条桥接不冲突）。
+================================================================

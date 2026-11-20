@@ -1,103 +1,109 @@
 ---
 title: 今天做什么
-date: 2026-11-19
-weekday: 周四
-milestone: M1 · Java 地基
-task: W04 Day 2 — CompletableFuture（跑完之后怎么接）
+date: 2026-11-20
+weekday: 周五
+milestone: M2 · Spring 内核
+task: W05 Day 1 — Spring IOC / DI（手写装配 vs 容器装配）
 status: 已完成
 ---
 
-# 今天 · 2026-11-19（周四）· 已完成
+# 今天 · 2026-11-20（周五）· 已完成
 
-> Day 1 回答的是「任务在哪跑」，今天回答「跑完之后怎么接」。
-> 三个问题：不传线程池它到底用哪个池、`thenApply` 和 `thenCompose` 差在哪、
-> 以及异步链上的异常到底被谁吃了。
+> M1 封板，进 M2。第一件事不是讲「控制反转」，是**先写一遍没有 Spring 的版本**，
+> 再把它交给容器 —— 「Spring 帮你管理什么」这个问题，只有靠 diff 才回答得了。
 
 ## 一、先查的遗留
 
 | 检查项 | 结果 |
 | :--- | :--- |
-| 清空 `out/` 全量重编 w04（6 文件）+ 跑 day1 三个入口 | ✅ 全部正常：`PoolBasics` 尾部 E 段完整、`PoolFlow` S1~S5 结论段完整、`PoolTraps` T5 串味复现 —— 无回归、无中断代码 |
-| `01-notes` 里的未勾项 | 只剩 W04 的 `CompletableFuture` / `异步结果返回练习`（= 今天这两格），以及 W05 起的未解锁内容 |
-| `02-code` 空目录 | 只剩 `w05-` 起的 `.gitkeep`（未开工），按口径不算遗留 |
-| Day 1 的两条待办 | ① `submit` 吞异常 → 今天 C 段换 CF 复现，销账；② `ThreadLocal` 串味 → 今天升级成「默认池全 JVM 共享」，销账 |
+| 清空 `out/` 全量重编 w04（6 文件）+ 跑六个入口 | ✅ 全 exit=0，行数 45/57/35/40/43/80，与 11-19 一致 —— 无回归、无中断代码 |
+| `01-notes` 里的未勾项 | W05 剩 3 格（生命周期 / 作用域 / Spring 帮你管理什么）+ W06 起的未解锁内容；**没有该做没做的** |
+| `02-code` 空目录 | `w05-` 起的 `.gitkeep`（今天开工的就是它）+ `lab/` 下 7 个实验目录（都是 M2 及以后） |
+| 11-19 留的两条待办 | ① `pom.xml` → 按计划推到 W05 收尾（本机没 Maven，写了也验证不了）；② 手工 jar 清单 → 今天落地成 `lib/` 六个 jar |
 
-**结论：没有需要补的中断代码。** 上一轮（11-12）的产出完整，今天直接接着做 Day 2。
+**结论：没有需要补的中断代码。** 今天的起点就是 W05 Day 1。
 
-## 二、今天的正题：三个程序
+## 二、今天的正题：一个新工程 + 三个程序
 
-代码在 `02-code/stage1-basics/w04-threadpool-completablefuture/src/main/java/com/newt/java48/w04/day2/`：
+代码在 `02-code/stage1-basics/w05-spring-ioc-di/`（从 `.gitkeep` 建起）：
 
 | 文件 | 内容 |
 | :--- | :--- |
-| `AsyncBasics.java` | A 默认池是谁（并行度 11）/ B 阻塞任务进公共池 = 排队 / C `runAsync` vs `supplyAsync` / D 自建池隔离 / E 三种现成 CF |
-| `ChainShape.java` | A `thenApply` vs `thenCompose` 的类型 / B 三种 `thenApply` 的线程 / C `thenCombine` / D `allOf` / E `anyOf` / F 串 vs 并 |
-| `AsyncErrors.java` | A 失败后节点全跳过 / B `exceptionally` / C `handle` / D `whenComplete` / E 三者互相抛 / F `join` vs `get` + `unwrap` / G 返回值没人接 / H 超时 |
-| `day2-result.txt` | 全部实测（215 行，含编译错误原文） |
-| `day2-jdk-source.txt` | `uniWhenComplete` / `reportJoin` / `commonPool` 并行度原文 |
-| `compile-errors/ChainTypeErrors.java` | 3 条 `incompatible types` 原文（不参与编译） |
+| `lib/*.jar` | Spring 5.3.39 六个 jar（core / beans / context / expression / aop / **spring-jcl**） |
+| `run.sh` / `run.bat` | `javac -cp "lib/*"` + `java -cp "out;lib/*"`（Windows 分隔符是 `;`） |
+| `day1/ManualWiring.java` | A 三个入口各自 `new`（3 份仓储）/ B 集中装配（1 份）/ C 数源码算改动点 |
+| `day1/SpringWiring.java` | A 谁+何时 new / B 单例 / C 装配行数 / D 换实现 / E `@Lazy` / F prototype |
+| `day1/ContainerQuestions.java` | Q1 不写注解 / Q2 注解对 `new` 无效 / Q3 循环依赖 / Q4 单例池 |
+| `day1/app/` | 同一套业务类：Controller / Job / Test / Service / Repository / Calculator |
+| `day1/cycle/` | FieldA⇄FieldB（字段注入）、CtorA⇄CtorB（构造器注入） |
+| `support/Trace.java`、`support/Src.java` | 打点脚手架（谁 new 的、数源码 new 了几次） |
+| `day1-result.txt` | 三段实验完整实测（355 行） |
+| `day1-spring-source.txt` | 6 段 Spring 源码，行号能和栈对撞 |
 
 ## 三、今天挖到的五个点
 
-1. **不传 executor 就是 `ForkJoinPool.commonPool()`，并行度 = 核数 - 1。**
-   12 核机器 → **11**；30 个任务只用到 11 个 worker 线程。而且它**全 JVM 唯一** ——
-   所有 `parallelStream()` 共用。这条决定了「阻塞任务必须自带线程池」。
+1. **「换实现要改几处」是能数出来的：3 处 → 0 处。**
+   A 段三个入口各自 `new`：`new JdbcOrderRepository` 3 次、`new PriceCalculator` 3 次；
+   Spring 版入口代码里全是 **0**。唯一的 `new` 落在 `MemoryConfig` 的 `@Bean` 里（1 次）。
+   **变的是「一个装配点」，不是「零个 new」。**
 
-2. **阻塞任务的代价是「排队」，不是「变慢」。**
-   14 个 300 ms 任务：公共池 **623 ms**（≈ `ceil(14/11) × 300`，分两批），自建 `fixed(14)` **308 ms**。
-   更阴的是污染范围：业务里的 `supplyAsync` 能把同 JVM 无关的 `parallelStream` 一起卡住。
+2. **手写版的代价不是「代码丑」，是三个连接池。**
+   A 段造出 **3 个** `JdbcOrderRepository`（哈希三个都不同）；B 段收进 `main` 之后是 **1 个**。
+   这一条比「改 3 处」值钱 —— 它会体现在连接数和缓存命中率上。
 
-3. **`thenApply` / `thenCompose` 用错了不报错，只是悄悄套一层盒子。**
-   `thenApply(u -> fetchOrders(u))` 得到 `CF<CF<String>>`，`join()` 打印
-   `CompletableFuture@<hash>[Completed normally]` —— 要 join 两次。`thenCompose` 一次到位。
-   和 W02 的 `map` / `flatMap` 同构。
+3. **「谁 new 的、什么时候 new 的」都能从栈上读出来。**
+   手写版直接调用者是 `ManualWiring.webEntry:28`；Spring 版是 `BeanUtils.instantiateClass:213`，
+   再往上命中 `createBeanInstance` / `preInstantiateSingletons:955` / `getSingleton:234`。
+   时间线：第一个 Bean `+312 ms`、最后一个 `+338 ms`、「容器创建完成」`+354 ms` ——
+   **全在 refresh 内**，而且那 312 ms 是类加载 + 扫包，不是 `new`。
 
-4. **`whenComplete` 物理上吞不掉异常。**
-   它的 action 是 `BiConsumer`，返回值 `void` —— 没有出口。实测：上游失败 + `whenComplete` 抛，
-   cause 仍是**原始异常**，新异常只挂在**外层包装**的 `suppressed`（= 1）上。
-   而 `exceptionally` 里抛会覆盖原始异常，且原始异常**彻底丢失**（cause 和 suppressed 里都没有）。
+4. **两个行号说明造对象有两条路：1222 与 1232。**
+   无参构造走 `instantiateBean`（1232）；有构造器参数走 `autowireConstructor`（1222）。
+   同一份输出里两种都出现了 —— 这就是「单构造器不用写 `@Autowired`」的机制来源。
 
-5. **不带 `Async` 的 `thenApply` 可能跑在 `main` 里。**
-   规则是「在完成上游的那个线程上执行」，上游早已完成时，「那个线程」就是调用者线程 —— 实测就是 `main`。
-   所以「写在异步链里」≠「跑在异步线程上」。
+5. **循环依赖的差别就是源码三行的顺序。**
+   `createBeanInstance`(582) → `addSingletonFactory`(613) → `populateBean`(619)。
+   字段注入：先造空壳、登记、再灌 → 能过；构造器注入：参数先于对象 → 必炸
+   （`BeanCurrentlyInCreationException`）。
 
-## 四、今天踩的坑（五个）
+## 四、今天踩的坑（四个）
 
-- **先写注释、后被实测打脸**：「`whenComplete` 抛异常会覆盖原始异常」写反了，实际是原始异常胜出。
-  这是本月第六次「断言先于实测」，好在输出对不上时立刻回头查了源码。
-- **查 `suppressed` 查错了对象**：先打 `e.getCause().getSuppressed()` 得 0，和源码 `addSuppressed` 矛盾；
-  同时打两层才发现新异常挂在**外层 `CompletionException`** 上（1），cause 自己才是 0。
-- **`e instanceof IllegalStateException` 编译不过**：`e` 声明成 `CompletionException`，两者无继承关系，
-  `instanceof` 在编译期被判为不可能 —— 要演示「匹配不到」得先用 `Throwable` 接住。
-- **`Runtime.availableProcessors()` 不是静态方法**：要 `Runtime.getRuntime().availableProcessors()`。
-- **`run.sh` 的短名只认 day1**：跑 Day 2 必须写 `./run.sh day2.AsyncBasics`，否则 `ClassNotFoundException`。
+- **自指统计**：`Src` 第一版把针脚 `"new JdbcOrderRepository("` 当字符串写在被数的文件里，
+  于是 `SpringWiring`（0 个 new）数出 3。改成 `countNew(src, "JdbcOrderRepository")`，
+  针脚在 `Src` 内部拼 —— **针脚必须藏在被数文件之外**。
+- **`GenericApplicationContext` 只能 `refresh()` 一次**：先 `new ...(AppConfig.class)` 再
+  `register + refresh` → `IllegalStateException: does not support multiple refresh attempts`。
+- **`getBeanDefinitionNames()` + `getBean(name)` 会把 `@Lazy` 提前造出来**：
+  第一版 A 段这么写，LazyBean 在枚举名单时就构造了，E 段「refresh 时没造」直接不成立。
+  改成读 `getBeanDefinition(name).getBeanClassName()`。
+- **`getSingleton:234` 不是查三级缓存那一支**：234 行是 `singletonFactory.getObject()`
+  （真正开始造对象），查三级缓存的是 180 行起的另一个重载。同名重载，看栈必须对行号。
 
 ## 五、环境备忘
 
-- 跑今天：`./run.sh day2.AsyncBasics`（约 1.5 s）/ `day2.ChainShape`（约 2.5 s）/ `day2.AsyncErrors`（约 2 s）
-- 编译错误取证：`javac -J-Duser.language=en -J-Duser.country=US -encoding UTF-8 -d /tmp/ce compile-errors/ChainTypeErrors.java`
-  —— 加英文 locale 才看得懂报错，Git Bash 默认输出是 GBK 乱码
-- `commonPool` 想调并行度：`-Djava.util.concurrent.ForkJoinPool.common.parallelism=N`（全局生效，慎用）
+- 跑今天：`./run.sh ManualWiring`（< 1 s）/ `./run.sh SpringWiring`（约 0.4 s）/ `./run.sh ContainerQuestions`（约 0.5 s）
+- **Spring 5.x 用自带 `spring-jcl`，不是 `commons-logging`**；照老教程下前者会多一个 jar（也能跑）
+- 第一次跑 Spring 有约 300 ms 的类加载开销，别把它算进「容器启动慢」
+- `@Configuration` 会被 CGLIB 代理（输出里 `AppConfig$$EnhancerBySpringCGLIB$$...`），CGLIB 在 `spring-core` 里，不用额外 jar
 
 ---
 
 # 下一个时间盒（60 分钟）
 
-**W05 Day 1：Spring IOC / DI** —— 代码放 `02-code/stage1-basics/w05-spring-ioc-di/`
+**W05 Day 2：Bean 生命周期** —— 代码放同一个工程 `day1/` 旁边，新建 `day2/`
 
-> ⚠️ 动手前先解决工具链：**本机没有 Maven/Gradle**。两条路选一条，
-> 建议先走 ①，因为它不引入新工具、20 分钟内能跑起来：
-> ① 手工下载 5 个 jar（`spring-core` / `spring-beans` / `spring-context` / `spring-expression` / `commons-logging`）
-> 放 `lib/`，`run.sh` 里 `-cp "out;lib/*"`；② 装 Maven，补 `pom.xml`（W05 收尾时做，不挪文件）。
+> 昨天证明了「对象是容器造的」，今天要回答「造完之后又对它做了什么」。
+> 一句话剧透：**一定是 `构造 → 属性注入 → BeanPostProcessor 前 → 初始化 → BeanPostProcessor 后` 这个顺序**，
+> 但顺序背下来没用 —— 要靠四组打点把它**打出来**。
 
 | 时间 | 做什么 | 产出 |
 | -: | :--- | :--- |
-| 10 分钟 | 复述 Day 2：默认池是哪个 / `thenApply` 与 `thenCompose` 的返回类型 / `whenComplete` 为什么吞不掉 | 口头过 |
-| 15 分钟 | **先写「没有 Spring」的版本**：`OrderService` 里 `new OrderRepository(new JdbcTemplate(...))` 三层，再改成构造器传参 —— 数一下「换一个实现要动几处」 | `day1/ManualWiring.java` |
-| 20 分钟 | 同一套类交给 `AnnotationConfigApplicationContext`：`@Configuration` + `@Bean` + `@ComponentScan`，打印「Bean 是谁 new 的、什么时候 new 的、是不是同一个」 | `day1/SpringWiring.java` |
-| 10 分钟 | 三个问号：`getBean` 两次是不是同一个对象（单例）/ 不写 `@Component` 会怎样（NoSuchBeanDefinition）/ 循环依赖会不会报错 | 输出段落 |
-| 5 分钟 | 输出 `day1-result.txt` + 笔记 W05 Day 1 小节 + 勾掉「Bean · IOC · DI」 | 笔记 + 快照 |
+| 10 分钟 | 复述 Day 1：手写 3 处 / Spring 0 处、Bean 在 refresh 里造、字段注入为什么能解环 | 口头过 |
+| 20 分钟 | 一个 Bean 上同时挂 `@PostConstruct` / `InitializingBean.afterPropertiesSet` / 自定义 `initMethod` / `@PreDestroy` / `DisposableBean` / `destroyMethod`，**六个回调打时间戳** | `day2/LifecycleOrder.java` |
+| 20 分钟 | 两个 `BeanPostProcessor`：一个 `postProcessBeforeInitialization` 一个 `After`，打印时把 beanName 和「当前是第几次」都带上 —— 看它对**每个** Bean 都跑一遍 | `day2/PostProcessorTrace.java` |
+| 5 分钟 | 三个追问：`@PostConstruct` 是谁调的（哪个后处理器）/ `prototype` 的销毁回调会不会被调 / `BeanPostProcessor` 自己会不会被后处理 | 输出段落 |
+| 5 分钟 | 输出 `day2-result.txt` + 笔记 Day 2 小节 + 勾掉「Bean 生命周期」 | 笔记 + 快照 |
 
-> 优先做第二个 20 分钟。「Spring 到底帮你管理什么」这个问题，
-> **必须靠「手写版 vs Spring 版」的 diff 才讲得清** —— 手写版里 `new` 散在三个地方，
-> Spring 版里只有一个 `@Bean` 方法，这个对比比任何定义都管用。
+> 优先做第二个 20 分钟。**「初始化回调四种写法的执行顺序」是面试高频，
+> 而「`BeanPostProcessor` 对所有 Bean 都跑一遍」是理解 AOP 的入口** ——
+> 代理就是在 `postProcessAfterInitialization` 里被换掉的。
