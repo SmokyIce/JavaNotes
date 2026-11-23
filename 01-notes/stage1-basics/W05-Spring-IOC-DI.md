@@ -1,7 +1,7 @@
 # W05 · Spring IOC / DI
 
 > **第一阶段 · 打基础（W01–W12）** ｜ 预计投入 ≈ 7 小时（每天 60 分钟）
-> 状态：🟨 进行中（Day 1 11-20）　｜　开始日期：2026-11-20　｜　完成日期：____-__-__
+> 状态：🟨 进行中（Day 2 11-23）　｜　开始日期：2026-11-20　｜　完成日期：____-__-__
 
 > 💡 目标理解：Spring 到底在帮你管理什么？
 
@@ -10,7 +10,7 @@
 ## 一、本周知识点
 
 - [x] Bean · IOC · DI
-- [ ] Bean 生命周期
+- [x] Bean 生命周期
 - [ ] Bean 作用域
 - [ ] Spring 到底在帮你管理什么
 
@@ -20,8 +20,13 @@
 > **② 能说清对象是「谁 new 的、在 refresh 的哪一步 new 的」（能指到栈上的行号）；**
 > **③ 能解释「字段注入的循环依赖为什么能过、构造器注入为什么过不去」（能指到源码顺序）。**
 >
+> Day 2 勾第二格：`Bean 生命周期`。判断标准同样不是背「构造 → 属性注入 → 初始化 → 销毁」，而是：
+> **① 六个回调的先后能靠打点打出来，不是背出来；**
+> **② 能说清 `@PostConstruct` 的调用者是哪个后处理器（栈上有行号）；**
+> **③ 能解释 prototype 的销毁回调为什么「一次都不会被调」（源码在登记阶段就短路了）。**
+>
 > 第四格「Spring 到底在帮你管理什么」要等 Day 6 收尾时才勾 —— 现在只有半张答案。
-> 第二、三格（生命周期、作用域）留到 Day 2 / Day 3，今天只做了 singleton / prototype 的对照。
+> 第三格（作用域）留到 Day 3，今天只顺带证明了「prototype 不进单例池、不管销毁」。
 
 ## 二、核心问题（能用自己的话脱稿讲出来，才算学会）
 
@@ -41,6 +46,14 @@ Day 1（已完成 11-20）  工具链：没有 Maven，手工 lib/ 放 6 个 Spr
                          单例池、换实现（jdbc → memory 零改调用点）、@Lazy、prototype
                        + ContainerQuestions：不写注解的两种失败 / 注解对 new 无效 /
                          循环依赖（字段 vs 构造器）/ 单例池里到底有什么
+Day 2（已完成 11-23）  工具链增量：lib/ 多一个 javax.annotation-api-1.3.2.jar（JDK 11+ 已移出 JDK）
+                       + LifecycleOrder：六种回调打时间戳（①构造 → ②BPP.before → ③@PostConstruct
+                         → ④afterPropertiesSet → ⑤initMethod → ⑥BPP.after →
+                         ⑦@PreDestroy → ⑧destroy → ⑨destroyMethod）/ 多 Bean 逆序销毁 /
+                         prototype 销毁 0 次 / @Bean 的 destroyMethod 自动推断 close()
+                       + PostProcessorTrace：两个 BPP 的计数表（谁 2/2、谁 0/0）、
+                         @PostConstruct 的执行栈、同批 BPP 互相看不见、Ordered 生效顺序
+                       + support/Stacks：把「这个回调是谁调的」从栈上读出来
 ```
 
 ### Day 1 · 2026-11-20（周五）· 「Spring 帮你管理什么」——用 diff 回答，不用定义回答
@@ -260,6 +273,199 @@ new NotManaged() 之后，@Autowired 字段 = null
 `@Configuration` 被 CGLIB 代理（输出里能看到 `AppConfig$$EnhancerBySpringCGLIB$$...`），
 CGLIB 是 `spring-core` 里自带的，不需要额外 jar。
 
+### Day 2 · 2026-11-23（周一）· Bean 生命周期：把顺序打出来，而不是背下来
+
+| 时间 | 做什么 | 产出 |
+| -: | :--- | :--- |
+| 10 分钟 | 复述 Day 1：换实现 3 处 → 0 处、Bean 在 `refresh` 里造、字段注入为什么能解环 | 口头过 |
+| 20 分钟 | 一个 Bean 上同时挂 `@PostConstruct` / `afterPropertiesSet` / `initMethod` / `@PreDestroy` / `destroy` / `destroyMethod`，六个回调打时间戳 | `day2/LifecycleOrder.java` |
+| 20 分钟 | 两个 `BeanPostProcessor` 对每个 Bean 计数 + 在 `@PostConstruct` 里打印栈 | `day2/PostProcessorTrace.java` |
+| 5 分钟 | 三个追问：`@PostConstruct` 谁调的 / prototype 销毁调不调 / 后处理器自己被不被处理 | 输出段落 |
+| 5 分钟 | 快照 + 源码取证 + 本节笔记 + 勾掉「Bean 生命周期」 | 笔记 + 快照 |
+
+实测快照：`w05-spring-ioc-di/day2-result.txt`（140 行）
+源码取证：`w05-spring-ioc-di/day2-spring-source.txt`（7 段，行号与栈逐一对撞）
+
+#### 1. 九步时间线（一次容器启动 + 一次 close 的完整记录）
+
+| # | 回调 | 实测时间 | 谁写的 |
+| -: | :--- | ---: | :--- |
+| ① | 构造器 | `+375.737 ms` | 我 |
+| — | 属性注入（无回调，只能间接证明） | ① 与 ② 之间 | 容器 |
+| ② | `BPP.postProcessBeforeInitialization` | `+386.709 ms` | 容器钩子 |
+| ③ | `@PostConstruct` | `+388.960 ms` | 我（注解） |
+| ④ | `afterPropertiesSet` | `+389.518 ms` | 我（接口） |
+| ⑤ | `initMethod = customInit` | `+390.210 ms` | 我（配置点名） |
+| ⑥ | `BPP.postProcessAfterInitialization` | `+390.524 ms` | 容器钩子 |
+| — | `refresh()` 返回 | `+408.658 ms` | — |
+| ⑦ | `@PreDestroy` | `+411.442 ms` | 我（注解） |
+| ⑧ | `DisposableBean.destroy()` | `+411.804 ms` | 我（接口） |
+| ⑨ | `destroyMethod = customDestroy` | `+412.041 ms` | 我（配置点名） |
+
+（时间是本次快照，每次跑 ±30 ms 抖动，别抄死数字，抄**顺序**。）
+
+**属性注入没有回调**，只能用两个观测点夹住它：构造器里 `repo = null`，
+到了 `@PostConstruct` 里 `repo = jdbc`。中间那次注入是 `populateBean` 干的，
+它发生在 `initializeBean` **之前** —— 所以「初始化回调」这个名字是有前提的：
+**初始化的是「已经装配好的对象」**。
+
+#### 2. ② 在 ③ 之前 —— `@PostConstruct` 不是容器直接调的
+
+这是今天最值得带走的一条。`@PostConstruct` 的执行栈（`PostProcessorTrace` B 段，原文）：
+
+```text
+StackDumpBean.init(StackDumpBean.java:21)
+  ← InitDestroyAnnotationBeanPostProcessor$LifecycleElement.invoke:389
+  ← LifecycleMetadata.invokeInitMethods:333
+  ← InitDestroyAnnotationBeanPostProcessor.postProcessBeforeInitialization:157
+  ← AbstractAutowireCapableBeanFactory.applyBeanPostProcessorsBeforeInitialization:440
+  ← AbstractAutowireCapableBeanFactory.initializeBean:1796
+  ← doCreateBean:620 → createBean:542
+```
+
+读法：**`@PostConstruct` 的执行者是后处理器**，具体是 `CommonAnnotationBeanPostProcessor`
+（继承 `InitDestroyAnnotationBeanPostProcessor`；它在 `CommonAnnotationBeanPostProcessor.java:205`
+把 `@PostConstruct` 注册成 init 注解）。容器主流程只做一件事：遍历后处理器列表。
+
+两个行号细节，抄的时候别抄错：
+- `postProcessBeforeInitialization` **声明在 154 行**，栈上出现的是 **157 行** —— 157 才是
+  `metadata.invokeInitMethods(...)` 那句。
+- `initializeBean` 里 1796 是 BPP.before，1800 是 `invokeInitMethods` —— 同一个方法里的两行。
+
+#### 3. ④ 为什么一定在 ⑤ 之前 —— 源码就两句 if
+
+`invokeInitMethods:1843` 里顺序固定：
+
+```java
+boolean isInitializingBean = (bean instanceof InitializingBean);
+if (isInitializingBean && ...) {
+    ((InitializingBean) bean).afterPropertiesSet();   // 1863
+}
+...
+if (StringUtils.hasLength(initMethodName) && ...
+        && !(isInitializingBean && "afterPropertiesSet".equals(initMethodName))) {
+    invokeCustomInitMethod(beanName, bean, mbd);      // 1874
+}
+```
+
+所以「三种初始化写法都生效时谁先」，答案是**注解（在后处理器里）→ 接口 → 配置点名的**。
+注意最后那个 `!(...)` 条件：**接口方法名和 initMethod 重名时不会跑两遍** ——
+这正是「写了 `initMethod = "afterPropertiesSet"` 也不会双调」的原因。
+
+#### 4. 销毁：三件套的顺序 + 逆序 + 依赖方先死
+
+销毁的顺序和初始化**对称**（`DisposableBeanAdapter.destroy:194`）：
+
+```text
+DestructionAwareBeanPostProcessor.postProcessBeforeDestruction  → ⑦ @PreDestroy
+((DisposableBean) bean).destroy()                              → ⑧
+invokeCustomDestroyMethod                                      → ⑨
+```
+
+多个 Bean 之间是**逆序**，而且有依赖关系时**依赖方先死**（`B` 段实测）：
+
+```text
+Beta 构造  →  Alpha 构造            （Beta 先造）
+close():  Alpha @PreDestroy  →  Beta @PreDestroy   （Alpha 先死）
+```
+
+原因不是「栈式逆序」这一条 —— `DefaultSingletonBeanRegistry` 会先销毁
+`dependentBeanMap` 里的下游。否则 Alpha 被销毁时，手里那个 Beta 可能已经不在了。
+
+#### 5. prototype 的销毁回调：不是忘了调，是没登记
+
+`LifecycleOrder` C 段：取两个 prototype、`close()` 之后销毁回调被调 **0 次**。
+
+源码只有一行（`AbstractBeanFactory.registerDisposableBeanIfNecessary:1942`）：
+
+```java
+if (!mbd.isPrototype() && requiresDestruction(bean, mbd)) {
+    if (mbd.isSingleton()) { registerDisposableBean(...); }
+    else { scope.registerDestructionCallback(...); }
+}
+```
+
+**prototype 在进 `if` 之前就被短路了**，连「销毁回调」这件事都没登记，
+销毁阶段自然找不到它。所以定时器、连接池、`FileChannel` 这些必须自己关 ——
+「容器管造不管埋」在 prototype 上是字面意思。
+
+#### 6. `@Bean` 的 `destroyMethod` 默认会**推断** `close()`
+
+`@Bean` 不写 `destroyMethod` 时默认值是 `AbstractBeanDefinition.INFER_METHOD`
+（字符串 `"(inferred)"`）：容器自己去找 `close()` 或 `shutdown()` 并调掉。
+
+实测（D 段）：
+
+```text
+AutoCloseBean.close()  被调 1 次   （@Bean 没写 destroyMethod → 推断成功）
+ManualOffBean.close()  被调 0 次   （@Bean(destroyMethod = "") → 推断关闭）
+```
+
+这条的杀伤力在于「静默」：你的类里刚好有个 `public void close()` 用来做别的事，
+容器关闭时会替你调一次。要么改名，要么显式写 `destroyMethod = ""`。
+
+#### 7. 后处理器：2/2 与 0/0 的差别就是「出生时间」
+
+`PostProcessorTrace` A 段（两个后处理器，各记一次 before / after）：
+
+| beanName | before | after | 说明 |
+| :--- | ---: | ---: | :--- |
+| `plainBean` | 2 | 2 | 正常 Bean，两个后处理器各处理一次 |
+| `lifecycleRepo` | 2 | 2 | 同上 |
+| `bppFirst` | **0** | **0** | 后处理器自己 |
+| `bppSecond` | **0** | **0** | 后处理器自己 |
+| `earlyDependent` | **0** | **0** | 被 `bppFirst` `@Autowired` 进去，被迫提前创建 |
+
+为什么 `bppSecond` 也是 0/0？我第一版答案是错的（以为它至少能被 `bppFirst` 处理一次）。
+源码纠正了我（`PostProcessorRegistrationDelegate:257~265`）：
+
+```java
+for (String ppName : orderedPostProcessorNames) {
+    BeanPostProcessor pp = beanFactory.getBean(ppName, BeanPostProcessor.class);  // 先全部造出来
+    orderedPostProcessors.add(pp);
+}
+sortPostProcessors(orderedPostProcessors, beanFactory);
+registerBeanPostProcessors(beanFactory, orderedPostProcessors);                   // 再统一注册
+```
+
+**同批后处理器是「先全部 `getBean`，再统一注册」** —— 收集的时候谁都没进列表，
+所以互相都看不见。而 `PriorityOrdered` 那一批（含 `CommonAnnotationBeanPostProcessor`）
+在 253 行就已经注册完了，所以它**看得见**我们的后处理器：证据是 `bppFirst` / `bppSecond`
+身上那个 `@PostConstruct` 确实被执行了（输出里两行 `[后处理器自己的 @PostConstruct]`）。
+
+`earlyDependent` 才是真正要警惕的：它被 `@Autowired` 进后处理器，所以比后处理器还早出生，
+Spring 直接给了一条 INFO 告警（原文）：
+
+```text
+Bean 'earlyDependent' of type [...EarlyDependent] is not eligible for getting processed by
+all BeanPostProcessors (for example: not eligible for auto-proxying)
+```
+
+**"not eligible for auto-proxying" = 拿不到 AOP 代理 = `@Transactional` / `@Async` 白写。**
+这条告警平时被日志级别埋在启动日志里，但它是「我这个类的注解怎么不生效」的一类标准答案。
+
+#### 8. 三个追问的答案（能一句话说完才算会）
+
+1. **`@PostConstruct` 谁调的？** —— `CommonAnnotationBeanPostProcessor`
+   （继承 `InitDestroyAnnotationBeanPostProcessor`）在 `postProcessBeforeInitialization` 里调的，
+   栈上有 157 / 440 / 1796 三个行号。前提是 classpath 上有 `javax.annotation-api`。
+2. **prototype 的销毁回调会不会被调？** —— 不会，一次都不会；`registerDisposableBeanIfNecessary:1942`
+   用 `!mbd.isPrototype()` 在登记阶段就短路了。
+3. **`BeanPostProcessor` 自己会不会被后处理？** —— 被「更早注册的」处理（`@PostConstruct` 照样跑），
+   被「同批和后来的」漏掉（计数器 0/0）。所以给后处理器加 `@Transactional` 基本等于白写。
+
+#### 9. 工具链增量：`javax.annotation-api` 这一个 jar 是必需的
+
+JDK 11 起 `javax.annotation` 已从 JDK 移除，JDK 17 上没有它 —— `@PostConstruct` **编译都过不了**。
+`lib/` 因此从 6 个 jar 变成 7 个（多的那个是 `javax.annotation-api-1.3.2.jar`，26 KB）。
+
+两个容易踩的点：
+- **Spring 5 用的是 `javax.annotation`，不是 `jakarta.annotation`**（Spring 6 才换）。
+  下错包会得到「注解放上去但没生效」的静默失败。
+- 这个后处理器是 `AnnotationConfigApplicationContext` **按 classpath 自动注册**的：
+  `AnnotationConfigUtils` 检测到 `javax.annotation.Resource` 存在才注册。
+  没有 jar 时不会报错，`@PostConstruct` 只是「不执行」—— 静默失效。
+
 ## 四、踩坑与 Bug 复盘
 
 | 现象 | 原因 | 排查过程 | 解决 | 底层原理 |
@@ -268,6 +474,9 @@ CGLIB 是 `spring-core` 里自带的，不需要额外 jar。
 | `IllegalStateException: GenericApplicationContext does not support multiple refresh attempts: just call 'refresh' once` | 先 `new AnnotationConfigApplicationContext(AppConfig.class)`（内部已 refresh），又 `register()` + `refresh()` | 异常信息直接点名 | `new AnnotationConfigApplicationContext()` → `register(AppConfig.class, 额外类)` → `refresh()` | `GenericApplicationContext` 的 `refreshed` 标志只能翻一次；要动态加定义得在 refresh 之前 register |
 | `@Lazy` 那段的结论不成立：`containsSingleton("lazyBean")` 一开始就是 true | A 段为了打印 bean 名单写了 `ctx.getBean(name)`，把 LazyBean 和 PrototypeTask 提前造了 | 输出里 LazyBean 的构造行出现在 A 段的 `getBean(name)` 循环中间 —— 比「容器创建完成」晚，但在 E 段之前 | A 段改读 `getBeanDefinition(name).getBeanClassName()` | 读 **注册表** 不触发构造；`getBean(name)` 会触发。调试「什么时候造」时不能用 `getBean` 枚举 |
 | 险些写错：以为栈上的 `getSingleton:234` 是「查三级缓存」 | `DefaultSingletonBeanRegistry` 有两个同名重载 | 去源码数行：234 行是 `singletonFactory.getObject()`，180 行那个重载才是查三级缓存 | 文案改成「234 = 真正开始造对象的入口」 | 同名重载看栈必须对行号，否则结论会反 |
+| `bppSecond` 的计数是 0/0，与预期「至少被 `bppFirst` 处理一次」相反 | 同一批（Ordered）后处理器是「先全部 `getBean` 收集，再统一注册」 | 先怀疑自己写错，再去看 `PostProcessorRegistrationDelegate:257~265`，最后被表格数字说服 | 结论改成「同批互相看不见；只有更早阶段（PriorityOrdered）注册的才看得见它」 | 收集与注册是两个循环；「顺序」这件事在 BPP 上要分「阶段」和「批内」两层 |
+| 文案里写 `postProcessBeforeInitialization:154`，栈上却是 157 | 154 是方法声明行，157 是 `metadata.invokeInitMethods` 那行 | 把栈打印出来逐行对：389 / 333 / 157 / 440 / 1796 | 文案改成「声明在 154，执行帧在 157」，并说明差在哪 | 栈帧行号指向**调用点**，不是方法签名行 —— 引行号前必须自己跑一次 |
+| `@PostConstruct` 编译不过：`程序包 javax.annotation 不存在` | JDK 11 起 `javax.annotation` 已从 JDK 移除 | 一眼确认；该类在 `lib/` 里没有对应的 jar | `lib/` 补 `javax.annotation-api-1.3.2.jar`（Spring 5 用 javax，不是 jakarta） | 没有这个 jar 时，即使换个方式跑起来，`@PostConstruct` 也是**静默不执行**；容器自动注册 `CommonAnnotationBeanPostProcessor` 的前提就是 classpath 上有它 |
 
 ## 五、面试会怎么问
 
@@ -286,6 +495,22 @@ CGLIB 是 `spring-core` 里自带的，不需要额外 jar。
 - 「`@Lazy` 有什么用？」——把构造推迟到第一次 `getBean`；也能用来打断循环依赖。
 - 「`prototype` 的 Bean 谁负责销毁？」——没人，容器不管（所以别在原型里放需要关的资源）。
 - 「`new` 出来的对象，`@Autowired` 生效吗？」——不生效，注解要靠容器的后处理器。
+- 「`@PostConstruct`、`afterPropertiesSet`、`initMethod` 都写了，执行顺序是什么？」——
+  **注解 → 接口 → 配置**；因为注解是后处理器在 `postProcessBeforeInitialization` 里调的，
+  后两者在 `invokeInitMethods` 里，接口在前（`AbstractAutowireCapableBeanFactory:1863` vs `1874`）。
+- 「`@PostConstruct` 到底是谁调的？」——`CommonAnnotationBeanPostProcessor`（继承
+  `InitDestroyAnnotationBeanPostProcessor`）。追问「没有它行不行」→ 不行，JDK 11+ 还得自己加
+  `javax.annotation-api`，否则静默不执行。
+- 「prototype 的 Bean 销毁回调会被调吗？」——不会，一次都不会。不是忘了调，
+  是 `registerDisposableBeanIfNecessary` 用 `!mbd.isPrototype()` 在登记阶段就短路了。
+- 「`@Bean` 不写 `destroyMethod` 会怎样？」——默认 `INFER_METHOD`，容器自动找 `close()` / `shutdown()`
+  调掉；要关掉写 `destroyMethod = ""`。
+- 「两个 Bean 一个有依赖一个被依赖，谁先销毁？」——依赖方先死（`dependentBeanMap` 下游优先），
+  不是单纯的栈式逆序。
+- 「`BeanPostProcessor` 对哪些 Bean 不生效？」——比它早出生的：同批后处理器、被后处理器
+  `@Autowired` 进去的 Bean、配置类。后果是 `is not eligible for auto-proxying`，代理套不上。
+- 「为什么说 `BeanPostProcessor` 是 AOP 的入口？」——代理是在 `postProcessAfterInitialization` 里
+  把原对象**换掉**的；所以初始化回调里 `this` 还是原对象，注入到别处的才是代理。
 
 ## 六、一句话总结
 
@@ -298,6 +523,7 @@ CGLIB 是 `spring-core` 里自带的，不需要额外 jar。
 | 日期 | 星期 | 学习内容 | 用时 | 产出物 | ✅ |
 | :--- | :--- | :--- | ---: | :--- | :--: |
 | 11-20 | 五 | W05 Day 1：IOC / DI —— 手写装配 vs 容器装配，谁 new、何时 new、循环依赖 | 70 min | `ManualWiring` + `SpringWiring` + `ContainerQuestions` + `day1-result.txt`（355 行）+ 源码取证 | ✅ |
+| 11-23 | 一 | W05 Day 2：Bean 生命周期 —— 六回调顺序 / 后处理器 / 三个追问 | 65 min | `LifecycleOrder` + `PostProcessorTrace` + `day2-result.txt`（140 行）+ `day2-spring-source.txt`（7 段） | ✅ |
 
 ---
 
@@ -371,3 +597,51 @@ populateBean(...)         // 619：灌字段
 **面试到这里别停**：能解 ≠ 该写。字段注入解出来的对象在构造完成时是不完整状态，
 并发下可能被别人看到半成品；而且它把「依赖」藏起来了，单测必须起容器。
 所以 **Spring 官方推荐构造器注入**，代价是「别写出环」——这才是正确答案的落点。
+
+---
+
+**Q4 · Bean 的完整生命周期，从头到尾说一遍。**
+
+一句话骨架：**构造 → 属性注入 → BPP.before → 初始化回调（注解 → 接口 → 配置）→ BPP.after → 使用 → 销毁三件套**。
+
+展开成能对上行号的样子（括号里是 Spring 5.3.39 的实测时间戳，同一台机器跑出来）：
+
+| # | 阶段 | 关键类 / 行号 |
+| -: | :--- | :--- |
+| ① | 构造（`+375.7 ms`） | `createBeanInstance` → `BeanUtils.instantiateClass` |
+| — | 属性注入 | `populateBean`（没有回调，只能用「构造时 null / `@PostConstruct` 里有值」夹出来） |
+| ② | `BPP.before`（`+386.7 ms`） | `initializeBean:1796` → `applyBeanPostProcessorsBeforeInitialization:440` |
+| ③ | `@PostConstruct`（`+389.0 ms`） | `InitDestroyAnnotationBeanPostProcessor.postProcessBeforeInitialization:157` |
+| ④ | `afterPropertiesSet`（`+389.5 ms`） | `invokeInitMethods:1863` |
+| ⑤ | `initMethod`（`+390.2 ms`） | `invokeCustomInitMethod:1874` |
+| ⑥ | `BPP.after`（`+390.5 ms`） | `applyBeanPostProcessorsAfterInitialization:1805` |
+| ⑦⑧⑨ | `@PreDestroy` → `destroy()` → `destroyMethod`（`+411.4~412.0 ms`） | `DisposableBeanAdapter.destroy:194` |
+
+三个必须能接住追问的点：
+
+1. **③ 在 ①之后、②之内** —— `@PostConstruct` 是后处理器调的，不是容器主流程调的。
+2. **④ 一定在 ⑤ 之前** —— 接口优先于配置；而且两者重名时只跑一次（源码里那句 `!(...)`）。
+3. **销毁是逆序 + 依赖方先死**，因为 `DefaultSingletonBeanRegistry` 先销毁 `dependentBeanMap` 的下游。
+
+---
+
+**Q5 · `BeanPostProcessor` 为什么是理解 AOP 的入口？它有什么「漏掉」的 Bean？**
+
+两个方向都要讲：
+
+**向上（它是怎么工作的）**：`postProcessAfterInitialization` 返回的对象就是最终放进单例池的对象 ——
+AOP 在这一步把原对象**换成代理**。所以「初始化回调里的 `this`」和「注入到别人手里的引用」是两个不同的对象，
+这是「同类内部方法调用让 `@Transactional` 失效」的根。
+
+**向下（它会漏掉谁）** —— 今天的计数表就是答案：
+
+| Bean | 被处理次数 | 为什么 |
+| :--- | :---: | :--- |
+| 正常 Bean | 2/2 | 注册完成后创建，两个后处理器都看得见 |
+| 同批后处理器 | 0/0 | `PostProcessorRegistrationDelegate:257~265` 先全部 `getBean` 收集、再统一注册 |
+| 被后处理器 `@Autowired` 的 Bean | 0/0 | 比后处理器还早出生 → 启动日志里 `is not eligible for auto-proxying` |
+| 配置类本身 | 0/0 | 在 `invokeBeanFactoryPostProcessors` 阶段就被实例化了 |
+
+从这张表能推出一条实战判断：**启动日志里只要出现 `is not eligible for getting processed by
+all BeanPostProcessors`，那个 Bean 上的 `@Transactional` / `@Async` / `@Cacheable` 就一定是假的**。
+不是「可能不生效」，是「一定不生效」—— 代理根本没机会套上去。

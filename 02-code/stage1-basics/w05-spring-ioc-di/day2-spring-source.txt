@@ -1,0 +1,148 @@
+================================================================
+ W05 Day 2 · 生命周期相关源码（Spring 5.3.39 sources jar）
+ 用法：行号与 day2-result.txt 里栈上的行号逐一对撞
+================================================================
+
+### 1. AbstractAutowireCapableBeanFactory.initializeBean:1783-1809
+    顺序就是 1791 Aware → 1796 BPP.before → 1800 invokeInitMethods → 1805 BPP.after
+----------------------------------------------------------------
+	protected Object initializeBean(String beanName, Object bean, @Nullable RootBeanDefinition mbd) {
+		if (System.getSecurityManager() != null) {
+			AccessController.doPrivileged((PrivilegedAction<Object>) () -> {
+				invokeAwareMethods(beanName, bean);
+				return null;
+			}, getAccessControlContext());
+		}
+		else {
+			invokeAwareMethods(beanName, bean);
+		}
+
+		Object wrappedBean = bean;
+		if (mbd == null || !mbd.isSynthetic()) {
+			wrappedBean = applyBeanPostProcessorsBeforeInitialization(wrappedBean, beanName);
+		}
+
+		try {
+			invokeInitMethods(beanName, wrappedBean, mbd);
+		}
+		catch (Throwable ex) {
+			throw new BeanCreationException(
+					(mbd != null ? mbd.getResourceDescription() : null),
+					beanName, "Invocation of init method failed", ex);
+		}
+		if (mbd == null || !mbd.isSynthetic()) {
+			wrappedBean = applyBeanPostProcessorsAfterInitialization(wrappedBean, beanName);
+		}
+
+### 2. 同一个类的 invokeInitMethods:1843-1875
+    接口 afterPropertiesSet 在 1863，配置的 initMethod 在 1870~1874 —— 接口在前
+----------------------------------------------------------------
+	protected void invokeInitMethods(String beanName, Object bean, @Nullable RootBeanDefinition mbd)
+			throws Throwable {
+
+		boolean isInitializingBean = (bean instanceof InitializingBean);
+		if (isInitializingBean && (mbd == null || !mbd.hasAnyExternallyManagedInitMethod("afterPropertiesSet"))) {
+			if (logger.isTraceEnabled()) {
+				logger.trace("Invoking afterPropertiesSet() on bean with name '" + beanName + "'");
+			}
+			if (System.getSecurityManager() != null) {
+				try {
+					AccessController.doPrivileged((PrivilegedExceptionAction<Object>) () -> {
+						((InitializingBean) bean).afterPropertiesSet();
+						return null;
+					}, getAccessControlContext());
+				}
+				catch (PrivilegedActionException pae) {
+					throw pae.getException();
+				}
+			}
+			else {
+				((InitializingBean) bean).afterPropertiesSet();
+			}
+		}
+
+		if (mbd != null && bean.getClass() != NullBean.class) {
+			String initMethodName = mbd.getInitMethodName();
+			if (StringUtils.hasLength(initMethodName) &&
+					!(isInitializingBean && "afterPropertiesSet".equals(initMethodName)) &&
+					!mbd.hasAnyExternallyManagedInitMethod(initMethodName)) {
+				invokeCustomInitMethod(beanName, bean, mbd);
+			}
+		}
+	}
+
+### 3. AbstractBeanFactory.registerDisposableBeanIfNecessary:1942-1953
+    prototype 在进 if 之前就被短路 —— 销毁回调根本不登记
+----------------------------------------------------------------
+	protected void registerDisposableBeanIfNecessary(String beanName, Object bean, RootBeanDefinition mbd) {
+		AccessControlContext acc = (System.getSecurityManager() != null ? getAccessControlContext() : null);
+		if (!mbd.isPrototype() && requiresDestruction(bean, mbd)) {
+			if (mbd.isSingleton()) {
+				// Register a DisposableBean implementation that performs all destruction
+				// work for the given bean: DestructionAwareBeanPostProcessors,
+				// DisposableBean interface, custom destroy method.
+				registerDisposableBean(beanName, new DisposableBeanAdapter(
+						bean, beanName, mbd, getBeanPostProcessorCache().destructionAware, acc));
+			}
+			else {
+				// A bean with a custom scope...
+
+### 4. DisposableBeanAdapter.destroy:194-200（销毁三件套的顺序）
+    DestructionAwareBPP（@PreDestroy）→ DisposableBean.destroy() → 自定义 destroyMethod
+----------------------------------------------------------------
+	public void destroy() {
+		if (!CollectionUtils.isEmpty(this.beanPostProcessors)) {
+			for (DestructionAwareBeanPostProcessor processor : this.beanPostProcessors) {
+				processor.postProcessBeforeDestruction(this.bean, this.beanName);
+			}
+		}
+
+
+### 5. InitDestroyAnnotationBeanPostProcessor.postProcessBeforeInitialization:154-167
+    154 是方法声明，157 是真正调 init 方法的那行 —— 栈上出现的就是 157
+----------------------------------------------------------------
+	public Object postProcessBeforeInitialization(Object bean, String beanName) throws BeansException {
+		LifecycleMetadata metadata = findLifecycleMetadata(bean.getClass());
+		try {
+			metadata.invokeInitMethods(bean, beanName);
+		}
+		catch (InvocationTargetException ex) {
+			throw new BeanCreationException(beanName, "Invocation of init method failed", ex.getTargetException());
+		}
+		catch (Throwable ex) {
+			throw new BeanCreationException(beanName, "Failed to invoke init method", ex);
+		}
+		return bean;
+	}
+
+
+### 6. CommonAnnotationBeanPostProcessor:200-210
+    205 行把 @PostConstruct 注册成 init 注解 —— 所以执行者是它
+----------------------------------------------------------------
+	 * {@link javax.annotation.PostConstruct} and {@link javax.annotation.PreDestroy},
+	 * respectively.
+	 */
+	public CommonAnnotationBeanPostProcessor() {
+		setOrder(Ordered.LOWEST_PRECEDENCE - 3);
+		setInitAnnotationType(PostConstruct.class);
+		setDestroyAnnotationType(PreDestroy.class);
+		ignoreResourceType("javax.xml.ws.WebServiceContext");
+
+		// java.naming module present on JDK 9+?
+		if (jndiPresent) {
+
+### 7. PostProcessorRegistrationDelegate:255-266
+    先 for 循环全部 getBean 收集，265 才统一注册 → 同批后处理器互相看不见
+----------------------------------------------------------------
+		// Next, register the BeanPostProcessors that implement Ordered.
+		List<BeanPostProcessor> orderedPostProcessors = new ArrayList<>(orderedPostProcessorNames.size());
+		for (String ppName : orderedPostProcessorNames) {
+			BeanPostProcessor pp = beanFactory.getBean(ppName, BeanPostProcessor.class);
+			orderedPostProcessors.add(pp);
+			if (pp instanceof MergedBeanDefinitionPostProcessor) {
+				internalPostProcessors.add(pp);
+			}
+		}
+		sortPostProcessors(orderedPostProcessors, beanFactory);
+		registerBeanPostProcessors(beanFactory, orderedPostProcessors);
+

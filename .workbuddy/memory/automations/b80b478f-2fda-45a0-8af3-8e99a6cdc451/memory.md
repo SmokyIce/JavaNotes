@@ -193,3 +193,20 @@
   要让「refresh 时没造」成立必须读 `getBeanDefinition().getBeanClassName()`；
   ④ 栈上 `getSingleton:234` 是 `singletonFactory.getObject()`，不是查三级缓存那个重载。
 - 口径提醒：时间戳每次跑抖 ±30 ms，文档里的 `+312/+338/+354 ms` 是当次快照，改代码后重新生成快照再抄数字。
+
+## 2026-11-23（第十四次执行 · W05 Day 2 Bean 生命周期）
+- 开工回归：清空 `out/` 全量重编 w05（21 文件 / 24 class）+ 跑 day1 三入口，全 exit=0、行数 59/127/154，
+  与 11-20 的 355 行快照一致，**无中断代码**；`01-notes` 未勾项只剩 W05 后两格 + 未解锁里程碑，
+  `02-code` 只剩 `w06-` 起的 `.gitkeep` → 无遗留需补。11-20→11-23 断 3 天（周末），按口径不补课。
+- 推进 W05 Day 2：新建 `day2/` 14 个文件 + `support/Stacks` + `lib/javax.annotation-api-1.3.2.jar`（第 7 个 jar）。
+  `LifecycleOrder`（六回调时间线 / 逆序销毁 / prototype / 推断 close）+ `PostProcessorTrace`（计数表 / 栈 / 三追问 / Ordered）。
+  产出 `day2-result.txt`（140 行）+ `day2-spring-source.txt`（7 段源码）。
+- 题库 `Spring.md` 3 → 5（Q4 生命周期 / Q5 BPP 漏掉谁）；同步笔记 Day 2 整节、README、`today.md`、`MILESTONES.md`。
+- 下次起点：**W05 Day 3 = Bean 作用域**（四作用域对照 / `request` 在非 Web 容器的报错原文 /
+  `@Scope(proxyMode)` 为什么存在 / 自定义 `Scope` 插件）。时间盒已写进 `today.md`。
+- 本次自查抓回 2 处「断言先于实测」：① `bppSecond` 写成 1/1，实测 0/0（同批「先收集再注册」）；
+  ② 栈行号写 154，实际 157（声明行 vs 调用行）。**引行号/写顺序前必须自己跑一次。**
+- 环境新增：**JDK 11+ 没有 `javax.annotation`** → `@PostConstruct` 编译不过，必须补
+  `javax.annotation-api`（Spring 5 用 javax，Spring 6 才换 jakarta）；没这个 jar 时注解**静默不执行**。
+- 维护：`MEMORY.md` 19.2 KB → 13.6 KB（W02 细节只留「一句话 + 关键数字」）；
+  注意 bash heredoc 里的反引号会被命令替换，写记忆文件时用 Edit 或转义。

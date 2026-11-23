@@ -1,0 +1,140 @@
+================================================================
+ W05 Day 2 · Bean 生命周期 · 实测快照
+ 生成时间：2026-11-23   JDK：java version "17.0.12" 2024-07-16 LTS   Spring：5.3.39
+ 复现：./run.sh day2.LifecycleOrder ; ./run.sh day2.PostProcessorTrace
+================================================================
+
+################ 1/2  LifecycleOrder ################
+
+
+=== A. 六种回调 + 两个后处理器钩子，真实顺序 ===
+  （① 构造 → ② BPP.before → ③ @PostConstruct → ④ afterPropertiesSet
+    → ⑤ initMethod → ⑥ BPP.after；销毁是 ⑦ → ⑧ → ⑨）
+
+     0.172 ms  T0 容器创建开始                                new AnnotationConfigApplicationContext(...)
+   375.737 ms  ① 构造器                                    repo=null   state=NEW   ← 此刻 @Autowired 还没发生
+   386.709 ms  ② BPP.postProcessBeforeInitialization    初始化回调还没开始跑
+   388.960 ms  ③ @PostConstruct                         repo=jdbc   ← 属性注入已经完成，所以这里必须不是 null
+   389.518 ms  ④ afterPropertiesSet                     接口方式：类一旦 implements 就必然被调，去都去不掉
+   390.210 ms  ⑤ initMethod=customInit                  配置方式：同一个类可以换一个方法，不用改类
+   390.524 ms  ⑥ BPP.postProcessAfterInitialization     三种初始化都跑完了 —— AOP 代理就在这一步把对象换掉
+   408.658 ms  refresh() 返回                             此时 Bean 已经全部初始化完
+
+   409.969 ms  业务调用                                     LifecycleBean{state=READY, repo=jdbc}
+
+   410.442 ms  ctx.close()                              开始销毁单例
+   411.442 ms  ⑦ @PreDestroy                            容器 close() 时，第一个被调的销毁回调
+   411.804 ms  ⑧ DisposableBean.destroy                 接口方式：销毁时同理，必然被调
+   412.041 ms  ⑨ destroyMethod=customDestroy            三个销毁回调到这里结束
+   413.158 ms  close() 返回                               销毁回调全部跑完
+
+  读法：② 在 ③ 之前 —— 说明 @PostConstruct 不是容器直接调的，
+        而是在 postProcessBeforeInitialization 的遍历里被「另一个后处理器」调起来的；
+  ④ 一定在 ⑤ 之前 —— afterPropertiesSet 是接口，initMethod 是配置，接口优先；
+  ⑥ 在所有初始化之后 —— AOP 代理就在这一步把原对象换成代理对象。
+
+=== B. 多个 Bean 的销毁顺序：逆序 + 依赖方先死 ===
+   423.699 ms  Beta 构造                                  它先被造出来，但会后被销毁
+   427.986 ms  Alpha 构造                                 依赖 beta=beta
+  容器就绪，现在 close()：
+   429.764 ms  Alpha @PreDestroy                        依赖方先死 —— 此刻 beta 还活着
+   430.103 ms  Beta @PreDestroy                         被依赖方后死 —— 逆序的实证
+  Alpha 后造、依赖 Beta → 先被销毁；Beta 先造、被依赖 → 后销毁。
+  原因不是「逆序」这一条：DefaultSingletonBeanRegistry 会先销毁 dependentBeanMap 里的下游。
+
+=== C. prototype 的销毁回调：一次都不会被调 ===
+   443.903 ms  PrototypeBean 构造                         第 1 个实例
+   444.788 ms  PrototypeBean 构造                         第 2 个实例
+  取了两次，p1 == p2 : false（累计实例 2）
+  close() 之后：销毁回调被调 0 次（期望 0）
+  不是「忘了调」，是根本没登记：
+  AbstractBeanFactory.registerDisposableBeanIfNecessary:1942
+    if (!mbd.isPrototype() && requiresDestruction(bean, mbd)) { ... }
+  prototype 在进 if 之前就被短路了，销毁阶段自然也找不到它 —— 谁取谁负责关。
+
+=== D. @Bean 默认会「推断」销毁方法：close() / shutdown() ===
+   454.163 ms  AutoCloseBean 构造                         close() 不在任何注解里
+   454.971 ms  ManualOffBean 构造                         同样有 close()，但 destroyMethod 被置空
+   455.835 ms  AutoCloseBean.close()                    @Bean 默认推断出来的销毁方法，被调了
+  AutoCloseBean.close()  被调 1 次（@Bean 没写 destroyMethod）
+  ManualOffBean.close()  被调 0 次（@Bean(destroyMethod = "")）
+  默认值是 AbstractBeanDefinition.INFER_METHOD（字符串 "(inferred)"）：
+  容器自己去找 close() / shutdown() 并调掉 —— 所以别随便给自己类起这两个名字。
+
+################ 2/2  PostProcessorTrace ################
+
+
+=== A. 两个后处理器，对每个 Bean 各跑一遍 ===
+  （下面那几条 INFO 告警是故意触发的，见文件头注释）
+
+11月 23, 2026 9:21:46 上午 org.springframework.context.support.PostProcessorRegistrationDelegate$BeanPostProcessorChecker postProcessAfterInitialization
+信息: Bean 'postProcessorTrace.BppConfig' of type [com.newt.java48.w05.day2.PostProcessorTrace$BppConfig$$EnhancerBySpringCGLIB$$3300ab57] is not eligible for getting processed by all BeanPostProcessors (for example: not eligible for auto-proxying)
+     0.003 ms  EarlyDependent 构造                        被后处理器依赖 → 被迫提前创建
+     2.329 ms  EarlyDependent @PostConstruct            初始化照样跑，但没有后处理器看得见它
+11月 23, 2026 9:21:46 上午 org.springframework.context.support.PostProcessorRegistrationDelegate$BeanPostProcessorChecker postProcessAfterInitialization
+信息: Bean 'earlyDependent' of type [com.newt.java48.w05.day2.EarlyDependent] is not eligible for getting processed by all BeanPostProcessors (for example: not eligible for auto-proxying)
+  [后处理器自己的 @PostConstruct] first  被执行 → 早注册的 CommonAnnotationBPP 看得见我
+  [后处理器自己的 @PostConstruct] second 被执行 → 早注册的 CommonAnnotationBPP 看得见我
+
+  共 4 个 Bean 走过 before，4 个走过 after
+
+  beanName                                          before   after
+  ----------------------------------------------------------------
+  bppFirst                                               0       0
+  bppSecond                                              0       0
+  earlyDependent                                         0       0
+  lifecycleRepo                                          2       2
+  plainBean                                              2       2
+  ----------------------------------------------------------------
+  （本次容器很干净，没有 org.springframework.* 的 bean 被计数）
+
+  读法：
+    正常的 Bean（plainBean / lifecycleRepo）        2/2 —— 两个后处理器各处理一次；
+    bppFirst、bppSecond                            0/0 —— 同一批后处理器是「先全部
+        getBean 收集，再统一注册」（PostProcessorRegistrationDelegate:257~265），
+        互相都看不见；它们的 @PostConstruct 却被更早注册的 CommonAnnotationBPP 执行了；
+    earlyDependent                                 0/0 —— 被 bppFirst @Autowired，
+        比后处理器还早出生，连代理都套不上（就是那条 is not eligible 告警）。
+
+=== B. @PostConstruct 到底是谁调的：读栈 ===
+  ── @PostConstruct 的执行栈（只留 spring 与 com.newt 的帧）──
+  @PostConstruct 被调用的那一刻：
+      at com.newt.java48.w05.day2.StackDumpBean.init(StackDumpBean.java:21)
+      at org.springframework.beans.factory.annotation.InitDestroyAnnotationBeanPostProcessor$LifecycleElement.invoke(InitDestroyAnnotationBeanPostProcessor.java:389)
+      at org.springframework.beans.factory.annotation.InitDestroyAnnotationBeanPostProcessor$LifecycleMetadata.invokeInitMethods(InitDestroyAnnotationBeanPostProcessor.java:333)
+      at org.springframework.beans.factory.annotation.InitDestroyAnnotationBeanPostProcessor.postProcessBeforeInitialization(InitDestroyAnnotationBeanPostProcessor.java:157)
+      at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.applyBeanPostProcessorsBeforeInitialization(AbstractAutowireCapableBeanFactory.java:440)
+      at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.initializeBean(AbstractAutowireCapableBeanFactory.java:1796)
+      at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.doCreateBean(AbstractAutowireCapableBeanFactory.java:620)
+      at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBean(AbstractAutowireCapableBeanFactory.java:542)
+
+  栈上这几帧就是答案（行号对应 Spring 5.3.39）：
+    InitDestroyAnnotationBeanPostProcessor$LifecycleElement.invoke:389 —— 真正反射调用我那个方法
+      ↑ LifecycleMetadata.invokeInitMethods:333（按 @PostConstruct 的元数据逐个调）
+      ↑ InitDestroyAnnotationBeanPostProcessor.postProcessBeforeInitialization:157
+        （方法体在 154 行声明；157 行就是那句 metadata.invokeInitMethods）
+      ↑ applyBeanPostProcessorsBeforeInitialization:440（一次遍历）
+      ↑ initializeBean:1796（同一个方法里 1800 行才轮到 invokeInitMethods）
+      ↑ doCreateBean:620 → createBean:542
+  所以 @PostConstruct 的执行者是后处理器，而它的「载体」是 CommonAnnotationBeanPostProcessor：
+    该类第 205 行 setInitAnnotationType(PostConstruct.class)。
+
+=== C. 三个追问的结论 ===
+  ① @PostConstruct 是谁调的？
+     CommonAnnotationBeanPostProcessor（继承 InitDestroyAnnotationBeanPostProcessor）。
+     证据在 B 段的栈上，不是记忆 —— 而且这个后处理器是 AnnotationConfigApplicationContext
+     自动注册的：classpath 上有 javax.annotation-api 才会有（JDK 11+ 已经把它移出 JDK）。
+  ② prototype 的销毁回调会不会被调？
+     不会，一次都不会 —— 见 LifecycleOrder 的 C 段，原因是 AbstractBeanFactory:1942
+     用 !mbd.isPrototype() 在登记阶段就短路了。
+  ③ BeanPostProcessor 自己会不会被后处理？
+     被「更早注册」的处理，被「同批与后来的」漏掉：
+       · 它的 @PostConstruct 照样执行（CommonAnnotationBPP 是 PriorityOrdered，253 行就注册完了）；
+       · 但它自己进不了任何后处理器的计数器（A 段 bppFirst / bppSecond 都是 0/0）。
+     所以「给后处理器加 @Transactional / @Async」基本等于白写 —— 它自己也拿不到代理。
+
+=== D. 多个后处理器的顺序由 Ordered 决定 ===
+  plainBean 上的调用序列：[first.before, second.before, first.after, second.after]
+  first(order=1) 永远在 second(order=2) 前面，before 与 after 各自按同一个顺序遍历。
+  Spring 自己的顺序是 PriorityOrdered → Ordered → 剩下的（无序的按注册顺序）。
+  @Order / Ordered 只影响「谁先被调用」，不影响 Bean 的创建顺序。

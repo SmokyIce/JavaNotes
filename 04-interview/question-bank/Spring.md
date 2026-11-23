@@ -4,6 +4,7 @@
 > 每道题都要求：**脱稿讲出来**，并给出「我在项目里怎么用的」。
 >
 > W05 Day 1 补前三题（IOC/DI 的价值 / Bean 何时创建 / 循环依赖）。
+> W05 Day 2 补 Q4 / Q5（生命周期顺序 / `BeanPostProcessor` 漏掉谁）。
 > 「项目案例」是按常见场景写的**讲稿模板**，细节和数字换成自己项目里的真实版本再背。
 
 ## 题目
@@ -128,3 +129,91 @@ populateBean(...)         // 619：再灌字段
 > 当时以为是「Spring 版本升级」，其实是这次改动让环从「能糊过去」变成「糊不过去」。
 > 最后抽出 `CouponCalculator` 把边打断。
 > 落点：**字段注入能跑，不代表设计没问题；构造器注入是帮你早点发现它。**
+
+### 4. Bean 的生命周期，从造出来到销毁，完整说一遍。
+
+**我的回答（自己的话）：**
+
+一句话骨架：**构造 → 属性注入 → `BPP.before` → 初始化（注解 → 接口 → 配置）→ `BPP.after` → 使用 → 销毁三件套**。
+
+展开成能对上行号的版本（Spring 5.3.39，括号里是同一次运行的实测时间戳）：
+
+| # | 阶段 | 关键位置 |
+| -: | :--- | :--- |
+| ① | 构造（`+375.7 ms`） | `createBeanInstance` → `BeanUtils.instantiateClass` |
+| — | 属性注入 | `populateBean`（**没有回调**，只能用「构造时 null / `@PostConstruct` 里有值」夹出来） |
+| ② | `BPP.before`（`+386.7 ms`） | `initializeBean:1796` → `applyBeanPostProcessorsBeforeInitialization:440` |
+| ③ | `@PostConstruct`（`+389.0 ms`） | `InitDestroyAnnotationBeanPostProcessor.postProcessBeforeInitialization:157` |
+| ④ | `afterPropertiesSet`（`+389.5 ms`） | `invokeInitMethods:1863` |
+| ⑤ | `initMethod`（`+390.2 ms`） | `invokeCustomInitMethod:1874` |
+| ⑥ | `BPP.after`（`+390.5 ms`） | `applyBeanPostProcessorsAfterInitialization:1805` |
+| ⑦⑧⑨ | `@PreDestroy` → `destroy()` → `destroyMethod` | `DisposableBeanAdapter.destroy:194` |
+
+三句要能脱口而出：
+
+1. **`@PostConstruct` 是后处理器调起来的**，不是容器主流程 —— 所以它发生在 ② 里面。
+2. **接口优先于配置**：`afterPropertiesSet` 一定在 `initMethod` 之前；两者重名时只跑一次。
+3. **销毁是逆序 + 依赖方先死**（`dependentBeanMap` 下游优先），不是单纯栈式逆序。
+
+**追问预判：**
+
+- 「`@PostConstruct` 是谁调的？没有它行不行？」——`CommonAnnotationBeanPostProcessor`
+  （继承 `InitDestroyAnnotationBeanPostProcessor`）。它靠 classpath 上有没有 `javax.annotation-api`
+  决定注册与否：JDK 11+ 已把 `javax.annotation` 移出 JDK，没有这个 jar 时**不报错、只是不执行**。
+- 「prototype 的销毁回调会被调吗？」——一次都不会。不是忘了调，
+  是 `AbstractBeanFactory.registerDisposableBeanIfNecessary:1942` 用 `!mbd.isPrototype()` 在登记阶段就短路了。
+- 「`@Bean` 不写 `destroyMethod` 会怎样？」——默认 `INFER_METHOD`，容器自动找 `close()` / `shutdown()`
+  调掉；要关掉写 `destroyMethod = ""`。实测：一个被调 1 次、一个 0 次。
+- 「初始化回调里 `this` 是代理吗？」——不是。代理是 ⑥ 之后才换进去的，
+  所以「同类内部方法调用让 `@Transactional` 失效」是必然的。
+
+**项目里的实际案例：**
+
+> 讲稿模板：某个 `CacheWarmer` 在 `@PostConstruct` 里去查数据库，本地起服务时快、
+> 上测试环境偶尔超时，导致应用启动失败。一开始以为是数据库慢，
+> 后来在 `@PostConstruct` 里打印栈才确认它跑在「容器初始化」阶段 —— 整个应用的启动都被它拖住。
+> 改成实现 `ApplicationRunner`（容器 refresh 完成后才跑）就解决了。
+> 落点：**`@PostConstruct` 属于「Bean 自己的初始化」，不要在里面做跨系统的重活。**
+
+---
+
+### 5. `BeanPostProcessor` 对哪些 Bean 不生效？为什么说它是理解 AOP 的入口？
+
+**我的回答（自己的话）：**
+
+先讲它怎么工作：`postProcessAfterInitialization` 返回的对象就是最终放进单例池的对象 ——
+AOP 在这一步把原对象**换成代理**。所以「初始化回调里的 `this`」和「注入到别人手里的引用」
+是两个不同的对象，这是同类内部调用让 `@Transactional` 失效的根。
+
+再讲它会漏掉谁（实测计数表，两个后处理器，正常 Bean 是 2/2）：
+
+| Bean | 次数 | 原因 |
+| :--- | :---: | :--- |
+| 正常 Bean | 2/2 | 注册完成后创建，两个后处理器都看得见 |
+| 同批后处理器 | **0/0** | `PostProcessorRegistrationDelegate:257~265`：先全部 `getBean` 收集，再统一注册 |
+| 被后处理器 `@Autowired` 的 Bean | **0/0** | 比后处理器还早出生，拿不到全部后处理 |
+| 配置类本身 | **0/0** | 在 `invokeBeanFactoryPostProcessors` 阶段就被实例化了 |
+
+**判断口径（这条最值钱）**：启动日志里出现
+`is not eligible for getting processed by all BeanPostProcessors (for example: not eligible for auto-proxying)`
+时，那个 Bean 上的 `@Transactional` / `@Async` / `@Cacheable` **一定不生效** ——
+不是「可能」，是代理根本没机会套上去。
+
+**追问预判：**
+
+- 「同一批后处理器为什么互相看不见？」——因为注册分两步：先把这一批全部 `getBean` 造好放进局部 List，
+  排序后再统一注册。收集的时候谁都没进列表。
+- 「那谁看得见后处理器自己？」——更早阶段注册的。`CommonAnnotationBeanPostProcessor` 是
+  `PriorityOrdered`，在 253 行就注册完了，所以后处理器身上的 `@PostConstruct` 照样执行（实测两行都打出来了）。
+- 「`@Order` 影响什么？」——只影响后处理器的调用顺序（先 before 后 after 各按同一顺序遍历），
+  不影响 Bean 的创建顺序。
+- 「怎么避免提前创建？」——后处理器 / 监听器里别 `@Autowired` 普通业务 Bean；
+  确实需要就 `ObjectProvider` 延迟取。
+
+**项目里的实际案例：**
+
+> 讲稿模板：一个自定义 `HandlerInterceptor` 里 `@Autowired` 了 `OrderService`，
+> 启动日志有那条 `not eligible`，但没人看。后来 `OrderService` 上加了 `@Transactional`，
+> 线上发现事务不回滚 —— 排查半天，最后是启动日志里那句告警救了命。
+> 改成 `ObjectProvider<OrderService>` 后恢复。
+> 落点：**启动日志里那条 `not eligible` 不是噪音，是「这个 Bean 没有代理」的官方通告。**
