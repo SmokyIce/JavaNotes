@@ -1,0 +1,154 @@
+================================================================
+ W05 Day 3 · Bean 作用域 · 实测快照
+ 生成时间：2026-11-23   JDK：java version "17.0.12" 2024-07-16 LTS   Spring：5.3.39
+ 复现：./run.sh day3.ScopeMatrix ; ./run.sh day3.WebScopeTrap
+================================================================
+
+################ 1/2  ScopeMatrix ################
+
+=== A. singleton vs prototype：三条判据 ===
+  refresh() 刚返回（此刻还没手工 getBean 过）：
+    singletonProbe  构造 1 次  ← 单例在 refresh 里被预实例化了
+    prototypeProbe  构造 0 次  ← 原型不预造，等着被要
+
+  singleton  两次 getBean：singletonProbe#1 / singletonProbe#1 → 是同一个？ true
+  prototype  两次 getBean：prototypeProbe#2 / prototypeProbe#3 → 是同一个？ false
+
+  containsSingleton(singletonProbe) = true
+  containsSingleton(prototypeProbe) = false
+  取过两次之后构造计数：singleton 1 / prototype 2
+
+  close() 之后：singletonProbe @PreDestroy 1 次 / destroy 1 次
+  close() 之后：prototypeProbe @PreDestroy 0 次 / destroy 0 次
+
+  读法：作用域是两个问题合成的一个答案 ——「造几个」和「谁管埋」。
+        singleton 造 1 个且容器负责销毁；prototype 每次一个且**谁取谁负责**，
+        因为 AbstractBeanFactory:1944 的 !mbd.isPrototype() 在登记阶段就短路了。
+
+=== B. thread 作用域：作用域是「容器里的一本登记册」，可插拔 ===
+  先试试能不能把 singleton 也塞进登记册：
+    IllegalArgumentException: Cannot replace existing scopes 'singleton' and 'prototype'
+    ↑ AbstractBeanFactory.registerScope:1041，抛在 1045 —— 这两个名字不许被替换，
+      因为它们的逻辑写在 doGetBean 的 if 分支里，不在 scopes 这张表里。
+  refresh() 前 registerScope("thread", new SimpleThreadScope())
+  容器里登记过的作用域 = [thread]   ← 只有我们手工登记的这一个
+  （singleton / prototype 不在这个名单里：它们是写死在 doGetBean 里的两个 if 分支）
+11月 23, 2026 9:56:23 上午 org.springframework.context.support.SimpleThreadScope registerDestructionCallback
+警告: SimpleThreadScope does not support destruction callbacks. Consider using RequestScope in a web environment.
+  上面那条 WARN 是 SimpleThreadScope 自己打的：它的 registerDestructionCallback 只写日志、不登记 ——
+  也就是说 Spring 自带的 thread 作用域连「管埋」的接口都不实现（又一个只管造不管埋）。
+  main 线程两次 getBean：threadProbe#1 / threadProbe#1 → 同一个？ true
+11月 23, 2026 9:56:23 上午 org.springframework.context.support.SimpleThreadScope registerDestructionCallback
+警告: SimpleThreadScope does not support destruction callbacks. Consider using RequestScope in a web environment.
+  worker-A 线程 getBean：threadProbe#2 → 与 main 的是同一个？ false
+  累计构造 2 个实例（2 个线程各一个）
+  SimpleThreadScope 内部就是一个 ThreadLocal —— 所以「作用域」= 「一份按某个 key 找实例的存储」；
+  换 key 就是换作用域：thread / request / session 全都只是 key 不同。
+  close() 之后 threadProbe 的销毁计数 = 0 —— 容器连调的地方都没有
+
+=== C. 四种作用域的判据矩阵（本次全部实测） ===
+
+  作用域      | 两次 getBean 同一个？ | 进单例池？ | close() 触发销毁回调？ | 非 Web 容器里
+  ----------- | --------------------- | ---------- | ---------------------- | ------------
+  singleton   | 是                    | 是         | 是（@PreDestroy + destroy 各 1 次） | 正常
+  prototype   | 否                    | 否         | 否（登记阶段就被短路）             | 正常
+  request     | 取不到                | 否         | 不会发生                           | 抛 ISE（见 WebScopeTrap A）
+  session     | 取不到                | 否         | 不会发生                           | 抛 ISE（见 WebScopeTrap B）
+
+  注意最后两行的措辞：request / session 不是「行为不同」，是**这个容器压根没有这个作用域**。
+  它们由 spring-web 的 RequestScope / SessionScope 提供，只在 WebApplicationContext 里注册。
+
+################ 2/2  WebScopeTrap ################
+
+=== A. @Scope("request") 在非 Web 容器里 ===
+  new AnnotationConfigApplicationContext(WebScopeConfig.class) 成功了 —— refresh 没有报错。
+  为什么？因为它不是单例：preInstantiateSingletons 的循环压根不会碰它。
+  定义上的 scope = "request"
+  容器登记过的作用域 = []   ← 空的，没有任何自定义作用域
+  getBean("requestProbe") 抛出：
+    java.lang.IllegalStateException
+    message = No Scope registered for scope name 'request'
+    栈（只留 spring / com.newt 的帧）：
+      at org.springframework.beans.factory.support.AbstractBeanFactory.doGetBean(AbstractBeanFactory.java:369)
+      at org.springframework.beans.factory.support.AbstractBeanFactory.getBean(AbstractBeanFactory.java:214)
+      at org.springframework.context.support.AbstractApplicationContext.getBean(AbstractApplicationContext.java:1177)
+      at com.newt.java48.w05.day3.WebScopeTrap.sectionA(WebScopeTrap.java:54)
+      at com.newt.java48.w05.day3.WebScopeTrap.main(WebScopeTrap.java:32)
+
+  源码位置：AbstractBeanFactory.doGetBean（本次 5.3.39 的行号）
+    363  String scopeName = mbd.getScope();
+    365  if (!StringUtils.hasLength(scopeName)) throw new IllegalStateException("No scope name defined ...");
+    367  Scope scope = this.scopes.get(scopeName);
+    369  if (scope == null) throw new IllegalStateException("No Scope registered for scope name '" + scopeName + "'");
+  这句话是「查表查不到」，不是「这个作用域不能这么用」—— 表里没有就是没有。
+
+=== B. 换成 session：同一个错，换个名字 ===
+  getBean("sessionProbe") 抛出：
+    java.lang.IllegalStateException
+    message = No Scope registered for scope name 'session'
+    栈（只留 spring / com.newt 的帧）：
+      at org.springframework.beans.factory.support.AbstractBeanFactory.doGetBean(AbstractBeanFactory.java:369)
+      at org.springframework.beans.factory.support.AbstractBeanFactory.getBean(AbstractBeanFactory.java:214)
+      at org.springframework.context.support.AbstractApplicationContext.getBean(AbstractApplicationContext.java:1177)
+  结论：request / session 不是「行为不同」，是**这个容器没有这两个作用域**。
+  spring-web 的 RequestScope / SessionScope 才把它们注册进 WebApplicationContext；
+  所以同一段代码在 Spring Boot Web 里跑得好好的，挪到单测里就炸 —— 单测里没有 Web 上下文。
+
+=== C. proxyMode：为什么需要「作用域代理」 ===
+  场景：一个 singleton 里注入一个 prototype。它拿到的是「当时那一个」，不会自己变。
+
+  C1 没有代理（@Scope("prototype") 直接注入）：
+     holder 里的字段是 plainProto#1
+     第 1 次调用 probe.id() → 1
+     第 2 次调用 probe.id() → 1
+     第 3 次调用 probe.id() → 1
+     原型累计构造 1 个 —— 注入那一刻的那一个，之后再也不问容器
+
+  C2 加 @Scope(value="prototype", proxyMode=TARGET_CLASS)：
+     holder 里的字段类型是 com.newt.java48.w05.day3.ScopeProbe$$EnhancerBySpringCGLIB$$<hash>（代理，不是 ScopeProbe 本身）
+     第 1 次调用 probe.id() → 2
+     第 2 次调用 probe.id() → 3
+     第 3 次调用 probe.id() → 4
+     原型累计构造 3 个 —— 每次方法调用都重新解析目标
+  机制：代理类每个方法先调 TargetSource.getTarget() → beanFactory.getBean(name)，
+        所以「什么时候真的去容器里要」被推迟到了方法调用那一刻。
+
+  C2b 代理是怎么实现的？注册阶段把一个定义拆成了两个：
+     scopedTarget.requestProxy  scope=request    class=-                                              factoryMethod=requestProxy
+     requestProxy               scope=(singleton) class=org.springframework.aop.scope.ScopedProxyFactoryBean factoryMethod=-
+     外层 requestProxy 是个单例的 FactoryBean（它的 class 就是 ScopedProxyFactoryBean，产代理），
+     真身挪到了 scopedTarget.requestProxy，还带着 scope=request 和原来的 factoryMethod；
+     真身那个定义 class 是空的也正常 —— @Bean 方法产出的定义只有 factoryMethod，没有 class。
+     所以「代理」不是魔法，是容器在注册期做的一次定义替换。
+
+  C3 同一个机理用在 Web 作用域上：getBean 不报错了，第一次调用才报
+     getBean("requestProxy") 拿到 com.newt.java48.w05.day3.ScopeProbe$$EnhancerBySpringCGLIB$$<hash>（代理），没抛异常
+     现在调它的方法：
+  requestProxy.id() 抛出：
+    java.lang.IllegalStateException
+    message = No Scope registered for scope name 'request'
+    栈（只留 spring / com.newt 的帧）：
+      at org.springframework.beans.factory.support.AbstractBeanFactory.doGetBean(AbstractBeanFactory.java:369)
+      at org.springframework.beans.factory.support.AbstractBeanFactory.getBean(AbstractBeanFactory.java:209)
+      at org.springframework.aop.target.SimpleBeanTargetSource.getTarget(SimpleBeanTargetSource.java:35)
+      at org.springframework.aop.framework.CglibAopProxy$DynamicAdvisedInterceptor.intercept(CglibAopProxy.java:691)
+    这就是 proxyMode 的真正价值：**把「什么时候解析目标实例」从注入时推迟到使用时**。
+    Web 里它让单例能安全持有 request 作用域的 Bean；代价是错误从启动期挪到了运行期。
+
+=== D. 自定义 Scope：每 2 次 getBean 换一个实例 ===
+  registerScope("every-two", scope) + @Scope("every-two") 就装上了 —— 不用改容器源码。
+  第 1 次 getBean → everyTwoProbe#1
+  第 2 次 getBean → everyTwoProbe#1
+  第 3 次 getBean → everyTwoProbe#2
+  第 4 次 getBean → everyTwoProbe#2
+  构造 2 个 / scope.get() 被调 4 次 / 轮换时触发销毁回调 1 次
+  ctx.close() 之后销毁回调累计 1 次 —— **没有变化**
+
+  两条容易忽略的：
+  ① 自定义作用域的 Bean，销毁回调不是容器调的，是登记时交给 scope 的 ——
+     AbstractBeanFactory:1952~1960 那个 else 分支：
+       Scope scope = this.scopes.get(mbd.getScope());
+       scope.registerDestructionCallback(beanName, new DisposableBeanAdapter(...));
+     所以「什么时候销毁」由 scope 决定（我们是轮换时调 cb.run()）。
+  ② ctx.close() 只销毁单例（DefaultSingletonBeanRegistry.destroySingletons），
+     自定义作用域里的最后一个实例容器不管 —— 真实现里要在 scope 里自己收尾（或实现 remove/clear）。

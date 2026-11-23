@@ -26,6 +26,8 @@
 ./run.sh day1.ContainerQuestions
 ./run.sh day2.LifecycleOrder  # 带包名 → day2 的入口必须写全
 ./run.sh day2.PostProcessorTrace
+./run.sh day3.ScopeMatrix
+./run.sh day3.WebScopeTrap
 ```
 
 `run.bat` 同款。`run.sh` 里 classpath 是 `out;lib/*`（Windows 分隔符是 `;`，Git Bash 下也别改成 `:`）。
@@ -42,6 +44,8 @@ w05-spring-ioc-di/
 ├── day1-spring-source.txt       Spring 源码取证（行号能和栈对上）
 ├── day2-result.txt              Day 2 两段实验的实测（140 行）
 ├── day2-spring-source.txt       Day 2 源码取证（7 段：initializeBean / 销毁登记 / BPP 注册…）
+├── day3-result.txt              Day 3 两段实验的实测（154 行）
+├── day3-spring-source.txt       Day 3 源码取证（7 段：doGetBean 作用域分支 / registerScope / SimpleThreadScope / ScopedProxyUtils…）
 └── src/main/java/com/newt/java48/w05/
     ├── support/
     │   ├── Trace.java           「谁 new 的、什么时候 new 的」打点
@@ -55,7 +59,7 @@ w05-spring-ioc-di/
     │   ├── MemoryConfig.java    「换实现」版配置：排除 jdbc，@Bean 出 memory
     │   ├── app/                 同一套业务类（Controller / Job / Test / Service / Repo / Calc）
     │   └── cycle/               FieldA⇄FieldB（字段注入）、CtorA⇄CtorB（构造器注入）
-    └── day2/
+    ├── day2/
         ├── LifecycleOrder.java  A 六回调时间线 / B 逆序销毁 / C prototype / D 推断 close()
         ├── LifecycleBean.java   ①构造 ③@PostConstruct ④afterPropertiesSet ⑤⑥⑦⑧⑨ 全挂在身上
         ├── LifecycleBpp.java    插进 ② 与 ⑥ 两个钩子
@@ -70,6 +74,10 @@ w05-spring-ioc-di/
         ├── EarlyDependent.java  被后处理器 @Autowired → 提前创建 → 拿不到代理
         ├── PlainBean.java       普通 Bean，2/2 的样本
         └── StackDumpBean.java   在 @PostConstruct 里打印栈
+    └── day3/
+        ├── ScopeMatrix.java     A singleton vs prototype 三条判据 / B thread 作用域 / C 判据矩阵
+        ├── WebScopeTrap.java    A request 报错原文 / B session / C proxyMode / D 自定义 Scope
+        └── ScopeProbe.java      探针 Bean：构造数 / @PreDestroy / destroy 三个计数
 ```
 
 ## 三、五段实验各自证明了什么
@@ -140,7 +148,31 @@ Q4 那个 **19 → 20** 是原型作用域最干净的证据：原型造完连�
 反过来也验证了：后处理器**自己**的 `@PostConstruct` 照样执行（两行都打出来了）——
 因为 `CommonAnnotationBeanPostProcessor` 是 `PriorityOrdered`，比我们早注册。
 
-## 四、七个坑
+### 6. `ScopeMatrix` / `WebScopeTrap` —— 作用域是两个问题：造几个 + 谁管埋
+
+| 段 | 结论 | 证据（实测） |
+| :--- | :--- | :--- |
+| A | singleton 造 1 个进池；prototype 每次一个不进池 | `refresh()` 后构造数 `1 / 0`；两次 `getBean` 的 `==` 是 `true / false`；`containsSingleton` 是 `true / false` |
+| A 销毁 | 只有 singleton 被销毁 | `close()` 后 `@PreDestroy` 与 `destroy` 各 `1/1`（singleton）vs `0/0`（prototype） |
+| B | `singleton` / `prototype` 不在作用域表里 | `registerScope("singleton", …)` → `IllegalArgumentException: Cannot replace existing scopes 'singleton' and 'prototype'`；`getRegisteredScopeNames()` 只列出自己登记的 `[thread]` |
+| B | 作用域 = 一份按 key 找实例的存储 | `SimpleThreadScope` 就是 `NamedThreadLocal<Map>`：main 两次同实例，`worker-A` 另造一个（共 2 个）；它还直接 WARN「不支持销毁回调」 |
+| C1/C2 | `proxyMode` 前：单例永远抱着第一个原型 | 三次 `id()` 全是 `1`，构造只有 1 个；加 `TARGET_CLASS` 后 `2 / 3 / 4`，构造 3 个 |
+| C2b | 代理 = 注册期把一个定义拆成两个 | `scopedTarget.requestProxy`（`scope=request`）+ `requestProxy`（`class=ScopedProxyFactoryBean`，单例） |
+| C3 | `proxyMode` 只是把解析推迟，不修错 | `getBean` 不抛；第一次 `id()` 抛同一个 ISE，栈上多一帧 `SimpleBeanTargetSource.getTarget:35` |
+| D | 自定义作用域是插件 | `registerScope("every-two", scope)` + `@Scope("every-two")`：4 次 `getBean` 得到 `A A B B`，轮换时销毁回调 1 次，`close()` 后仍是 1 次 |
+
+三条能直接拿去面试的：
+
+1. **`request` / `session` 在非 Web 容器的报错是「查表查不到」**：
+   `IllegalStateException: No Scope registered for scope name 'request'`（`AbstractBeanFactory:369`），
+   而且 **`refresh()` 不报错、`getBean` 才报** —— 因为它不是单例，预实例化循环根本不碰它。
+2. **`proxyMode` 的价值是「推迟解析」，不是「每次新对象」**：代理每个方法先
+   `SimpleBeanTargetSource.getTarget()` → `beanFactory.getBean(scopedTarget.xxx)`；
+   代价是把启动期的错误挪到了运行期（C3 段）。
+3. **自定义作用域的销毁回调交给 scope 自己**（`AbstractBeanFactory:1952~1960` 的 else 分支），
+   而 `ctx.close()` 只销毁单例 —— 所以作用域实现者必须自己收尾。
+
+## 四、九个坑
 
 1. **`Src.count` 把自己数进去了。** 第一版把针脚 `"new JdbcOrderRepository("` 写在统计代码里当字符串常量，
    于是 `SpringWiring`（明明 0 个 new）数出 3、`AppConfig` 也数出 3。改成 `countNew(src, "JdbcOrderRepository")`
@@ -162,10 +194,16 @@ Q4 那个 **19 → 20** 是原型作用域最干净的证据：原型造完连�
    下错包不会报错，只会「注解不执行」——静默失效最难查。
 7. **栈帧行号指向调用点，不是方法声明行。** `postProcessBeforeInitialization` 声明在 154，
    栈上是 157（`metadata.invokeInitMethods` 那句）。**引行号前先跑一次**，别照抄博客。
+8. **`@Scope` 注解和 `Scope` 接口同名。** 同一个文件里既 `import …annotation.Scope`（注解）
+   又要 `implements Scope`（接口）→ 编译报「对 Scope 的引用不明确」。接口写全限定名是唯一干净解法。
+9. **`SimpleThreadScope` 没有 `SCOPE_NAME` 常量。** 我按 `ConfigurableBeanFactory` 的习惯写了
+   `SimpleThreadScope.SCOPE_NAME`，编译不过 —— 它的作用域名在配置里写死字符串 `"thread"`。
+   同类的坑：`registerDisposableBeanIfNecessary` 声明在 1942，但 `!isPrototype()` 那句在 1944，
+   引行号必须说清「声明 / 语句」。
 
 ## 五、待办（W05 剩下的六天）
 
 - [x] Bean 生命周期（Day 2 完成：六回调 + 后处理器 + 三个追问）
-- [ ] Bean 作用域全量（singleton / prototype 已做，补 request / session 的存在意义）
+- [x] Bean 作用域（Day 3 完成：四条判据 + `request` 报错原文 + `proxyMode` + 自定义 Scope）
 - [ ] `@Autowired` vs `@Resource` vs 构造器注入的取舍
 - [ ] 补 `pom.xml`（装了 Maven 之后）

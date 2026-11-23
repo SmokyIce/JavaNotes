@@ -1,7 +1,7 @@
 # W05 · Spring IOC / DI
 
 > **第一阶段 · 打基础（W01–W12）** ｜ 预计投入 ≈ 7 小时（每天 60 分钟）
-> 状态：🟨 进行中（Day 2 11-23）　｜　开始日期：2026-11-20　｜　完成日期：____-__-__
+> 状态：🟨 进行中（Day 3 11-23）　｜　开始日期：2026-11-20　｜　完成日期：____-__-__
 
 > 💡 目标理解：Spring 到底在帮你管理什么？
 
@@ -11,7 +11,7 @@
 
 - [x] Bean · IOC · DI
 - [x] Bean 生命周期
-- [ ] Bean 作用域
+- [x] Bean 作用域
 - [ ] Spring 到底在帮你管理什么
 
 > Day 1 勾第一格：`Bean · IOC · DI`。
@@ -26,7 +26,11 @@
 > **③ 能解释 prototype 的销毁回调为什么「一次都不会被调」（源码在登记阶段就短路了）。**
 >
 > 第四格「Spring 到底在帮你管理什么」要等 Day 6 收尾时才勾 —— 现在只有半张答案。
-> 第三格（作用域）留到 Day 3，今天只顺带证明了「prototype 不进单例池、不管销毁」。
+>
+> Day 3 勾第三格：`Bean 作用域`。判断标准三条，全部有实测输出：
+> **① 能说出「造几个」和「谁管埋」是同一个 `scope` 属性的两个后果（四条判据能当场列出来）；**
+> **② 能背出 `No Scope registered for scope name 'request'` 这句，并说清它为什么在 `getBean` 才抛、`refresh` 不抛；**
+> **③ 能解释 `proxyMode` 是「把解析推迟到调用时」而不是「每次新对象」—— 并且知道代价是错误从启动期挪到运行期。**
 
 ## 二、核心问题（能用自己的话脱稿讲出来，才算学会）
 
@@ -54,6 +58,13 @@ Day 2（已完成 11-23）  工具链增量：lib/ 多一个 javax.annotation-ap
                        + PostProcessorTrace：两个 BPP 的计数表（谁 2/2、谁 0/0）、
                          @PostConstruct 的执行栈、同批 BPP 互相看不见、Ordered 生效顺序
                        + support/Stacks：把「这个回调是谁调的」从栈上读出来
+Day 3（已完成 11-23）  工具链：无新增 jar（spring-aop 早就在；CGLIB 在 spring-core 里）
+                       + ScopeMatrix：singleton / prototype 三条判据（两次 getBean / 单例池 / 销毁回调）/
+                         registerScope 拒绝覆盖 singleton / thread 作用域（SimpleThreadScope）/
+                         四作用域判据矩阵
+                       + WebScopeTrap：request、session 在非 Web 容器的报错原文与栈 /
+                         proxyMode 三组对照（原型注入单例 1-1-1 vs 2-3-4、定义拆成两个、报错时机后移）/
+                         自定义 Scope（每 2 次 getBean 换实例 + 销毁回调交给 scope）
 ```
 
 ### Day 1 · 2026-11-20（周五）· 「Spring 帮你管理什么」——用 diff 回答，不用定义回答
@@ -466,6 +477,157 @@ JDK 11 起 `javax.annotation` 已从 JDK 移除，JDK 17 上没有它 —— `@P
   `AnnotationConfigUtils` 检测到 `javax.annotation.Resource` 存在才注册。
   没有 jar 时不会报错，`@PostConstruct` 只是「不执行」—— 静默失效。
 
+### Day 3 · 2026-11-23（周一 · 第二个时间盒）· Bean 作用域：造几个 + 谁管埋
+
+| 时间 | 做什么 | 产出 |
+| -: | :--- | :--- |
+| 10 分钟 | 复述 Day 2：六回调顺序 + `@PostConstruct` 谁调的 + prototype 为什么不销毁 | 口头过 |
+| 20 分钟 | `singleton` / `prototype` 三条判据（两次 `getBean` 是否同一个 / 进不进单例池 / 销毁回调） | `day3/ScopeMatrix.java` A 段 |
+| 20 分钟 | `request` / `session` 在非 Web 容器的报错原文 + `@Scope(proxyMode)` 为什么存在 | `day3/WebScopeTrap.java` A~C |
+| 5 分钟 | 自定义 `Scope`：每 2 次 `getBean` 换一个实例 | 同文件 D 段 |
+| 5 分钟 | 快照 + 源码取证 + 本节笔记 + 勾掉「Bean 作用域」 | 笔记 + 快照 |
+
+实测快照：`w05-spring-ioc-di/day3-result.txt`（154 行）
+源码取证：`w05-spring-ioc-di/day3-spring-source.txt`（7 段，行号与栈逐一对撞）
+
+#### 1. 四条判据，一张矩阵说完
+
+| 作用域 | 两次 `getBean` 同一个？ | 进单例池？ | `close()` 触发销毁回调？ | 非 Web 容器 |
+| :--- | :--- | :--- | :--- | :--- |
+| `singleton` | 是（`singletonProbe#1` 两次） | 是（`containsSingleton = true`） | 是：`@PreDestroy` 1 次 + `destroy` 1 次 | 正常 |
+| `prototype` | 否（`#2` / `#3`） | 否 | **否：0 次 / 0 次** | 正常 |
+| `request` | 取不到 | 否 | 不会发生 | `IllegalStateException` |
+| `session` | 取不到 | 否 | 不会发生 | 同上，只换个名字 |
+| `thread`（外挂） | 同线程是、跨线程否 | 否 | 否（`SimpleThreadScope` 直接 WARN 不支持） | 需先 `registerScope` |
+
+两个数字值得记：`refresh()` 刚返回时，`singletonProbe` **已经构造 1 次**、`prototypeProbe` **0 次** ——
+这就是 Day 1 那条「Bean 在 `refresh()` 里造完」的又一次复核，只不过这次是从「作用域」这一侧看。
+
+作用域其实是**两个问题合成的一个答案**：
+
+- **造几个**（存哪儿、按什么 key 找）→ `scopes` 里那个 `Scope` 实现决定；
+- **谁管埋**（销毁回调谁负责）→ `registerDisposableBeanIfNecessary` 的三个分支决定。
+
+#### 2. `singleton` / `prototype` 根本不在作用域表里
+
+`getBeanFactory().getRegisteredScopeNames()` 打印出来是 `[thread]` —— 只有我手工登记的那个。
+再试着登记一个同名覆盖：
+
+```text
+registerScope("singleton", new SimpleThreadScope())
+  → IllegalArgumentException: Cannot replace existing scopes 'singleton' and 'prototype'
+```
+
+源码 `AbstractBeanFactory.registerScope:1041`，抛在 **1045**：
+
+```java
+if (SCOPE_SINGLETON.equals(scopeName) || SCOPE_PROTOTYPE.equals(scopeName)) {
+    throw new IllegalArgumentException("Cannot replace existing scopes 'singleton' and 'prototype'");
+}
+```
+
+原因很简单：它们不是查表查出来的，是 `doGetBean` 里**写死的两个 `if` 分支**
+（`mbd.isSingleton()` / `mbd.isPrototype()`），第三个 `else` 才是查表的自定义作用域。
+**所以「作用域」在 Spring 里是一张可插拔的表，只有前两个名字是特权。**
+
+#### 3. `request` / `session`：报错在 `getBean`，不在 `refresh`
+
+```text
+new AnnotationConfigApplicationContext(WebScopeConfig.class)      ← 成功，不报错
+getBeanDefinition("requestProbe").getScope()                      → "request"
+getRegisteredScopeNames()                                         → []
+getBean("requestProbe") → java.lang.IllegalStateException
+                          message = No Scope registered for scope name 'request'
+  栈：AbstractBeanFactory.doGetBean:369 ← getBean:214 ← AbstractApplicationContext.getBean:1177
+```
+
+三件事要连起来讲：
+
+1. **`refresh()` 为什么不报？** 因为 `preInstantiateSingletons()` 的条件是
+   `!isAbstract() && isSingleton() && !isLazyInit()` —— 它不是单例，循环压根不碰它。
+2. **报错措辞是「查表查不到」**，不是「这个作用域不能这么用」：
+   `doGetBean:367` 查 `scopes`，`369` 发现是 `null` 就抛。
+3. **它在哪里才是真的？** 在 `WebApplicationContext` 里，由 spring-web 的 `RequestScope` /
+   `SessionScope` 注册进去。所以同一段代码在 Spring Boot Web 里好好的，挪到单测里就炸 ——
+   单测里没有 Web 上下文，这才是「非 Web 环境跑 Spring 代码」最常见的第一个坑。
+
+#### 4. `proxyMode` 的两个用途：一个是「每次新的」，一个是「以后再说」
+
+**用途一：单例里注入原型**（`C1` vs `C2`，全部实测）
+
+| 写法 | 三次 `probe.id()` | 原型构造数 |
+| :--- | :--- | ---: |
+| `@Scope("prototype")` 直接注入 | `1 / 1 / 1`（永远是注入时那一个） | 1 |
+| `@Scope(value="prototype", proxyMode=TARGET_CLASS)` | `2 / 3 / 4` | 3 |
+
+单例只在**注入那一刻**问容器要了一次对象，之后手里那个引用不会自己变。
+加代理后，注入的是 `ScopeProbe$$EnhancerBySpringCGLIB$$<hash>`，**每次方法调用**先
+`SimpleBeanTargetSource.getTarget()` → `beanFactory.getBean("scopedTarget.proxiedProto")`。
+
+**代理是怎么实现的？** 注册阶段把**一个定义拆成两个**（`C2b`，读的是定义表）：
+
+```text
+scopedTarget.requestProxy   scope=request      class=-                                       factoryMethod=requestProxy
+requestProxy                scope=(singleton)  class=org.springframework.aop.scope.ScopedProxyFactoryBean   factoryMethod=-
+```
+
+`ScopedProxyUtils:41` 里那个常量 `TARGET_NAME_PREFIX = "scopedTarget."` 就是命名来源；
+外层那个是单例的 `FactoryBean`（产代理），真身挪到 `scopedTarget.xxx` 并保留 `scope=request`。
+
+**用途二：Web 作用域注入单例**（`C3`）—— 这里要看清一件事：
+`getBean("requestProxy")` **不抛异常了**，第一次 `id()` 才抛，而且是同一个错：
+
+```text
+requestProxy.id() → IllegalStateException: No Scope registered for scope name 'request'
+  at AbstractBeanFactory.doGetBean:369
+  at AbstractBeanFactory.getBean:209
+  at SimpleBeanTargetSource.getTarget:35          ← 代理在这里才去容器要目标
+  at CglibAopProxy$DynamicAdvisedInterceptor:691
+```
+
+所以 `proxyMode` 的价值是**把「什么时候解析目标实例」从注入时推迟到使用时**，
+不是「修好了 `request` 作用域」。代价很明确：**错误从启动期挪到了运行期**。
+
+#### 5. 自定义 `Scope`：容器只依赖其中三个方法
+
+`Scope` 接口五个方法（`Scope.java` 行号：`get` 74 / `remove` 93 / `registerDestructionCallback` 124 /
+`resolveContextualObject` 134 / `getConversationId` 152），容器真正用的是前三个。
+我实现了一个「第 1、3、5… 次 `get` 换新实例」的怪作用域，`registerScope("every-two", scope)` 装上：
+
+```text
+第 1 次 getBean → everyTwoProbe#1
+第 2 次 getBean → everyTwoProbe#1
+第 3 次 getBean → everyTwoProbe#2
+第 4 次 getBean → everyTwoProbe#2
+构造 2 个 / scope.get() 被调 4 次 / 轮换时销毁回调 1 次
+ctx.close() 之后销毁回调累计 1 次 —— 没有变化
+```
+
+两条容易忽略的：
+
+1. **销毁回调不是容器调的**，是登记时**交给 scope** 的 —— 就是 Day 2 那段源码的 `else` 分支
+   （`registerDisposableBeanIfNecessary` 声明在 1942，`!mbd.isPrototype()` 在 1944，
+   `else` 在 1952~1960）。prototype 连这个 `else` 都进不去（1944 就短路），
+   所以「自定义作用域**有**销毁回调、prototype **没有**」的差别就落在这里。
+2. **`ctx.close()` 只销毁单例**（`DefaultSingletonBeanRegistry.destroySingletons`），
+   自定义作用域里的最后一个实例容器不管。真实现里必须自己收尾，否则就是内存里留着一个没人认领的对象。
+
+**再补一个 Spring 自带的例子**（`ScopeMatrix` B 段）：`SimpleThreadScope` 就是一个
+`NamedThreadLocal<Map<String,Object>>` —— main 线程两次同实例、`worker-A` 另造一个（共 2 个）。
+而且它的 `registerDestructionCallback` 只打一条 WARN：
+
+```text
+警告: SimpleThreadScope does not support destruction callbacks. Consider using RequestScope in a web environment.
+```
+
+连 Spring 自己写的作用域都能「只管造不管埋」—— 这反过来证明：**埋不埋是 `Scope` 实现者的事，容器只负责登记。**
+
+#### 6. 一句话记法
+
+> **作用域 = 「造几个」+「谁管埋」+「什么时候解析」。**
+> 前两个由定义的 `scope` 决定；第三个由 `proxyMode` 决定。
+> 面试被问「`@Scope` 有什么用」，答这三条比背 `singleton`/`prototype` 的定义有用得多。
+
 ## 四、踩坑与 Bug 复盘
 
 | 现象 | 原因 | 排查过程 | 解决 | 底层原理 |
@@ -477,6 +639,11 @@ JDK 11 起 `javax.annotation` 已从 JDK 移除，JDK 17 上没有它 —— `@P
 | `bppSecond` 的计数是 0/0，与预期「至少被 `bppFirst` 处理一次」相反 | 同一批（Ordered）后处理器是「先全部 `getBean` 收集，再统一注册」 | 先怀疑自己写错，再去看 `PostProcessorRegistrationDelegate:257~265`，最后被表格数字说服 | 结论改成「同批互相看不见；只有更早阶段（PriorityOrdered）注册的才看得见它」 | 收集与注册是两个循环；「顺序」这件事在 BPP 上要分「阶段」和「批内」两层 |
 | 文案里写 `postProcessBeforeInitialization:154`，栈上却是 157 | 154 是方法声明行，157 是 `metadata.invokeInitMethods` 那行 | 把栈打印出来逐行对：389 / 333 / 157 / 440 / 1796 | 文案改成「声明在 154，执行帧在 157」，并说明差在哪 | 栈帧行号指向**调用点**，不是方法签名行 —— 引行号前必须自己跑一次 |
 | `@PostConstruct` 编译不过：`程序包 javax.annotation 不存在` | JDK 11 起 `javax.annotation` 已从 JDK 移除 | 一眼确认；该类在 `lib/` 里没有对应的 jar | `lib/` 补 `javax.annotation-api-1.3.2.jar`（Spring 5 用 javax，不是 jakarta） | 没有这个 jar 时，即使换个方式跑起来，`@PostConstruct` 也是**静默不执行**；容器自动注册 `CommonAnnotationBeanPostProcessor` 的前提就是 classpath 上有它 |
+| 编译报「对 `Scope` 的引用不明确」 | `@Scope`（注解）与 `Scope`（接口）**同名**，同一个文件里 `import …annotation.Scope` 之后，`implements Scope` 就二义了 | javac 直接把两个候选都列了出来 | `implements org.springframework.beans.factory.config.Scope` 写全限定名 | Spring 里这种「注解与接口同名」不止一处（`@Order`/`Ordered`、`@Scope`/`Scope`）；类里要同时用两个时，注解 import、接口全限定是最省事的写法 |
+| `SimpleThreadScope.SCOPE_NAME` 报「找不到符号」 | 这个类**没有** `SCOPE_NAME` 常量；作用域名是字符串 `"thread"` | 去源码里 grep，确认只有 `get/remove/registerDestructionCallback/…` | 写 `registerScope("thread", new SimpleThreadScope())` + `@Scope("thread")` | 又一次「断言先于实测」：我按 `ConfigurableBeanFactory.SCOPE_SINGLETON` 的习惯想当然，实际那个常量在工厂接口上，不在 scope 实现上 |
+| 文案写 `AbstractBeanFactory:1942 的 !mbd.isPrototype()` | 1942 是**方法声明**，1944 才是那句 `if` | 用 `awk` 带行号打印源码，逐行对 | 改成「声明 1942、`if` 在 1944」，并把这个差别写进 `day3-spring-source.txt` 的抬头 | 和 Day 2 的 154 vs 157 是同一类错：**行号必须说清是「声明」还是「语句」**，栈帧只给调用点 |
+| 第一版写「拆出来的两个定义 class 都是空的」 | 外层 `requestProxy` 的 `class` 是 `ScopedProxyFactoryBean`（显式类），只有真身 `scopedTarget.requestProxy` 是 `@Bean` 定义（只有 `factoryMethod`，没有 `class`） | 定义了 `C2b` 段把 `scope / class / factoryMethod` 三列都打出来，实跑就对上了 | 文案改成「外层有 class、真身只有 factoryMethod」 | `@Bean` 方法产出的 `BeanDefinition` 本来就没有 `beanClass`；读定义表时不能只看 class 一列 |
+| 文案写「容器 `close()` 时会通知 scope」 | `close()` 只销毁单例（`destroySingletons`），自定义作用域不在其中 | D 段实测：轮换时销毁计数 1，`close()` 后仍是 1 | 改成「自定义作用域的生命周期由 scope 自己负责，容器不管收尾」 | 作用域是插件，插件里的资源也得插件自己收 —— 这和 prototype「谁取谁负责」是同一条原则 |
 
 ## 五、面试会怎么问
 
@@ -511,6 +678,23 @@ JDK 11 起 `javax.annotation` 已从 JDK 移除，JDK 17 上没有它 —— `@P
   `@Autowired` 进去的 Bean、配置类。后果是 `is not eligible for auto-proxying`，代理套不上。
 - 「为什么说 `BeanPostProcessor` 是 AOP 的入口？」——代理是在 `postProcessAfterInitialization` 里
   把原对象**换掉**的；所以初始化回调里 `this` 还是原对象，注入到别处的才是代理。
+- 「Spring 有几种作用域？」——标准六个（`singleton` / `prototype` / `request` / `session` /
+  `application` / `websocket`），但**只有前两个是写死在 `doGetBean` 的 `if` 里的**，
+  后四个是 spring-web 注册进 `scopes` 表的插件；`registerScope` 想覆盖前两个会直接抛
+  `Cannot replace existing scopes`。
+- 「`request` 作用域的 Bean 在单测里为什么取不到？」——容器里没这个作用域：
+  `No Scope registered for scope name 'request'`（`AbstractBeanFactory:369`）。
+  追问「为什么启动不报错」→ 因为它不是单例，`preInstantiateSingletons` 不碰它，**报错推迟到第一次 `getBean`**。
+- 「单例里注入一个 prototype，会变成新的吗？」——不会，注入那一刻拿到哪个就一直是哪个（实测三次 `id` 全是 1）。
+  要每次新的，加 `proxyMode = TARGET_CLASS`，代理每次方法调用回容器要一次（实测 `2 / 3 / 4`）。
+- 「`proxyMode` 到底做了什么？」——注册阶段把定义拆成两个：`scopedTarget.xxx`（真身，带 `scope`）
+  和外层 `xxx`（单例的 `ScopedProxyFactoryBean`，产代理）。价值是**把解析推迟到调用时**，
+  所以它修的是「作用域不匹配」，不是「作用域不存在」—— `request` 在非 Web 容器里加了代理照样抛，只是抛得晚。
+- 「自定义作用域怎么写？」——实现 `Scope` 的五个方法（容器只用 `get` / `remove` /
+  `registerDestructionCallback`），`registerScope` 注册，Bean 上 `@Scope("名字")`。
+- 「自定义作用域里的 Bean 谁销毁？」——**scope 自己**。容器在登记阶段把 `DisposableBeanAdapter`
+  交给 `scope.registerDestructionCallback`，`close()` 只销毁单例。`SimpleThreadScope` 干脆不支持，
+  只打一条 WARN —— 这就是「容器管造不管埋」的第三个例子（前两个：prototype、`@Bean` 的 `destroyMethod` 推断）。
 
 ## 六、一句话总结
 
@@ -524,6 +708,7 @@ JDK 11 起 `javax.annotation` 已从 JDK 移除，JDK 17 上没有它 —— `@P
 | :--- | :--- | :--- | ---: | :--- | :--: |
 | 11-20 | 五 | W05 Day 1：IOC / DI —— 手写装配 vs 容器装配，谁 new、何时 new、循环依赖 | 70 min | `ManualWiring` + `SpringWiring` + `ContainerQuestions` + `day1-result.txt`（355 行）+ 源码取证 | ✅ |
 | 11-23 | 一 | W05 Day 2：Bean 生命周期 —— 六回调顺序 / 后处理器 / 三个追问 | 65 min | `LifecycleOrder` + `PostProcessorTrace` + `day2-result.txt`（140 行）+ `day2-spring-source.txt`（7 段） | ✅ |
+| 11-23 | 一 | W05 Day 3：Bean 作用域 —— 四条判据 / `request` 报错 / `proxyMode` / 自定义 Scope | 60 min | `ScopeMatrix` + `WebScopeTrap` + `ScopeProbe` + `day3-result.txt`（154 行）+ `day3-spring-source.txt`（7 段） | ✅ |
 
 ---
 
@@ -645,3 +830,82 @@ AOP 在这一步把原对象**换成代理**。所以「初始化回调里的 `t
 从这张表能推出一条实战判断：**启动日志里只要出现 `is not eligible for getting processed by
 all BeanPostProcessors`，那个 Bean 上的 `@Transactional` / `@Async` / `@Cacheable` 就一定是假的**。
 不是「可能不生效」，是「一定不生效」—— 代理根本没机会套上去。
+
+---
+
+**Q6 · Bean 的作用域到底在控制什么？`request` 在非 Web 环境为什么取不到？**
+
+**作用域 = 「造几个」+「存哪儿」+「谁管埋」三件事的一个属性。** 不是「生命周期长短」这么含糊的说法。
+
+四条判据（本次全部实测，`day3-result.txt`）：
+
+| 作用域 | 两次 `getBean` 同一个？ | 进单例池？ | `close()` 触发销毁回调？ | 非 Web 容器 |
+| :--- | :--- | :--- | :--- | :--- |
+| `singleton` | 是 | 是 | 是（`@PreDestroy` 1 + `destroy` 1） | 正常 |
+| `prototype` | 否 | 否 | 否（0 / 0） | 正常 |
+| `request` / `session` | 取不到 | 否 | 不会发生 | `IllegalStateException` |
+
+关键差别在**它们怎么被解析**：
+
+- `singleton` / `prototype` 是 `doGetBean` 里**写死的两个 `if` 分支**，不查表。
+  证据：`registerScope("singleton", …)` 直接抛
+  `IllegalArgumentException: Cannot replace existing scopes 'singleton' and 'prototype'`（`AbstractBeanFactory:1045`）。
+- 其余作用域都在 `scopes` 这张 `Map<String, Scope>` 里，走到第三个分支才查：
+  `Scope scope = this.scopes.get(scopeName); if (scope == null) throw …`（367 / 369）。
+
+**所以「取不到」的真实原因是「表里没有这一项」**，报错原文：
+
+```text
+java.lang.IllegalStateException: No Scope registered for scope name 'request'
+	at AbstractBeanFactory.doGetBean(AbstractBeanFactory.java:369)
+```
+
+三个必须接住追问的点：
+
+1. **为什么启动不报？** 因为它不是单例 —— `preInstantiateSingletons` 的条件
+   `!isAbstract() && isSingleton() && !isLazyInit()` 不成立，循环不碰它，错误推迟到第一次 `getBean`。
+2. **`request` / `session` 什么时候才是真的？** 在 `WebApplicationContext` 里，由 spring-web 的
+   `RequestScope` / `SessionScope` 注册（它们依赖 `RequestContextHolder` 里当前线程的请求）。
+3. **实战**：纯单测里写 `@Scope("request")` 的 Bean，一定炸；要让它能跑，得加
+   `@WebMvcTest` / `@SpringBootTest(webEnvironment = RANDOM_PORT)` 之类有 Web 上下文的测试。
+   这也解释了「本地跑得好、单测一跑就 null」的一类怪问题。
+
+---
+
+**Q7 · `proxyMode` 到底解决什么问题？为什么说它是「把错误推迟」？**
+
+**它解决的是「作用域不匹配」，不是「作用域不存在」。**
+
+场景一（最高频）：单例里注入 prototype。
+
+```text
+没有代理：三次 probe.id() → 1 / 1 / 1，原型只造了 1 个
+加了 TARGET_CLASS：三次 → 2 / 3 / 4，造了 3 个
+```
+
+单例只在注入那一刻向容器要了一次；之后手里那个引用不会自己变。这不是 bug，是「引用」语义的必然。
+
+机制（读定义表能看到，`C2b` 段）：
+
+```text
+scopedTarget.requestProxy   scope=request      class=-                                       factoryMethod=requestProxy
+requestProxy                scope=(singleton)  class=org.springframework.aop.scope.ScopedProxyFactoryBean
+```
+
+`ScopedProxyUtils:41` 的 `TARGET_NAME_PREFIX = "scopedTarget."` 就是命名来源；
+外层是单例的 `FactoryBean`（产代理），真身被改名单独注册并保留 `scope`。
+代理每个方法先 `SimpleBeanTargetSource.getTarget():35` → `beanFactory.getBean("scopedTarget.xxx")`。
+
+场景二（它真正的价值）：单例需要「每个请求一个对象」。
+Web 里这靠代理合法地做到 —— 单例持有代理，每次方法调用去当前请求的 `RequestScope` 里取。
+
+**代价必须说清**：同一个错在非 Web 容器里从「`getBean` 时抛」变成了「第一次调用时抛」：
+
+```text
+getBean("requestProxy")   → 成功（拿到代理）
+requestProxy.id()         → IllegalStateException: No Scope registered for scope name 'request'
+	at doGetBean:369 ← getBean:209 ← SimpleBeanTargetSource.getTarget:35 ← CglibAopProxy$DynamicAdvisedInterceptor:691
+```
+
+一句话收口：**`proxyMode` 换的是「解析时机」，不是「解析结果」**。
+面试里如果只答「加注解就每次新的」，多半会被追一句「那 `request` 在单测里为什么还是不行」，答案就在这。

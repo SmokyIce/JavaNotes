@@ -20,11 +20,11 @@ M0 封板 10-27；**M1 封板 11-20**；当前 **M2 · Spring 内核**。
 | W02 泛型/异常/Optional/Lambda/Stream/收集器 | ✅ 封板 11-03 |
 | W03 并发（4 天） | ✅ 封板 11-11 |
 | W04 线程池 / CompletableFuture（2 天） | ✅ 封板 11-19 |
-| W05 Spring IOC/DI | 🟨 Day 1（11-20 IOC/DI）+ **Day 2（11-23 生命周期）完成** |
+| W05 Spring IOC/DI | 🟨 Day 1（11-20 IOC/DI）+ Day 2（生命周期）+ **Day 3（11-23 作用域）完成** |
 
-- **下一步：W05 Day 3 = Bean 作用域**（四种作用域对照 / `request` 在非 Web 容器的报错原文 /
-  `@Scope(proxyMode)` / 自定义 `Scope`）；之后 Day 4~ 的 AOP 交给 W06。
-- 题库：`Java基础.md` 24、`Java并发.md` 12、`Spring.md` **5**（M2 只要 6 道，快够了）。
+- **下一步：W05 Day 4 = 注入方式的取舍**（`@Autowired` byType vs `@Resource` byName / `@Qualifier` /
+  `@Primary` / 集合注入 `List`·`Map` + `@Order` / 构造器注入两细节）；AOP 那部分交给 W06。
+- 题库：`Java基础.md` 24、`Java并发.md` 12、`Spring.md` **7**（M2 只要 6 道，已超额）。
 - 已知待办：`pom.xml` 推到 W05 收尾（本机没 Maven，写了验证不了）。
 
 ## W05 工程（唯一需要 jar 的工程）
@@ -122,10 +122,26 @@ Bean 在 `refresh()` 里造完（构造 +312~338 ms、容器 +354 ms，那 300 m
 同批 BPP 与提前创建的 Bean 全 **0/0**（「先全部 `getBean` 收集、再统一注册」`PostProcessorRegistrationDelegate:257~265`）；
 提前创建 → 启动日志 `not eligible for auto-proxying` = **代理套不上 = 事务/异步必然失效**。
 
+**Spring 作用域（W05 D3）**：`singleton` / `prototype` **不在 `scopes` 表里**，是 `doGetBean` 写死的两个 `if`，
+第三个 `else` 才查表 —— 覆盖会被拒（`Cannot replace existing scopes`，`registerScope:1045`），
+`getRegisteredScopeNames()` 只列出自己登记的；四条判据（两次 `getBean` 同否 / 进池 / 销毁 / 非 Web 容器）：
+singleton 是·是·`1+1`·正常，prototype 否·否·`0+0`·正常，request/session 取不到；
+`request` 报 `No Scope registered for scope name 'request'`（`doGetBean:369`），**refresh 不报、getBean 才报**
+（不是单例 → `preInstantiateSingletons` 不碰）；`@Scope(proxyMode)` 是**把解析推迟到调用时**：
+单例注入原型三次 `id()` 从 `1/1/1` 变 `2/3/4`，实现是注册期拆成 `scopedTarget.xxx`（真身带 scope）+
+外层 `ScopedProxyFactoryBean` 单例；`request` + 代理后 `getBean` 不抛、首次调用抛同一 ISE
+（栈多 `SimpleBeanTargetSource:35`）；自定义作用域的销毁回调交给 `scope.registerDestructionCallback`
+（`:1952~1960` else 分支，prototype 在 1944 就短路），`ctx.close()` **只销毁单例**；
+`SimpleThreadScope` 就是一个 `NamedThreadLocal`，且**不支持销毁回调只打 WARN**。
+
 ## 工作方式上的硬教训（每条都踩过两次以上）
 
 - **断言先于实测**：本月反复栽（`sorted` 屏障、`Predicate` 优先级、`monitorenter`、活锁必然性、
-  `bppSecond` 的 1/1、栈行号 154）。**写进注释/笔记的「结论」，先跑一遍。**
+  `bppSecond` 的 1/1、栈行号 154、`SimpleThreadScope.SCOPE_NAME`、`:1942` vs `:1944`）。
+  **写进注释/笔记的「结论」，先跑一遍。**
+- **别按上一个类的 API 猜这一个类**：`ConfigurableBeanFactory.SCOPE_SINGLETON` 有、`SimpleThreadScope` 就没有常量。
+  要写常量名/静态字段，先 `grep` 源码。
+- **引行号必须说清「声明 / 语句 / 调用点」**（`1942` 是声明、`1944` 才是那句 `if`；`154` vs `157`）。
 - **不同脚手架的数字不能放一张表**（内联自增 vs 包 lambda：22 ms vs 107 ms，结论从 15 倍改成 5.8 倍）；
   统一脚手架 + 开头 `warmup()` 再计时。
 - **靠概率的实验不能当结论**（`notify` 叫错人 20 轮只丢 2 次）——要证明「丢了」得构造必然丢的场景。

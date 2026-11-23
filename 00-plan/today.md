@@ -3,109 +3,102 @@ title: 今天做什么
 date: 2026-11-23
 weekday: 周一
 milestone: M2 · Spring 内核
-task: W05 Day 2 — Bean 生命周期（六回调 + BeanPostProcessor）
+task: W05 Day 3 — Bean 作用域（四条判据 + request 报错 + proxyMode + 自定义 Scope）
 status: 已完成
 ---
 
 # 今天 · 2026-11-23（周一）· 已完成
 
-> 昨天证明了「对象是容器造的」，今天要回答「造完之后又对它做了什么」。
-> 顺序背下来没有用 —— 要靠打点把它**打出来**，再靠栈把「谁调的」钉死。
+> 前两个时间盒回答的是「造几个」和「造完做什么」，今天回答第三个：
+> **同一份定义，能不能造出「每个请求一个」「每个线程一个」这种生命周期的对象。**
+> 一句话剧透：`singleton` / `prototype` 是写死的两个 `if`，其余全是查表 —— 表里没有就报错。
 
 ## 一、先查的遗留
 
 | 检查项 | 结果 |
 | :--- | :--- |
-| 清空 `out/` 全量重编 w05（21 文件 / 24 class）+ 跑三个入口 | ✅ 全 exit=0，行数 59 / 127 / 154，与 11-20 的 355 行快照一致 —— 无回归、无中断代码 |
-| `01-notes` 里的未勾项 | W05 剩「Bean 生命周期 / 作用域 / Spring 帮你管理什么」；第二格是今天的任务，另两格未到 |
+| 清空 `out/` 全量重编 w05（37 文件 / 45 class）+ 跑五个入口 | ✅ 全 exit=0，行数 61 / 129 / 156 / 56 / 77，无回归、无中断代码 |
+| `01-notes` 里的未勾项 | W05 只剩「Bean 作用域」（= 今天）与「Spring 到底在帮你管理什么」（留 Day 6 收尾）；W06 起未解锁 |
 | `02-code` 空目录 | `w05-` 已开工；`w06-` 起仍是 `.gitkeep`（M2 后续，不是遗留） |
-| 11-20 留的两条待办 | ① `pom.xml` → 仍按计划推到 W05 收尾（本机没 Maven，写了验证不了）；② 「Bean 生命周期」 → **今天做完** |
-| 11-20 与今天之间断了 3 天（11-21~11-22 周末） | 按里程碑制规则：不补课，直接从「下一个时间盒」接着走 |
+| Day 2 留的两条待办 | ① `pom.xml` → 仍推到 W05 收尾（本机没 Maven）；② 三个追问 → 已在 Day 2 答完 |
+| 与上一个时间盒的关系 | 今天上午刚做完 Day 2（同一台机器、同一份 `today.md`），本次是**同一天的第二个 60 分钟**，不涉及补课 |
 
-**结论：没有需要补的中断代码。** 今天的起点就是 W05 Day 2。
+**结论：没有需要补的中断代码。** 起点就是 W05 Day 3。
 
-## 二、今天的正题：两个程序 + 一个新 jar
+## 二、今天的正题：两个程序 + 一个探针
 
-代码在 `02-code/stage1-basics/w05-spring-ioc-di/day2/`（14 个文件）：
+代码在 `02-code/stage1-basics/w05-spring-ioc-di/day3/`：
 
 | 文件 | 内容 |
 | :--- | :--- |
-| `LifecycleOrder.java` | A 六回调 + 两个钩子的时间线 / B 逆序销毁 / C prototype / D 推断 `close()` |
-| `LifecycleBean.java` | 一个类上挂三种初始化 + 三种销毁，每个回调打时间戳 |
-| `LifecycleBpp.java` | 把 ② 与 ⑥ 两个钩子插进序列，只对 `lifecycleBean` 打 |
-| `LifecycleConfig.java` | `@Bean(initMethod, destroyMethod)`；后处理器用 `static` 方法声明 |
-| `LifecycleRepo.java` | 属性注入的观测点：构造时 null、初始化时有值 |
-| `Alpha` / `Beta` | 依赖关系 → 销毁顺序 |
-| `PrototypeBean.java` | 销毁回调计数（恒 0） |
-| `AutoCloseBean` / `ManualOffBean` | 推断 `close()` 的开关对照 |
-| `PostProcessorTrace.java` | A 计数表 / B `@PostConstruct` 栈 / C 三追问 / D `Ordered` |
-| `TraceBpp.java` | 会计数的后处理器，自己带 `@PostConstruct` 做对照 |
-| `EarlyDependent.java` | 被后处理器 `@Autowired` → 提前创建 → 拿不到代理 |
-| `StackDumpBean.java` | 在 `@PostConstruct` 里打印栈 |
-| `support/Stacks.java` | 栈过滤脚手架（只留 spring 与 com.newt 的帧） |
-| `lib/javax.annotation-api-1.3.2.jar` | 第 7 个 jar，JDK 17 上没有 `@PostConstruct` |
+| `ScopeMatrix.java` | A `singleton` vs `prototype` 三条判据 / B `thread` 作用域（含「覆盖 singleton 会被拒」）/ C 四作用域判据矩阵 |
+| `WebScopeTrap.java` | A `request` 报错原文与栈 / B `session` 同款 / C `proxyMode` 三组对照 / D 自定义 `Scope` |
+| `ScopeProbe.java` | 探针 Bean：构造数 / `@PreDestroy` 数 / `destroy` 数，按角色分开记 |
+
+产出的两个文件：`day3-result.txt`（154 行）、`day3-spring-source.txt`（7 段源码，行号与栈对撞）。
 
 ## 三、今天挖到的五个点
 
-1. **六回调的真实顺序（实测时间戳）：**
-   `①构造 +375.7 → ②BPP.before +386.7 → ③@PostConstruct +389.0 → ④afterPropertiesSet +389.5
-   → ⑤initMethod +390.2 → ⑥BPP.after +390.5 →（refresh 返回 +408.7）→ ⑦@PreDestroy +411.4
-   → ⑧destroy +411.8 → ⑨destroyMethod +412.0 ms`。
-   **② 在 ③ 之前** —— 这条说明 `@PostConstruct` 不是容器主流程调的。
+1. **作用域 = 「造几个」+「谁管埋」+「什么时候解析」。**
+   前两个由 `scope` 决定，第三个由 `proxyMode` 决定。四条判据一次列清：
+   `singleton` 两次同一个 / 进池 / 销毁 1+1；`prototype` 两次不同 / 不进池 / 销毁 0+0；
+   `request` `session` 在非 Web 容器里根本取不到。
 
-2. **`@PostConstruct` 的执行者是后处理器，栈上有三个行号。**
-   `InitDestroyAnnotationBeanPostProcessor:157` ← `applyBeanPostProcessorsBeforeInitialization:440`
-   ← `initializeBean:1796`。具体载体是 `CommonAnnotationBeanPostProcessor:205`（`setInitAnnotationType`）。
+2. **`singleton` / `prototype` 不在作用域表里。**
+   `registerScope("singleton", …)` → `IllegalArgumentException: Cannot replace existing scopes
+   'singleton' and 'prototype'`（`AbstractBeanFactory:1045`）；`getRegisteredScopeNames()` 只有自己登记的 `[thread]`。
+   它们写在 `doGetBean` 的两个 `if` 里，第三个 `else` 才查表。
 
-3. **属性注入没有回调，只能用两个点夹住。** 构造器里 `repo=null`、`@PostConstruct` 里 `repo=jdbc`。
-   「初始化」这个名字有前提：**初始化的是已经装配好的对象**。
+3. **`request` 的报错是「查表查不到」，而且 `refresh()` 不报、`getBean` 才报。**
+   `No Scope registered for scope name 'request'`（`doGetBean:369`）；
+   启动不报是因为它不是单例，`preInstantiateSingletons` 的循环压根不碰它。
 
-4. **prototype 的销毁回调一次都不会被调，而且不是「忘了调」。**
-   `AbstractBeanFactory.registerDisposableBeanIfNecessary:1942` 第一行就是 `if (!mbd.isPrototype() && ...)` ——
-   登记阶段就短路，销毁阶段自然找不到它。
+4. **`proxyMode` 不是「每次新对象」，是「把解析推迟到调用时」。**
+   单例里注入原型：不加代理三次 `id()` 全是 `1`（只造 1 个）；加了 `TARGET_CLASS` 是 `2 / 3 / 4`（造 3 个）。
+   实现是注册期把一个定义拆两个（`scopedTarget.requestProxy` + 外层的 `ScopedProxyFactoryBean`）。
+   拿 `request` 试就露出真相：`getBean` 不抛了，第一次 `id()` 抛同一个 ISE。
 
-5. **后处理器只看得见「注册完成之后」出生的 Bean，同批的还互相看不见。**
-   计数表：正常 Bean 2/2；`bppFirst` / `bppSecond` / `earlyDependent` 全 0/0。
-   原因在 `PostProcessorRegistrationDelegate:257~265`：先全部 `getBean` 收集，再统一注册。
-   被提前创建的那个还会收到官方告警 `not eligible for auto-proxying` ——
-   **= 拿不到代理 = `@Transactional` / `@Async` 白写**。
+5. **自定义 `Scope` 证明作用域是插件；`SimpleThreadScope` 证明「埋」也得插件自己干。**
+   `every-two` 作用域：4 次 `getBean` → `A A B B`，轮换时销毁 1 次，`close()` 后仍是 1 次
+   （容器 `close()` 只销毁单例）。Spring 自带的 `SimpleThreadScope` 连销毁回调都不支持，直接打 WARN。
 
-## 四、今天踩的坑（三个）
+## 四、今天踩的坑（五个，四个是「先说后验」）
 
-- **`bppSecond` 应该是 1/1？实测 0/0。** 我按「注册完第一个就会处理第二个」理所当然地写了文案，
-  被表格数字打回来。真正的机制是「先收集、后注册」，**同批全瞎**。
-  教训：**「顺序」在 BPP 上要分「阶段」和「批内」两层**，别拿一条规则套所有情况。
-- **栈上 `postProcessBeforeInitialization:154` 对不上。** 154 是方法声明，157 才是
-  `metadata.invokeInitMethods`。栈帧行号指向**调用点**。引行号前先跑一遍。
-- **`@PostConstruct` 在 JDK 17 上编译不过**（`程序包 javax.annotation 不存在`）。
-  JDK 11+ 已把它移出 JDK，必须补 `javax.annotation-api`；Spring 5 用 `javax.*`、Spring 6 才换 `jakarta.*`。
-  更阴的是：**没有这个 jar 时不报错，`@PostConstruct` 只是不执行**。
+- **`@Scope` 注解和 `Scope` 接口同名。** 同一个文件里 `import …annotation.Scope` 之后
+  `implements Scope` 直接编译失败（「对 `Scope` 的引用不明确」）。接口写全限定名才干净。
+- **`SimpleThreadScope.SCOPE_NAME` 根本不存在。** 我按 `ConfigurableBeanFactory.SCOPE_SINGLETON`
+  的习惯想当然 —— 第三次栽在「按上一个类的 API 猜这一个类」。
+- **行号又错了一次：`AbstractBeanFactory:1942` 是方法声明，`!isPrototype()` 在 1944。**
+  Day 2 刚在 154 vs 157 上栽过，同一个病。
+- **第一版写「拆出来的两个定义 class 都为空」**，实跑发现外层是 `ScopedProxyFactoryBean`；
+  只有真身（`@Bean` 定义）才没有 class、只有 `factoryMethod`。
+- **文案写「容器 `close()` 时会通知 scope」**，实测销毁计数不变 —— `close()` 只销毁单例。
 
 ## 五、环境备忘
 
-- 跑今天：`./run.sh day2.LifecycleOrder`（约 0.4 s）/ `./run.sh day2.PostProcessorTrace`（约 0.3 s）
-- **day2 的入口必须写全包名**：`run.sh` 的短名分支只认 `day1`
-- 时间戳每次跑抖 ±30 ms，文档里的数字是本次快照，改代码后要重新生成 `day2-result.txt` 再抄
-- A 段容器启动仍是 ~375 ms（类加载 + 扫包），不是 `new` 慢
+- 跑今天：`./run.sh day3.ScopeMatrix`（约 0.5 s）/ `./run.sh day3.WebScopeTrap`（约 0.4 s）
+- day3 的入口同样**必须写全包名**（`run.sh` 短名分支只认 `day1`）
+- 没有新增 jar：CGLIB 在 `spring-core` 里，`ScopedProxyMode` / `SimpleThreadScope` 都在已有的 jar 内
+- `ScopeMatrix` B 段会打两条 JUL WARN（`SimpleThreadScope does not support destruction callbacks`），
+  这是**证据不是噪音**，快照里保留原样
 
 ---
 
 # 下一个时间盒（60 分钟）
 
-**W05 Day 3：Bean 作用域** —— 代码放 `day3/`
+**W05 Day 4：注入方式的取舍 —— `@Autowired` / `@Resource` / 构造器，以及「多个候选」怎么收场**
 
-> 前两天回答的是「造几个」和「造完做什么」，今天回答「**同一份定义，能造出几种生命周期的对象**」。
-> 一句话剧透：`singleton` 是容器里一个，`prototype` 是每次一个，`request` / `session` 是**每个请求/会话一个**，
-> 而它们只有在 Web 容器里才活得下去 —— 在 `AnnotationConfigApplicationContext` 里直接报错。
-> 这不是背结论，是要**看到那个错**。
+> 作用域解决的是「给几个」，注入解决的是「给哪个」。同一个接口有两个实现时，
+> Spring 不会猜，它会抛 `NoUniqueBeanDefinitionException` —— 今天要把这个错**打出来**，
+> 再看 `@Primary` / `@Qualifier` / 集合注入三种收场方式。
 
 | 时间 | 做什么 | 产出 |
 | -: | :--- | :--- |
-| 10 分钟 | 复述 Day 2：六回调顺序 + `@PostConstruct` 谁调的 + prototype 为什么不销毁 | 口头过 |
-| 20 分钟 | 四种作用域的对照表：`getBean` 两次是否同一个 / 是否进单例池 / 销毁回调会不会被调（复用 `PrototypeBean` 的计数思路） | `day3/ScopeMatrix.java` |
-| 20 分钟 | `request` / `session` 在非 Web 容器里的报错原文（`No Scope registered for scope name 'request'`）+ `@Scope(proxyMode)` 为什么存在 | `day3/WebScopeTrap.java` |
-| 5 分钟 | 自定义作用域：`Scope` 接口三方法 + `registerScope`，实现一个「每 2 次 getBean 换一个实例」的怪作用域 —— 证明作用域是**插件化**的 | 同文件 C 段 |
-| 5 分钟 | 输出 `day3-result.txt` + 笔记 Day 3 小节 + 勾掉「Bean 作用域」 | 笔记 + 快照 |
+| 10 分钟 | 复述 Day 3：作用域三问 + `request` 为什么取不到 + `proxyMode` 推迟了什么 | 口头过 |
+| 20 分钟 | 同一个接口两个实现，分别用 `@Autowired`（byType）/ `@Resource`（byName）/ `@Qualifier` / `@Primary` 注入，把四个结果打出来 | `day4/InjectionChoice.java` |
+| 15 分钟 | 集合注入：`List<PayChannel>` / `Map<String, PayChannel>`（key = beanName）+ `@Order` 决定顺序 | 同文件 B 段 |
+| 10 分钟 | 构造器注入的两个细节：单构造器免注解 / 多构造器必须标一个；`ObjectProvider` 延迟取 | 同文件 C 段 |
+| 5 分钟 | 输出 `day4-result.txt` + 笔记 Day 4 小节 + 观察 `AutowiredAnnotationBeanPostProcessor` 的栈（接 Day 2） | 笔记 + 快照 |
 
-> 优先做第三个 20 分钟。**「`request` 作用域在非 Web 环境报什么错」和「`proxyMode` 解决什么问题」**
-> 是面试里区分「用过 Spring」和「读过 Spring」的地方 —— 后者答不上来通常是没踩过那个错。
+> 优先做第三个 20 分钟里的「四个结果」。`@Resource` 按名字、`@Autowired` 按类型 ——
+> 这句话谁都会背，但**两种注解在「名字对不上」时的报错完全不同**，那个差异才是面试的落点。

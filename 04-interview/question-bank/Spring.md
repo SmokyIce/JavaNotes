@@ -5,6 +5,7 @@
 >
 > W05 Day 1 补前三题（IOC/DI 的价值 / Bean 何时创建 / 循环依赖）。
 > W05 Day 2 补 Q4 / Q5（生命周期顺序 / `BeanPostProcessor` 漏掉谁）。
+> W05 Day 3 补 Q6 / Q7（作用域四种判据 / `proxyMode` 是把错误推迟）。
 > 「项目案例」是按常见场景写的**讲稿模板**，细节和数字换成自己项目里的真实版本再背。
 
 ## 题目
@@ -217,3 +218,105 @@ AOP 在这一步把原对象**换成代理**。所以「初始化回调里的 `t
 > 线上发现事务不回滚 —— 排查半天，最后是启动日志里那句告警救了命。
 > 改成 `ObjectProvider<OrderService>` 后恢复。
 > 落点：**启动日志里那条 `not eligible` 不是噪音，是「这个 Bean 没有代理」的官方通告。**
+
+---
+
+### 6. Spring 的作用域有几种？`request` 作用域在非 Web 环境为什么取不到？
+
+**我的回答（自己的话）：**
+
+**作用域不是「生命周期长短」，是三个问题的一个答案：造几个 / 存哪儿 / 谁管埋。**
+
+四条判据（W05 Day 3 全部实测）：
+
+| 作用域 | 两次 `getBean` 同一个？ | 进单例池？ | `close()` 触发销毁回调？ | 非 Web 容器 |
+| :--- | :--- | :--- | :--- | :--- |
+| `singleton` | 是 | 是 | 是（`@PreDestroy` 1 + `destroy` 1） | 正常 |
+| `prototype` | 否 | 否 | 否（0 / 0） | 正常 |
+| `request` / `session` | 取不到 | 否 | 不会发生 | `IllegalStateException` |
+
+关键在**解析路径不一样**：
+
+- `singleton` / `prototype` 是 `doGetBean` 里**写死的两个 `if` 分支**，不查表。证据：想覆盖直接报错
+  `IllegalArgumentException: Cannot replace existing scopes 'singleton' and 'prototype'`（`AbstractBeanFactory:1045`）。
+- 其余作用域都在 `scopes` 这张 `Map<String, Scope>` 里，走到第三个分支才查表；
+  查不到就抛（`AbstractBeanFactory:367 / 369`）：
+
+```text
+java.lang.IllegalStateException: No Scope registered for scope name 'request'
+```
+
+**为什么启动不报错？** 因为它不是单例，`preInstantiateSingletons` 的条件
+（`!isAbstract() && isSingleton() && !isLazyInit()`）不成立，循环不碰它 ——
+**错误推迟到第一次 `getBean`**。
+
+**追问预判：**
+
+- 「那 Web 里为什么就行？」——spring-web 的 `RequestScope` / `SessionScope` 在
+  `WebApplicationContext` 初始化时注册进去，它们从 `RequestContextHolder` 里取当前线程绑定的请求。
+- 「单测里怎么才不炸？」——要么有 Web 上下文（`@WebMvcTest` / `@SpringBootTest(webEnvironment=…)`），
+  要么别用 `request` 作用域，改成方法参数传。
+- 「`prototype` 谁销毁？」——没人。`registerDisposableBeanIfNecessary` 第一句
+  `!mbd.isPrototype() && ...` 就短路了，连登记都没有。
+- 「自定义作用域怎么写？」——实现 `Scope` 五个方法（容器只用 `get` / `remove` /
+  `registerDestructionCallback`），`registerScope` 注册，Bean 上 `@Scope("名字")`。
+
+**项目里的实际案例：**
+
+> 讲稿模板：一个导出服务用 `@Scope("request")` 存当前登录人，线上没问题；
+> 后来加了一个定时任务也想复用它，单测一跑就 `No Scope registered for scope name 'request'`。
+> 排查发现单测没有 Web 上下文。改法两种：单测加 `@SpringBootTest(webEnvironment = RANDOM_PORT)`，
+> 或者把「当前登录人」从 Bean 里挪出去，改成方法参数（更干净）。
+> 落点：**看见 `No Scope registered`，先问「这个容器有没有 Web 上下文」，不要怀疑注解写错了。**
+
+---
+
+### 7. `@Scope(proxyMode)` 解决什么问题？为什么说它是「把错误推迟」而不是「修好错误」？
+
+**我的回答（自己的话）：**
+
+它解决的是**作用域不匹配**，不是**作用域不存在**。
+
+**场景一（最高频）：单例里注入 prototype。** 单例只在注入那一刻向容器要了一次，
+之后那个引用不会自己变 —— 实测三次 `id()` 全是同一个，原型只造了 1 个。
+加 `proxyMode = TARGET_CLASS` 后，注入的是代理，**每次方法调用**回容器要一次：`2 / 3 / 4`，造了 3 个。
+
+**它的实现是「注册期把一个定义拆成两个」**（读定义表能直接看到）：
+
+```text
+scopedTarget.requestProxy   scope=request      class=-                                       factoryMethod=requestProxy
+requestProxy                scope=(singleton)  class=org.springframework.aop.scope.ScopedProxyFactoryBean
+```
+
+外层是单例的 `FactoryBean`（产代理），真身被改名 `scopedTarget.` 前缀单独注册、保留原 `scope`。
+代理每次方法调用先 `SimpleBeanTargetSource.getTarget():35` → `beanFactory.getBean("scopedTarget.xxx")`。
+
+**场景二（它真正的价值）**：单例需要「每个请求一个对象」。Web 里靠代理合法做到 ——
+单例持有代理，每次调用去当前请求的 `RequestScope` 里取。
+
+**为什么说它是「把错误推迟」**：同一个 `request` Bean，加了代理之后
+`getBean` 不抛了，**第一次调用方法才抛**，而且是同一个异常：
+
+```text
+getBean("requestProxy") → 成功（拿到代理）
+requestProxy.id()       → IllegalStateException: No Scope registered for scope name 'request'
+	at doGetBean:369 ← getBean:209 ← SimpleBeanTargetSource.getTarget:35 ← CglibAopProxy$DynamicAdvisedInterceptor:691
+```
+
+**追问预判：**
+
+- 「`TARGET_CLASS` 和 `INTERFACES` 怎么选？」——有接口用 `INTERFACES`（JDK 代理，不用生成子类），
+  没接口只能 `TARGET_CLASS`（CGLIB）。被代理的类不能是 `final`、方法不能是 `final`。
+- 「代理会不会有性能开销？」——每次方法调用多一次 `getBean` 查找 + 一次代理分派；
+  高频路径上别把代理当普通字段用。
+- 「prototype 注入单例的另一种修法？」——`ObjectProvider<T>` / `@Lookup` /
+  每次从 `ApplicationContext.getBean()` 取。`ObjectProvider` 最干净（不引入代理，也不依赖容器）。
+- 「`@Scope` 注解和 `Scope` 接口混了怎么办？」——两者同名，同一个文件里 `implements` 要用全限定名
+  `org.springframework.beans.factory.config.Scope`，否则编译报「对 Scope 的引用不明确」。
+
+**项目里的实际案例：**
+
+> 讲稿模板：一个 `TokenService`（单例）里 `@Autowired` 了 `@Scope("prototype")` 的
+> `Signer`（每次要有独立的状态）。压测发现并发下签名串错乱 —— 因为单例里那个 `Signer`
+> 从启动到停机都是同一个，状态被多线程共享。改成 `proxyMode = TARGET_CLASS`（或 `ObjectProvider`）后正常。
+> 落点：**「单例里注入原型」不会报错，只会静默变成「其实是单例」——这是最典型的作用域陷阱。**

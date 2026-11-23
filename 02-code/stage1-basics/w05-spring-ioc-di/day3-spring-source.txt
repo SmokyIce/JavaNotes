@@ -1,0 +1,278 @@
+================================================================
+ W05 Day 3 · 作用域相关源码（Spring 5.3.39 sources jar）
+ 用法：行号与 day3-result.txt 里栈上的行号逐一对撞
+ 注意：registerDisposableBeanIfNecessary 声明在 1942，但 !isPrototype() 那句在 1944 ——
+       引「哪一行」时必须说清是声明还是语句（Day 2 踩过同一个坑）。
+================================================================
+
+### 1. AbstractBeanFactory.doGetBean:362-376（第三个分支：自定义作用域）
+    singleton / prototype 是上面两个 if 分支；走到 else 才查 scopes 这张表
+    367 查表 → 369 查不到就抛（本次实测的 ISE 就在 369）→ 372 交给 scope.get()
+----------------------------------------------------------------
+				else {
+					String scopeName = mbd.getScope();
+					if (!StringUtils.hasLength(scopeName)) {
+						throw new IllegalStateException("No scope name defined for bean '" + beanName + "'");
+					}
+					Scope scope = this.scopes.get(scopeName);
+					if (scope == null) {
+						throw new IllegalStateException("No Scope registered for scope name '" + scopeName + "'");
+					}
+					try {
+						Object scopedInstance = scope.get(beanName, () -> {
+							beforePrototypeCreation(beanName);
+							try {
+								return createBean(beanName, mbd, args);
+							}
+
+### 2. AbstractBeanFactory.registerDisposableBeanIfNecessary:1942-1962
+    1944 !mbd.isPrototype() 短路 prototype；1945 单例登记给容器；1952-1960 自定义作用域登记给 scope
+----------------------------------------------------------------
+	protected void registerDisposableBeanIfNecessary(String beanName, Object bean, RootBeanDefinition mbd) {
+		AccessControlContext acc = (System.getSecurityManager() != null ? getAccessControlContext() : null);
+		if (!mbd.isPrototype() && requiresDestruction(bean, mbd)) {
+			if (mbd.isSingleton()) {
+				// Register a DisposableBean implementation that performs all destruction
+				// work for the given bean: DestructionAwareBeanPostProcessors,
+				// DisposableBean interface, custom destroy method.
+				registerDisposableBean(beanName, new DisposableBeanAdapter(
+						bean, beanName, mbd, getBeanPostProcessorCache().destructionAware, acc));
+			}
+			else {
+				// A bean with a custom scope...
+				Scope scope = this.scopes.get(mbd.getScope());
+				if (scope == null) {
+					throw new IllegalStateException("No Scope registered for scope name '" + mbd.getScope() + "'");
+				}
+				scope.registerDestructionCallback(beanName, new DisposableBeanAdapter(
+						bean, beanName, mbd, getBeanPostProcessorCache().destructionAware, acc));
+			}
+		}
+	}
+
+### 3. AbstractBeanFactory.registerScope:1040-1063
+    1044-1045 明确禁止覆盖 singleton / prototype —— 因为它们不在这张表里，而在 doGetBean 的 if 分支里
+----------------------------------------------------------------
+	@Override
+	public void registerScope(String scopeName, Scope scope) {
+		Assert.notNull(scopeName, "Scope identifier must not be null");
+		Assert.notNull(scope, "Scope must not be null");
+		if (SCOPE_SINGLETON.equals(scopeName) || SCOPE_PROTOTYPE.equals(scopeName)) {
+			throw new IllegalArgumentException("Cannot replace existing scopes 'singleton' and 'prototype'");
+		}
+		Scope previous = this.scopes.put(scopeName, scope);
+		if (previous != null && previous != scope) {
+			if (logger.isDebugEnabled()) {
+				logger.debug("Replacing scope '" + scopeName + "' from [" + previous + "] to [" + scope + "]");
+			}
+		}
+		else {
+			if (logger.isTraceEnabled()) {
+				logger.trace("Registering scope '" + scopeName + "' with implementation [" + scope + "]");
+			}
+		}
+	}
+
+	@Override
+	public String[] getRegisteredScopeNames() {
+		return StringUtils.toStringArray(this.scopes.keySet());
+	}
+
+### 4. Scope 接口（五个方法，只有前三个被容器依赖）
+    74 get / 93 remove / 124 registerDestructionCallback / 134 resolveContextualObject / 152 getConversationId
+----------------------------------------------------------------
+public interface Scope {
+
+	/**
+	 * Return the object with the given name from the underlying scope,
+	 * {@link org.springframework.beans.factory.ObjectFactory#getObject() creating it}
+	 * if not found in the underlying storage mechanism.
+	 * <p>This is the central operation of a Scope, and the only operation
+	 * that is absolutely required.
+	 * @param name the name of the object to retrieve
+	 * @param objectFactory the {@link ObjectFactory} to use to create the scoped
+	 * object if it is not present in the underlying storage mechanism
+	 * @return the desired object (never {@code null})
+	 * @throws IllegalStateException if the underlying scope is not currently active
+	 */
+	Object get(String name, ObjectFactory<?> objectFactory);
+
+	/**
+	 * Remove the object with the given {@code name} from the underlying scope.
+	 * <p>Returns {@code null} if no object was found; otherwise
+	 * returns the removed {@code Object}.
+	 * <p>Note that an implementation should also remove a registered destruction
+	 * callback for the specified object, if any. It does, however, <i>not</i>
+	 * need to <i>execute</i> a registered destruction callback in this case,
+	 * since the object will be destroyed by the caller (if appropriate).
+	 * <p><b>Note: This is an optional operation.</b> Implementations may throw
+	 * {@link UnsupportedOperationException} if they do not support explicitly
+	 * removing an object.
+	 * @param name the name of the object to remove
+	 * @return the removed object, or {@code null} if no object was present
+	 * @throws IllegalStateException if the underlying scope is not currently active
+	 * @see #registerDestructionCallback
+	 */
+	@Nullable
+	Object remove(String name);
+
+	/**
+    ...
+	 * that its target object is serializable as well.
+	 * @throws IllegalStateException if the underlying scope is not currently active
+	 * @see org.springframework.beans.factory.DisposableBean
+	 * @see org.springframework.beans.factory.support.AbstractBeanDefinition#getDestroyMethodName()
+	 * @see DestructionAwareBeanPostProcessor
+	 */
+	void registerDestructionCallback(String name, Runnable callback);
+
+	/**
+	 * Resolve the contextual object for the given key, if any.
+	 * E.g. the HttpServletRequest object for key "request".
+	 * @param key the contextual key
+	 * @return the corresponding object, or {@code null} if none found
+	 * @throws IllegalStateException if the underlying scope is not currently active
+	 */
+	@Nullable
+	Object resolveContextualObject(String key);
+
+	/**
+	 * Return the <em>conversation ID</em> for the current underlying scope, if any.
+	 * <p>The exact meaning of the conversation ID depends on the underlying
+	 * storage mechanism. In the case of session-scoped objects, the
+	 * conversation ID would typically be equal to (or derived from) the
+	 * {@link javax.servlet.http.HttpSession#getId() session ID}; in the
+	 * case of a custom conversation that sits within the overall session,
+	 * the specific ID for the current conversation would be appropriate.
+	 * <p><b>Note: This is an optional operation.</b> It is perfectly valid to
+	 * return {@code null} in an implementation of this method if the
+	 * underlying storage mechanism has no obvious candidate for such an ID.
+	 * @return the conversation ID, or {@code null} if there is no
+	 * conversation ID for the current scope
+	 * @throws IllegalStateException if the underlying scope is not currently active
+	 */
+	@Nullable
+	String getConversationId();
+
+### 5. SimpleThreadScope:54-108（Spring 自带 thread 作用域：一个 ThreadLocal）
+    58-63 每个线程一个 HashMap（NamedThreadLocal）；89-90 不支持销毁回调，只打一条 WARN（本次实测的 WARN 就在这里）
+----------------------------------------------------------------
+public class SimpleThreadScope implements Scope {
+
+	private static final Log logger = LogFactory.getLog(SimpleThreadScope.class);
+
+	private final ThreadLocal<Map<String, Object>> threadScope =
+			new NamedThreadLocal<Map<String, Object>>("SimpleThreadScope") {
+				@Override
+				protected Map<String, Object> initialValue() {
+					return new HashMap<>();
+				}
+			};
+
+
+	@Override
+	public Object get(String name, ObjectFactory<?> objectFactory) {
+		Map<String, Object> scope = this.threadScope.get();
+		// NOTE: Do NOT modify the following to use Map::computeIfAbsent. For details,
+		// see https://github.com/spring-projects/spring-framework/issues/25801.
+		Object scopedObject = scope.get(name);
+		if (scopedObject == null) {
+			scopedObject = objectFactory.getObject();
+			scope.put(name, scopedObject);
+		}
+		return scopedObject;
+	}
+
+	@Override
+	@Nullable
+	public Object remove(String name) {
+		Map<String, Object> scope = this.threadScope.get();
+		return scope.remove(name);
+	}
+
+	@Override
+	public void registerDestructionCallback(String name, Runnable callback) {
+		logger.warn("SimpleThreadScope does not support destruction callbacks. " +
+				"Consider using RequestScope in a web environment.");
+	}
+
+	@Override
+	@Nullable
+	public Object resolveContextualObject(String key) {
+		return null;
+	}
+
+	@Override
+	public String getConversationId() {
+		return Thread.currentThread().getName();
+	}
+
+}
+
+### 6. ScopedProxyUtils:41 + 56-99（proxyMode 的实现：把一个定义拆成两个）
+    41 TARGET_NAME_PREFIX = "scopedTarget."；65 代理定义=ScopedProxyFactoryBean；92 真身单独注册；96 返回代理定义占用原名
+----------------------------------------------------------------
+ */
+public abstract class ScopedProxyUtils {
+
+	private static final String TARGET_NAME_PREFIX = "scopedTarget.";
+
+	private static final int TARGET_NAME_PREFIX_LENGTH = TARGET_NAME_PREFIX.length();
+
+    ...
+	public static BeanDefinitionHolder createScopedProxy(BeanDefinitionHolder definition,
+			BeanDefinitionRegistry registry, boolean proxyTargetClass) {
+
+		String originalBeanName = definition.getBeanName();
+		BeanDefinition targetDefinition = definition.getBeanDefinition();
+		String targetBeanName = getTargetBeanName(originalBeanName);
+
+		// Create a scoped proxy definition for the original bean name,
+		// "hiding" the target bean in an internal target definition.
+		RootBeanDefinition proxyDefinition = new RootBeanDefinition(ScopedProxyFactoryBean.class);
+		proxyDefinition.setDecoratedDefinition(new BeanDefinitionHolder(targetDefinition, targetBeanName));
+		proxyDefinition.setOriginatingBeanDefinition(targetDefinition);
+		proxyDefinition.setSource(definition.getSource());
+		proxyDefinition.setRole(targetDefinition.getRole());
+
+		proxyDefinition.getPropertyValues().add("targetBeanName", targetBeanName);
+		if (proxyTargetClass) {
+			targetDefinition.setAttribute(AutoProxyUtils.PRESERVE_TARGET_CLASS_ATTRIBUTE, Boolean.TRUE);
+			// ScopedProxyFactoryBean's "proxyTargetClass" default is TRUE, so we don't need to set it explicitly here.
+		}
+		else {
+			proxyDefinition.getPropertyValues().add("proxyTargetClass", Boolean.FALSE);
+		}
+
+		// Copy autowire settings from original bean definition.
+		proxyDefinition.setAutowireCandidate(targetDefinition.isAutowireCandidate());
+		proxyDefinition.setPrimary(targetDefinition.isPrimary());
+		if (targetDefinition instanceof AbstractBeanDefinition) {
+			proxyDefinition.copyQualifiersFrom((AbstractBeanDefinition) targetDefinition);
+		}
+
+		// The target bean should be ignored in favor of the scoped proxy.
+		targetDefinition.setAutowireCandidate(false);
+		targetDefinition.setPrimary(false);
+
+		// Register the target bean as separate bean in the factory.
+		registry.registerBeanDefinition(targetBeanName, targetDefinition);
+
+		// Return the scoped proxy definition as primary bean definition
+		// (potentially an inner bean).
+		return new BeanDefinitionHolder(proxyDefinition, originalBeanName, definition.getAliases());
+	}
+
+	/**
+
+### 7. SimpleBeanTargetSource:30-37（代理每次方法调用都来这里要目标）
+    35 getBeanFactory().getBean(getTargetBeanName()) —— C3 段栈上那一帧
+----------------------------------------------------------------
+@SuppressWarnings("serial")
+public class SimpleBeanTargetSource extends AbstractBeanFactoryBasedTargetSource {
+
+	@Override
+	public Object getTarget() throws Exception {
+		return getBeanFactory().getBean(getTargetBeanName());
+	}
+

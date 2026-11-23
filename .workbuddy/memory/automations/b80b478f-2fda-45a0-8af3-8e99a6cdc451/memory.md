@@ -210,3 +210,22 @@
   `javax.annotation-api`（Spring 5 用 javax，Spring 6 才换 jakarta）；没这个 jar 时注解**静默不执行**。
 - 维护：`MEMORY.md` 19.2 KB → 13.6 KB（W02 细节只留「一句话 + 关键数字」）；
   注意 bash heredoc 里的反引号会被命令替换，写记忆文件时用 Edit 或转义。
+
+## 2026-11-23（第十五次执行 · 同日第二个时间盒 · W05 Day 3 Bean 作用域）
+- 开工回归：清空 `out/` 全量重编 w05（37 文件 / 45 class）+ 跑五个入口（day1×3 / day2×2），
+  exit=0、行数 61/129/156/56/77，**无中断代码**；`01-notes` 未勾项只剩「Bean 作用域」（今日）+
+  「Spring 帮你管理什么」（留 W05 收尾），`02-code` 只剩 `w06-` 起的 `.gitkeep` → 无遗留需补。
+- 注意：本次与第十四次是**同一天**（上午 Day 2、09:46 Day 3），不涉及补课；`today.md` 由「下一个时间盒」直接兑现。
+- 推进 W05 Day 3：新建 `day3/ScopeProbe`（三计数探针）+ `day3/ScopeMatrix`（A 三判据 / B thread 作用域 /
+  C 四作用域矩阵）+ `day3/WebScopeTrap`（A request / B session / C proxyMode 三组 / D 自定义 Scope）。
+  产出 `day3-result.txt`（154 行）+ `day3-spring-source.txt`（7 段源码，另下了 spring-aop sources jar）。
+- 题库 `Spring.md` 5 → 7（Q6 作用域四判据 / Q7 proxyMode 是把错误推迟）；同步笔记 Day 3 整节（6 小节）+
+  踩坑 5 行 + 面试 6 条 + 参考要点 Q6/Q7、README（目录树 + 第 6 节 + 两坑 + 待办）、`today.md`、`MILESTONES.md`。
+- 下次起点：**W05 Day 4 = 注入方式的取舍**（`@Autowired` byType / `@Resource` byName / `@Qualifier` /
+  `@Primary` / 集合注入 `List`·`Map` + `@Order` / 构造器注入两细节 + `AutowiredAnnotationBeanPostProcessor` 的栈）。
+- 本次踩坑（已进 MEMORY.md）：`@Scope` 注解与 `Scope` 接口同名（implements 要全限定名）；
+  `SimpleThreadScope` **没有** `SCOPE_NAME` 常量；`:1942` 是声明、`:1944` 才是 `!isPrototype()`；
+  自定义作用域的定义表「外层有 class、真身只有 factoryMethod」；`ctx.close()` 只销毁单例，不管自定义作用域。
+- 内容自查抓回 3 处：① 「两个定义 class 都为空」错（外层是 `ScopedProxyFactoryBean`）；
+  ② 「close() 会通知 scope」错；③ `registerScope` 行号先写 1046（`}`）后改 1045（真 throw）。
+  留档：`ScopeMatrix` B 段那两条 JUL WARN 是**证据**，快照里必须保留。
