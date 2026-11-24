@@ -1,104 +1,104 @@
 ---
 title: 今天做什么
-date: 2026-11-23
-weekday: 周一
+date: 2026-11-24
+weekday: 周二
 milestone: M2 · Spring 内核
-task: W05 Day 3 — Bean 作用域（四条判据 + request 报错 + proxyMode + 自定义 Scope）
+task: W05 Day 4 — 注入方式的取舍（判定链四级 + 两种注解的报错 + 集合与零候选）
 status: 已完成
 ---
 
-# 今天 · 2026-11-23（周一）· 已完成
+# 今天 · 2026-11-24（周二）· 已完成
 
-> 前两个时间盒回答的是「造几个」和「造完做什么」，今天回答第三个：
-> **同一份定义，能不能造出「每个请求一个」「每个线程一个」这种生命周期的对象。**
-> 一句话剧透：`singleton` / `prototype` 是写死的两个 `if`，其余全是查表 —— 表里没有就报错。
+> 前三个时间盒回答「造几个」「造完做什么」「给几个」，今天回答最后一个：
+> **同一个接口摆三个实现，容器凭什么挑中某一个 —— 挑不出来时它说什么。**
+> 一句话剧透：`@Autowired` 不是纯按类型，`@Resource` 也不是纯按名字；两者的真差别在报错。
 
 ## 一、先查的遗留
 
 | 检查项 | 结果 |
 | :--- | :--- |
-| 清空 `out/` 全量重编 w05（37 文件 / 45 class）+ 跑五个入口 | ✅ 全 exit=0，行数 61 / 129 / 156 / 56 / 77，无回归、无中断代码 |
-| `01-notes` 里的未勾项 | W05 只剩「Bean 作用域」（= 今天）与「Spring 到底在帮你管理什么」（留 Day 6 收尾）；W06 起未解锁 |
-| `02-code` 空目录 | `w05-` 已开工；`w06-` 起仍是 `.gitkeep`（M2 后续，不是遗留） |
-| Day 2 留的两条待办 | ① `pom.xml` → 仍推到 W05 收尾（本机没 Maven）；② 三个追问 → 已在 Day 2 答完 |
-| 与上一个时间盒的关系 | 今天上午刚做完 Day 2（同一台机器、同一份 `today.md`），本次是**同一天的第二个 60 分钟**，不涉及补课 |
+| 清空 `out/` 全量重编 w05（40 文件 / 57 class）+ 跑七个入口 | ✅ 全 exit=0（59 / 127 / 154 / 54 / 75 / 51 / 92 行），无回归、无中断代码 |
+| `01-notes` 里的未勾项 | W05 只剩「Spring 到底在帮你管理什么」（= W05 收尾那一格）；W06 起未解锁 |
+| `02-code` 空目录 | `w06-` 起仍是 `.gitkeep`（M2 后续，不是遗留） |
+| 上一个时间盒留的待办 | `pom.xml` 仍推到 W05 收尾（本机没 Maven，写了验不了）；Day 3 的五条踩坑已全部回填 |
+| 与上一个时间盒的关系 | 11-23（周一）停在这里，今天接着走同一个时间盒，不涉及补课 |
 
-**结论：没有需要补的中断代码。** 起点就是 W05 Day 3。
+**结论：没有需要补的中断代码。** 起点就是 W05 Day 4。
 
-## 二、今天的正题：两个程序 + 一个探针
+## 二、今天的正题：三个程序 + 一个工具类
 
-代码在 `02-code/stage1-basics/w05-spring-ioc-di/day3/`：
+代码在 `02-code/stage1-basics/w05-spring-ioc-di/day4/`：
 
 | 文件 | 内容 |
 | :--- | :--- |
-| `ScopeMatrix.java` | A `singleton` vs `prototype` 三条判据 / B `thread` 作用域（含「覆盖 singleton 会被拒」）/ C 四作用域判据矩阵 |
-| `WebScopeTrap.java` | A `request` 报错原文与栈 / B `session` 同款 / C `proxyMode` 三组对照 / D 自定义 `Scope` |
-| `ScopeProbe.java` | 探针 Bean：构造数 / `@PreDestroy` 数 / `destroy` 数，按角色分开记 |
+| `InjectionChoice.java` | A 三候选爆炸（报错原文 + 栈）/ B 字段名回退 / C `@Qualifier` / D `@Primary` 压过名字 / E `@Resource` 按名 / F 两种注解名字对不上的报错对照 |
+| `CollectionInject.java` | A `List` 按 `@Order`、数组同源 / B `Map` 按注册顺序（key = bean 名）/ C 零候选三段 / D 集合 + `@Qualifier` |
+| `CtorInject.java` | A 单构造器免注解 / B 多构造器不标的两种结局 / C 标一个 `@Autowired` / D `ObjectProvider` 三种局面 / E 参数名回退要 `-parameters` |
+| `pay/` | `PayChannel` 接口 + 三个 `@Order` 不同的实现（bean 名可预测） |
+| `support/Quiet.java` | 压掉 `refresh` 失败的 JUL 噪音（**logger 名是枚举出来的，不是猜的**） |
 
-产出的两个文件：`day3-result.txt`（154 行）、`day3-spring-source.txt`（7 段源码，行号与栈对撞）。
+产出两个文件：`day4-result.txt`（145 行）、`day4-spring-source.txt`（8 段源码，行号与栈对撞）。
 
-## 三、今天挖到的五个点
+## 三、今天挖到的六个点
 
-1. **作用域 = 「造几个」+「谁管埋」+「什么时候解析」。**
-   前两个由 `scope` 决定，第三个由 `proxyMode` 决定。四条判据一次列清：
-   `singleton` 两次同一个 / 进池 / 销毁 1+1；`prototype` 两次不同 / 不进池 / 销毁 0+0；
-   `request` `session` 在非 Web 容器里根本取不到。
+1. **挑人是一条四级链，顺序写死在源码里。**
+   `@Qualifier` 在筛候选那一步就生效 → `@Primary`（1635）→ `@Priority`（1639）→ 名字匹配（1642）→
+   都不行才 `resolveNotUnique`（1369）。`@Primary` 在名字**之前**，所以字段名对得上也会被压过。
 
-2. **`singleton` / `prototype` 不在作用域表里。**
-   `registerScope("singleton", …)` → `IllegalArgumentException: Cannot replace existing scopes
-   'singleton' and 'prototype'`（`AbstractBeanFactory:1045`）；`getRegisteredScopeNames()` 只有自己登记的 `[thread]`。
-   它们写在 `doGetBean` 的两个 `if` 里，第三个 `else` 才查表。
+2. **`@Autowired` 不是纯按类型：第三级回退拿字段名当 bean 名。**
+   三个候选、字段名叫 `wechatChannel`、零注解 → 注入成功拿到 `wechat`。教科书只讲前一半。
 
-3. **`request` 的报错是「查表查不到」，而且 `refresh()` 不报、`getBean` 才报。**
-   `No Scope registered for scope name 'request'`（`doGetBean:369`）；
-   启动不报是因为它不是单例，`preInstantiateSingletons` 的循环压根不碰它。
+3. **两种注解的真差别在报错。**
+   显式 `@Resource(name="channel")` 对不上 → `No bean named 'channel' available`（**连类型都不查**）；
+   默认名对不上 → 退回按类型 → 和 `@Autowired` 一模一样的 `NoUniqueBeanDefinitionException`。
 
-4. **`proxyMode` 不是「每次新对象」，是「把解析推迟到调用时」。**
-   单例里注入原型：不加代理三次 `id()` 全是 `1`（只造 1 个）；加了 `TARGET_CLASS` 是 `2 / 3 / 4`（造 3 个）。
-   实现是注册期把一个定义拆两个（`scopedTarget.requestProxy` + 外层的 `ScopedProxyFactoryBean`）。
-   拿 `request` 试就露出真相：`getBean` 不抛了，第一次 `id()` 抛同一个 ISE。
+4. **`Map` 注入**不**按 `@Order` 排序。**
+   同一个容器：`List` = `wechat → alipay → unionpay`（按 order），`Map` key = `[alipayChannel, wechatChannel, unionPayChannel]`
+   （注册顺序）。源码里 Map 分支一行排序都没有。**按顺序跑策略只能用 `List`。**
 
-5. **自定义 `Scope` 证明作用域是插件；`SimpleThreadScope` 证明「埋」也得插件自己干。**
-   `every-two` 作用域：4 次 `getBean` → `A A B B`，轮换时销毁 1 次，`close()` 后仍是 1 次
-   （容器 `close()` 只销毁单例）。Spring 自带的 `SimpleThreadScope` 连销毁回调都不支持，直接打 WARN。
+5. **集合没有特权 —— 「零候选给空集合」是讹传（今天唯一被推翻的常识）。**
+   `required=true` 的 `List` 照样抛 `expected at least 1 bean`；`required=false` 给的是 `null`。
+   原因：`resolveMultipleBeans` 在候选为空时 `return null`，等于「我没处理」，掉回单值分支照抛。
 
-## 四、今天踩的坑（五个，四个是「先说后验」）
+6. **`ObjectProvider` 把「取」推迟到调用时，三种局面一次收干净。**
+   原型两次 `getObject()` = `temp-1 / temp-2`；零候选 `getIfAvailable()` / `getIfUnique()` 都是 null；
+   三候选 `getIfUnique()` 给 null 但 `getIfAvailable()` **抛** `NoUnique` —— 名字差一个词，行为差一个异常。
 
-- **`@Scope` 注解和 `Scope` 接口同名。** 同一个文件里 `import …annotation.Scope` 之后
-  `implements Scope` 直接编译失败（「对 `Scope` 的引用不明确」）。接口写全限定名才干净。
-- **`SimpleThreadScope.SCOPE_NAME` 根本不存在。** 我按 `ConfigurableBeanFactory.SCOPE_SINGLETON`
-  的习惯想当然 —— 第三次栽在「按上一个类的 API 猜这一个类」。
-- **行号又错了一次：`AbstractBeanFactory:1942` 是方法声明，`!isPrototype()` 在 1944。**
-  Day 2 刚在 154 vs 157 上栽过，同一个病。
-- **第一版写「拆出来的两个定义 class 都为空」**，实跑发现外层是 `ScopedProxyFactoryBean`；
-  只有真身（`@Bean` 定义）才没有 class、只有 `factoryMethod`。
-- **文案写「容器 `close()` 时会通知 scope」**，实测销毁计数不变 —— `close()` 只销毁单例。
+## 四、今天踩的坑（四个）
+
+- **「零候选时集合注入给空集合」我先写成文案才跑**，三段实测全不对。
+  `required` 才是决定因素，不是「类型是不是集合」。这是本月第 N 次「断言先于实测」。
+- **注入失败死在 `refresh()` 不是 `getBean`。** 第一版把 `try/catch` 包在 `getBean` 上，
+  程序直接 `Exception in thread "main"` 退出 —— 那个 bean 不是 lazy、没人依赖它，预实例化循环自己就造了。
+- **JUL logger 名猜错。** 按父类 `AbstractApplicationContext` 设 `Level.OFF` 压不掉；
+  真名是子类 `AnnotationConfigApplicationContext`（字段是 `LogFactory.getLog(getClass())`）。
+  最后靠枚举 `LogManager.getLoggerNames()` 才查清。
+- **只打 root cause 会丢掉最有用的那层。** `No default constructor found` 在中间的
+  `BeanInstantiationException` 上，只打根因只剩一句 `NoSuchMethodException: …<init>()`。
 
 ## 五、环境备忘
 
-- 跑今天：`./run.sh day3.ScopeMatrix`（约 0.5 s）/ `./run.sh day3.WebScopeTrap`（约 0.4 s）
-- day3 的入口同样**必须写全包名**（`run.sh` 短名分支只认 `day1`）
-- 没有新增 jar：CGLIB 在 `spring-core` 里，`ScopedProxyMode` / `SimpleThreadScope` 都在已有的 jar 内
-- `ScopeMatrix` B 段会打两条 JUL WARN（`SimpleThreadScope does not support destruction callbacks`），
-  这是**证据不是噪音**，快照里保留原样
+- 跑今天：`./run.sh day4.InjectionChoice` / `day4.CollectionInject` / `day4.CtorInject`（各约 0.3~0.6 s）
+- 入口同样必须写全包名（`run.sh` 短名分支只认 `day1`）
+- 无新增 jar；Day 4 起快照里不再有 JUL 警告（`support/Quiet` 压掉了，Day 2/3 的 WARN 仍保留为证据）
 
 ---
 
 # 下一个时间盒（60 分钟）
 
-**W05 Day 4：注入方式的取舍 —— `@Autowired` / `@Resource` / 构造器，以及「多个候选」怎么收场**
+**W05 Day 5：收尾封板 —— 把「Spring 到底在帮你管理什么」那半张答案补全**
 
-> 作用域解决的是「给几个」，注入解决的是「给哪个」。同一个接口有两个实现时，
-> Spring 不会猜，它会抛 `NoUniqueBeanDefinitionException` —— 今天要把这个错**打出来**，
-> 再看 `@Primary` / `@Qualifier` / 集合注入三种收场方式。
+> 四天学了「造什么、造完做什么、造几个、给哪个」。这四件事合起来才是「Spring 管什么」的完整答案。
+> 今天不写新 Demo，只做三件事：**把答案写成能脱稿讲的三段**、把 `pom.xml` 这笔账结掉、然后把 W05 封板。
 
 | 时间 | 做什么 | 产出 |
 | -: | :--- | :--- |
-| 10 分钟 | 复述 Day 3：作用域三问 + `request` 为什么取不到 + `proxyMode` 推迟了什么 | 口头过 |
-| 20 分钟 | 同一个接口两个实现，分别用 `@Autowired`（byType）/ `@Resource`（byName）/ `@Qualifier` / `@Primary` 注入，把四个结果打出来 | `day4/InjectionChoice.java` |
-| 15 分钟 | 集合注入：`List<PayChannel>` / `Map<String, PayChannel>`（key = beanName）+ `@Order` 决定顺序 | 同文件 B 段 |
-| 10 分钟 | 构造器注入的两个细节：单构造器免注解 / 多构造器必须标一个；`ObjectProvider` 延迟取 | 同文件 C 段 |
-| 5 分钟 | 输出 `day4-result.txt` + 笔记 Day 4 小节 + 观察 `AutowiredAnnotationBeanPostProcessor` 的栈（接 Day 2） | 笔记 + 快照 |
+| 10 分钟 | 复述 Day 4：四级判定链 + 两种注解的报错差别 + 集合为什么不是兜底 | 口头过 |
+| 25 分钟 | 写第四格答案：**对象图 / 生命周期 / 边界** 三段，每段配一个本周的实测数字 | 笔记「一句话总结」+ 参考要点 Q10 |
+| 10 分钟 | `pom.xml` 处置：本机没 Maven → 写出 `pom.xml` 但**不声称验证过**，或明确记为「装 Maven 后再补」 | 决定 + 一行记录 |
+| 10 分钟 | 题库回顾：`Spring.md` 9 道题抽 3 道脱稿讲（Q1 / Q4 / Q8） | 口头过 |
+| 5 分钟 | `MILESTONES.md` 把 W05 标 🟩、W06 AOP 置为「下一个」，`today.md` 覆盖 | 三份文件同步 |
 
-> 优先做第三个 20 分钟里的「四个结果」。`@Resource` 按名字、`@Autowired` 按类型 ——
-> 这句话谁都会背，但**两种注解在「名字对不上」时的报错完全不同**，那个差异才是面试的落点。
+> 判定「可以封板」的标准（照 M0/M1 的惯例）：四个知识点全勾、四个可运行工程（其实是四天实验同一工程）、
+> 题库 9 道全部有「我的回答 + 追问预判」、踩坑表里每条都有「原因 + 证据」。
+> 现在的状态：前三条已满足，只差第四格的答案。

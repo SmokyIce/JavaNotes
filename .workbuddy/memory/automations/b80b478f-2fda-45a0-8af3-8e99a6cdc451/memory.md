@@ -229,3 +229,20 @@
 - 内容自查抓回 3 处：① 「两个定义 class 都为空」错（外层是 `ScopedProxyFactoryBean`）；
   ② 「close() 会通知 scope」错；③ `registerScope` 行号先写 1046（`}`）后改 1045（真 throw）。
   留档：`ScopeMatrix` B 段那两条 JUL WARN 是**证据**，快照里必须保留。
+
+## 2026-11-24（第十六次执行 · W05 Day 4 注入方式的取舍）
+- 开工回归：清空 `out/` 重编 w05（40 文件 / 57 class）+ 跑 7 个入口，全 exit=0，**无中断代码**；
+  `01-notes` 未勾项只剩 W05 第四格（= W05 收尾）与未解锁里程碑，`02-code` 只剩 `w06-` 起的 `.gitkeep` → 无遗留需补。
+- 推进 W05 Day 4：新建 `day4/InjectionChoice`（A~F）、`day4/CollectionInject`（A~D）、`day4/CtorInject`（A~E）、
+  `day4/pay/`（接口 + 三个 `@Order` 不同的实现）、`support/Quiet`（压掉 refresh 失败的 JUL 噪音）。
+  产出 `day4-result.txt`（145 行）+ `day4-spring-source.txt`（8 段源码，行号与栈对撞：1635/1639/1642/1369/1493-1500/546）。
+- 题库 `Spring.md` 7 → 9（Q8 多候选判定链 / Q9 两种注解的报错差别）；同步 W05 笔记 Day 4 整节（8 小节）+
+  踩坑 4 条 + 面试 8 条 + 参考要点 Q8/Q9 + 打卡、README（§7 + 坑 10~13 + 待办）、`today.md`、`MILESTONES.md`。
+- 收工回归：重编 48 文件 / 89 class，跑 10 个入口全 exit=0（day4 三段 57 / 34 / 40 行）。
+- 下次起点：**W05 Day 5 = 收尾封板**（第四格答案三段 + `pom.xml` 结账 + 题库抽讲 + 标 🟩 并开 W06 AOP）。
+- 本次自查抓回 2 处：① 「零候选的集合注入给空集合」是先写文案后跑 → 实测 `required=true` 照样抛、
+  `required=false` 给 null（`resolveMultipleBeans` 空候选 `return null` 后掉回单值分支）；
+  ② 「注入失败在 getBean 时抛」→ 实际死在 `refresh()`（没被依赖的普通单例由 `preInstantiateSingletons` 造）。
+- 新环境坑：**JUL logger 名是子类** `AnnotationConfigApplicationContext`（字段是 `LogFactory.getLog(getClass())`），
+  按父类名设 `Level.OFF` 压不掉 → 以后要关某个日志，先枚举 `LogManager.getLoggerNames()` 查真名，别猜。
+- 口径提醒：Day 4 快照里**没有** JUL 警告（Quiet 压掉了）；Day 2/3 的 WARN 是证据，保持原样别去压。

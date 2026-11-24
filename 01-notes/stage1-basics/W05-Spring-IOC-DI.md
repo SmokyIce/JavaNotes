@@ -1,7 +1,7 @@
 # W05 · Spring IOC / DI
 
 > **第一阶段 · 打基础（W01–W12）** ｜ 预计投入 ≈ 7 小时（每天 60 分钟）
-> 状态：🟨 进行中（Day 3 11-23）　｜　开始日期：2026-11-20　｜　完成日期：____-__-__
+> 状态：🟨 进行中（Day 4 11-24）　｜　开始日期：2026-11-20　｜　完成日期：____-__-__
 
 > 💡 目标理解：Spring 到底在帮你管理什么？
 
@@ -65,6 +65,14 @@ Day 3（已完成 11-23）  工具链：无新增 jar（spring-aop 早就在；C
                        + WebScopeTrap：request、session 在非 Web 容器的报错原文与栈 /
                          proxyMode 三组对照（原型注入单例 1-1-1 vs 2-3-4、定义拆成两个、报错时机后移）/
                          自定义 Scope（每 2 次 getBean 换实例 + 销毁回调交给 scope）
+Day 4（已完成 11-24）  工具链：无新增 jar；新增 support/Quiet（压掉 refresh 失败的 JUL 噪音）
+                       + InjectionChoice：三个候选打爆的报错原文与栈（后处理器 → populateBean → doCreateBean）/
+                         字段名回退（wechatChannel 免注解注入）/ @Qualifier /
+                         @Primary 压过字段名 / @Resource 显式名与默认名的两条路 / 两种注解报错对照
+                       + CollectionInject：List 按 @Order、Map 按注册顺序（源码里 Map 不排序）/
+                         零候选三段（required=true 抛、required=false 给 null、单值同款）/ 集合 + @Qualifier
+                       + CtorInject：单构造器免注解 / 多构造器不标的两种结局（炸 vs 静默走无参）/
+                         标一个 @Autowired / ObjectProvider 三种局面 / 构造器参数名回退要 -parameters
 ```
 
 ### Day 1 · 2026-11-20（周五）· 「Spring 帮你管理什么」——用 diff 回答，不用定义回答
@@ -628,6 +636,185 @@ ctx.close() 之后销毁回调累计 1 次 —— 没有变化
 > 前两个由定义的 `scope` 决定；第三个由 `proxyMode` 决定。
 > 面试被问「`@Scope` 有什么用」，答这三条比背 `singleton`/`prototype` 的定义有用得多。
 
+### Day 4 · 2026-11-24（周二）· 注入方式的取舍：「给哪个」是怎么定的
+
+> 作用域回答「给几个」，今天回答「给哪个」。同一个接口摆三个实现，Spring 不猜 ——
+> 它按一条**固定顺序**的判定链挑，挑不出来就炸。今天把这条链的每一级都打出来。
+>
+> 一句话剧透：`@Autowired` 不是纯按类型，`@Resource` 也不是纯按名字；
+> 两者真正的差别在「名字对不上时报什么错」。
+
+#### 1. 判定链：一张流程 + 三个候选
+
+读 `DefaultListableBeanFactory:1633-1655`，顺序写死在这五行里：
+
+```text
+按类型筛出候选（findAutowireCandidates，@Qualifier 在这一步就缩好范围）
+  → ① determinePrimaryCandidate      有 @Primary 且只有一个 → 就是它
+  → ② determineHighestPriorityCandidate   @Priority 最大的那个
+  → ③ 名字匹配 matchesBeanName(candidateName, descriptor.getDependencyName())
+  → ④ 都挑不出来 → resolveNotUnique → NoUniqueBeanDefinitionException
+```
+
+代码用的是三个候选（`alipayChannel` order=2 / `wechatChannel` order=1 / `unionPayChannel` order=3），
+字段名叫 `channel`，对不上任何 bean 名 —— 于是走到第 ④ 步：
+
+```text
+UnsatisfiedDependencyException: Error creating bean with name 'injectionChoice.NeedsOne':
+  Unsatisfied dependency expressed through field 'channel'; nested exception is
+org.springframework.beans.NoUniqueBeanDefinitionException:
+  No qualifying bean of type '...PayChannel' available:
+  expected single matching bean but found 3: alipayChannel,wechatChannel,unionPayChannel
+```
+
+**注意它是死在 `refresh()` 里的，不是 `getBean` 时**：这个 bean 没标 `@Lazy`、也没人依赖它，
+`preInstantiateSingletons` 的循环自己就会造它。栈上真正抛的点在后处理器：
+
+```text
+at DependencyDescriptor.resolveNotUnique:220
+at DefaultListableBeanFactory.doResolveDependency:1369
+at DefaultListableBeanFactory.resolveDependency:1311
+at AutowiredAnnotationBeanPostProcessor$AutowiredFieldElement.resolveFieldValue:710
+at AutowiredAnnotationBeanPostProcessor$AutowiredFieldElement.inject:693
+at InjectionMetadata.inject:119
+at AutowiredAnnotationBeanPostProcessor.postProcessProperties:408   ← 接 Day 2 的 ②
+at AbstractAutowireCapableBeanFactory.populateBean:1431
+at AbstractAutowireCapableBeanFactory.doCreateBean:619              ← Day 2 的 C 段那三行之一
+```
+
+#### 2. `@Autowired` 不是纯按类型 —— 第 ③ 步会拿**字段名**当 bean 名
+
+把字段名从 `channel` 改成 `wechatChannel`（容器里真有一个叫这名的 bean），
+**一个注解都不多加**，注入成功：
+
+```text
+字段名 wechatChannel → 注入到 wechat（三个候选里挑的，没写 @Qualifier）
+```
+
+这就是「按类型注入失败 → 退化成按名字」。教科书只讲前一半，问「为什么能注入成功」时容易答不上来。
+第 ③ 步的 `getDependencyName()` 对字段来说就是字段名，对构造器参数来说是参数名（见 §5）。
+
+再加一个 `@Primary` 的 bean，字段名**依旧**叫 `wechatChannel`：
+
+```text
+字段名依旧是 wechatChannel，但容器里有 @Primary → 注入到 preferred
+```
+
+**Primary 在名字匹配之前**（1635 在 1642 之前），所以名字对得上也没用。
+这一条比 §2 更容易被追：「你不是说按字段名回退吗？为什么没走？」—— 回退是最后一级，不是第二级。
+
+#### 3. `@Resource` 的两条路：显式名 vs 默认名
+
+`CommonAnnotationBeanPostProcessor:649` 先判断名字从哪来：
+
+```java
+this.isDefaultName = !StringUtils.hasLength(resourceName);   // 没写 name 属性
+if (this.isDefaultName) {
+    resourceName = this.member.getName();                    // 默认名 = 字段名
+}
+```
+
+然后 `autowireResource:546` 分岔：
+
+| 写法 | 走哪条 | 实测结果 |
+| :--- | :--- | :--- |
+| `@Resource` 字段名 `unionPayChannel` | 名字查得到 → `resolveBeanByName` | `unionpay` |
+| `@Resource(name = "alipayChannel")` 字段名 `anything` | 显式名 → `resolveBeanByName` | `alipay`（字段名被忽略） |
+| `@Resource(name = "channel")`（不存在） | 显式名 → `resolveBeanByName` | **`No bean named 'channel' available`** |
+| `@Resource` 字段名 `channel`（不存在） | 默认名查不到 → 退回 `resolveDependency` | **`NoUniqueBeanDefinitionException`**（3 个候选） |
+
+**这就是两种注解真正的分水岭**，不是「按类型 vs 按名字」这句背书：
+
+- 显式点名对不上 → `NoSuchBeanDefinitionException: No bean named 'channel' available`，
+  **它连类型都没查**（容器里明明有 3 个 `PayChannel`）；
+- 默认名对不上 → 退回按类型，于是踩的坑跟 `@Autowired` 一模一样（同一个 `NoUnique`）。
+
+面试问「`@Resource` 和 `@Autowired` 有什么区别」，答这两行的差别，比答「一个按名字一个按类型」高一个档次。
+
+#### 4. 集合注入：`List` 排序、`Map` 不排序
+
+三个候选（注册顺序 `alipay, wechat, unionpay`；`@Order` 顺序 `wechat(1) < alipay(2) < unionpay(3)`）：
+
+```text
+List<PayChannel>            → wechat alipay unionpay     ← 按 @Order
+PayChannel[]                → wechat alipay unionpay     ← 和 List 同源
+Map<String, PayChannel>     → [alipayChannel, wechatChannel, unionPayChannel]   ← 注册顺序
+```
+
+源码对得上（`resolveMultipleBeans`）：数组和 `Collection` 分支都有
+`if (size > 1) { comparator = adaptDependencyComparator(...); list.sort(comparator); }`，
+而 `Map` 分支（1493-1500）**一行排序都没有**，直接把 `findAutowireCandidates` 的
+`LinkedHashMap` 原样返回 —— 所以 key 是 bean 名，顺序是注册顺序。
+
+结论很实用：**「按顺序跑一串策略」必须用 `List`；`Map` 只适合按名字精确取**。
+用 `Map` + `@Order` 想控制顺序，是不会报错的那种错。
+
+#### 5. 零候选：集合**没有**特权（今天唯一被推翻的常识）
+
+我原本写的是「零候选时集合注入给空集合」。实测三段，全错：
+
+```text
+C1  @Autowired（required=true）List<PayChannel>
+    → NoSuchBeanDefinitionException: No qualifying bean of type
+      'java.util.List<...PayChannel>' available: expected at least 1 bean ...
+C2  @Autowired(required=false) List / Map
+    → null / null      ← 不是空集合，是 null
+C3  @Autowired（required=true）PayChannel
+    → 同一个 NoSuchBeanDefinitionException
+```
+
+原因在 `resolveMultipleBeans:1478`（Collection）和 `1493`（Map）：
+**`matchingBeans.isEmpty()` 就 `return null`**，返回 null 等于「我没处理」，
+流程掉回单值分支 `doResolveDependency:1352`，于是 `raiseNoMatchingBeanFound` 照样抛。
+
+所以「收成集合就天然为空」是假的。要可选依赖，正确的三种写法是：
+`@Autowired(required=false)` + 判 null、`ObjectProvider`、或者参数默认值（构造器注入里给个空集合）。
+
+#### 6. 构造器注入的两个细节 + `ObjectProvider`
+
+单构造器（4.3 起）不用标 `@Autowired`；多构造器不标则看有没有无参构造器：
+
+```text
+B1  两个构造器、无无参构造器、一个都不标
+    → BeanCreationException ← BeanInstantiationException: No default constructor found
+      ← NoSuchMethodException: CtorInject$TwoNoMark.<init>()
+B2  两个构造器、其中一个是无参、一个都不标
+    → 实际走「无参构造器」，不报错，带参的版本被静默忽略   ← 比报错更危险
+C   两个构造器、标了 @Autowired 的那个
+    → 走 ctor(Notifier, String)
+```
+
+`ObjectProvider` 把「取」推迟到调用时，三种局面一次收干净：
+
+```text
+D1  只有一个 prototype → getObject() 两次 = temp-1 / temp-2（同一个对象？false）
+D2  零候选            → getIfAvailable() null / getIfUnique() null / getObject() 抛 NoSuchBean
+D3  三个候选          → getIfUnique() null（吞掉 NoUnique）/ getIfAvailable() 抛 NoUniqueBeanDefinitionException
+```
+
+D3 那条最容易踩：`getIfAvailable()` 只兜 `NoSuchBean`，不兜它的子类 `NoUnique`；
+`getIfUnique()` 才把多候选吞成 null。名字差一个词，行为差一个异常。
+
+#### 7. 同一个「按名字回退」，换成构造器参数就不灵
+
+`@Autowired` 的第 ③ 步对构造器参数也适用，但**前提是参数名拿得到**：
+
+```text
+反射读到的参数名 = arg0（isNamePresent=false）
+→ NoUniqueBeanDefinitionException: expected single matching bean but found 3
+```
+
+`javac` 默认只写 `LineNumberTable`，不写 `LocalVariableTable`，也不加 `-parameters`，
+于是参数名只剩 `arg0`，跟 bean 名对不上。字段名则一定在 class 文件里（`Fields` 属性），所以一定能回退。
+
+**差别不在「按不按名字」，在「名字拿不拿得到」。** 加 `-parameters` 重编译这一条就会变成和字段一样。
+
+#### 8. 一句话记法
+
+> **注入 = 一条四级判定链（Qualifier → Primary → Priority → 名字），挑不出来才抛。**
+> `@Autowired` 的名字回退用**字段名**；`@Resource` 的默认名也是字段名，但显式点名时不查类型。
+> 集合是「全收」不是「兜底」：零候选照样抛，`required=false` 给的是 null。
+
 ## 四、踩坑与 Bug 复盘
 
 | 现象 | 原因 | 排查过程 | 解决 | 底层原理 |
@@ -644,6 +831,10 @@ ctx.close() 之后销毁回调累计 1 次 —— 没有变化
 | 文案写 `AbstractBeanFactory:1942 的 !mbd.isPrototype()` | 1942 是**方法声明**，1944 才是那句 `if` | 用 `awk` 带行号打印源码，逐行对 | 改成「声明 1942、`if` 在 1944」，并把这个差别写进 `day3-spring-source.txt` 的抬头 | 和 Day 2 的 154 vs 157 是同一类错：**行号必须说清是「声明」还是「语句」**，栈帧只给调用点 |
 | 第一版写「拆出来的两个定义 class 都是空的」 | 外层 `requestProxy` 的 `class` 是 `ScopedProxyFactoryBean`（显式类），只有真身 `scopedTarget.requestProxy` 是 `@Bean` 定义（只有 `factoryMethod`，没有 `class`） | 定义了 `C2b` 段把 `scope / class / factoryMethod` 三列都打出来，实跑就对上了 | 文案改成「外层有 class、真身只有 factoryMethod」 | `@Bean` 方法产出的 `BeanDefinition` 本来就没有 `beanClass`；读定义表时不能只看 class 一列 |
 | 文案写「容器 `close()` 时会通知 scope」 | `close()` 只销毁单例（`destroySingletons`），自定义作用域不在其中 | D 段实测：轮换时销毁计数 1，`close()` 后仍是 1 | 改成「自定义作用域的生命周期由 scope 自己负责，容器不管收尾」 | 作用域是插件，插件里的资源也得插件自己收 —— 这和 prototype「谁取谁负责」是同一条原则 |
+| 文案写「零候选时集合注入给空集合」，实跑直接炸 | `resolveMultipleBeans` 的 Collection / Map 分支都是 `if (matchingBeans.isEmpty()) return null;`，返回 null 等于「没处理」，流程掉回单值分支照样 `raiseNoMatchingBeanFound` | C 段老老实实跑三遍：required=true 抛、required=false 给 `null`、单值同款异常 | 结论改成「集合没有特权：required=true 照样抛，required=false 给 null 不是空集合」 | 「空集合兜底」是 Spring 文档里最容易记错的一句；能不能给空集合，取决于 `required`，不取决于类型是不是集合 |
+| 第一版把 `try/catch` 包在 `ctx.getBean()` 上，结果 `Exception in thread "main"` 直接退出 | 注入失败发生在 `refresh()` 里：这个 bean 不是 lazy、也没人依赖它，`preInstantiateSingletons` 的循环自己就造了 | 栈底是 `refresh:591 ← ctxOf:259`，不是 `getBean` | 加 `failOf(...)`：`register` 后只包 `refresh()`，返回异常对象 | 「失败在启动期还是取用时」取决于这个 Bean 被谁在什么时候造 —— 没被依赖的普通单例，全部死在 `refresh` |
+| 想压掉 `refresh` 失败的 JUL 警告，按父类名 `AbstractApplicationContext` 设 `Level.OFF`，压不掉 | `AbstractApplicationContext` 里是 `LogFactory.getLog(getClass())`，logger 名是**子类** `AnnotationConfigApplicationContext`；面板上显示的父类名只是 `SimpleFormatter` 打 sourceClass 的结果 | 枚举 `LogManager.getLoggerNames()` 才看到真名 | `support/Quiet` 里按子类名关掉，且只关这一个 logger | 日志名、线程名、行号这三样都属于「不能按感觉写」的类别；拿不准就枚举出来看 |
+| `CtorInject` B1 只打印 root cause，输出成了光秃秃一句 `NoSuchMethodException: ...<init>()` | 最有信息量的那层是中间的 `BeanInstantiationException: No default constructor found`，被 `rootOf` 跳过了 | 输出对不上「预期能看懂」 | 打印策略改成「外层类名 + 首行 message，再补根因首行」 | 异常链的信息分布是「中间层最说明问题」，只取最后一层经常只剩方法签名 |
 
 ## 五、面试会怎么问
 
@@ -695,6 +886,24 @@ ctx.close() 之后销毁回调累计 1 次 —— 没有变化
 - 「自定义作用域里的 Bean 谁销毁？」——**scope 自己**。容器在登记阶段把 `DisposableBeanAdapter`
   交给 `scope.registerDestructionCallback`，`close()` 只销毁单例。`SimpleThreadScope` 干脆不支持，
   只打一条 WARN —— 这就是「容器管造不管埋」的第三个例子（前两个：prototype、`@Bean` 的 `destroyMethod` 推断）。
+- 「同一个接口有两个实现，`@Autowired` 会怎样？」——抛
+  `NoUniqueBeanDefinitionException`，message 里直接列出候选名（`expected single matching bean but found 3: …`）。
+  收场四条路：`@Primary`、`@Qualifier`、`@Resource(name=…)`、收成 `List` / `Map`。
+- 「`@Autowired` 是按类型还是按名字？」——**先按类型，多候选时按名字**。
+  第三级回退是 `descriptor.getDependencyName()`，对字段就是字段名（`wechatChannel` 就能免注解注入）。
+  追问「那 `@Primary` 呢」→ Primary 在名字之前，所以字段名对得上也照样被压过。
+- 「`@Resource` 和 `@Autowired` 的区别？」——除了「按名字 vs 按类型」，真正能加分的是报错不同：
+  显式名对不上 → `No bean named 'xxx' available`（**不查类型**）；
+  默认名对不上 → 退回按类型 → 和 `@Autowired` 一样的 `NoUnique`。
+- 「`List<T>` 注入的顺序谁定？`Map<String,T>` 呢？」——`List` 按 `@Order`（源码里有 `list.sort(comparator)`），
+  `Map` 按 bean 定义注册顺序（源码里 Map 分支一行排序都没有），key 是 bean 名。
+- 「容器里没有这个类型的 bean，注入 `List` 会得到空集合吗？」——**不会**。
+  `required=true`（默认）照样抛 `NoSuchBeanDefinitionException`；`required=false` 给的是 `null`。
+- 「`ObjectProvider` 解决什么问题？」——把解析推迟到调用时：原型每次 `getObject()` 新的、
+  没有候选时 `getIfAvailable()` 给 null、多候选时 `getIfUnique()` 吞成 null（而 `getIfAvailable()` 会把
+  `NoUniqueBeanDefinitionException` 抛出来）。
+- 「构造器注入为什么可以不写 `@Autowired`？」——4.3 起单构造器即唯一候选；
+  多构造器时必须标一个，否则有默认构造器就用默认的（**静默**，比报错危险），没有就 `No default constructor found`。
 
 ## 六、一句话总结
 
@@ -709,6 +918,7 @@ ctx.close() 之后销毁回调累计 1 次 —— 没有变化
 | 11-20 | 五 | W05 Day 1：IOC / DI —— 手写装配 vs 容器装配，谁 new、何时 new、循环依赖 | 70 min | `ManualWiring` + `SpringWiring` + `ContainerQuestions` + `day1-result.txt`（355 行）+ 源码取证 | ✅ |
 | 11-23 | 一 | W05 Day 2：Bean 生命周期 —— 六回调顺序 / 后处理器 / 三个追问 | 65 min | `LifecycleOrder` + `PostProcessorTrace` + `day2-result.txt`（140 行）+ `day2-spring-source.txt`（7 段） | ✅ |
 | 11-23 | 一 | W05 Day 3：Bean 作用域 —— 四条判据 / `request` 报错 / `proxyMode` / 自定义 Scope | 60 min | `ScopeMatrix` + `WebScopeTrap` + `ScopeProbe` + `day3-result.txt`（154 行）+ `day3-spring-source.txt`（7 段） | ✅ |
+| 11-24 | 二 | W05 Day 4：注入方式的取舍 —— 判定链四级 / 字段名回退 / `@Resource` 两条路 / 集合与零候选 / 构造器 + `ObjectProvider` | 65 min | `InjectionChoice` + `CollectionInject` + `CtorInject` + `day4-result.txt`（145 行）+ `day4-spring-source.txt`（8 段） | ✅ |
 
 ---
 
@@ -909,3 +1119,55 @@ requestProxy.id()         → IllegalStateException: No Scope registered for sco
 
 一句话收口：**`proxyMode` 换的是「解析时机」，不是「解析结果」**。
 面试里如果只答「加注解就每次新的」，多半会被追一句「那 `request` 在单测里为什么还是不行」，答案就在这。
+
+**Q8 · 同一个接口三个实现，`@Autowired` 到底怎么挑？挑不出来报什么错？**
+
+按一条**四级链**挑，顺序写死在 `DefaultListableBeanFactory:1633-1655`：
+
+```text
+① @Primary 有且只有一个        → 用它
+② @Priority 最大               → 用它
+③ 名字匹配（字段名/参数名 == bean 名，或别名）
+④ 都不行 → resolveNotUnique → NoUniqueBeanDefinitionException
+```
+
+实测（三个 `PayChannel` 候选）：
+
+```text
+字段名 channel       → NoUniqueBeanDefinitionException:
+                        expected single matching bean but found 3: alipayChannel,wechatChannel,unionPayChannel
+字段名 wechatChannel → 注入成功，拿到 wechat        ← 第 ③ 级：按字段名回退
+字段名 wechatChannel + 容器里有 @Primary → 拿到 preferred   ← ① 在 ③ 之前
+```
+
+两个必答的点：
+
+1. **`@Autowired` 不是纯按类型**，多候选时它按名字；这个名字对字段来说是字段名。
+2. **它死在 `refresh()` 里**（不是 `getBean` 时）：没被依赖的普通单例，`preInstantiateSingletons`
+   自己就把它造了；栈上抛点在 `AutowiredAnnotationBeanPostProcessor.postProcessProperties:408`。
+
+收场方式按场景选：`@Primary`（默认实现）、`@Qualifier`（局部点名）、`@Resource(name=…)`（按名）、
+收成 `List`/`Map`（全都要）。
+
+**Q9 · `@Resource` 和 `@Autowired` 的差别，除了「名字 vs 类型」还有什么？**
+
+差别在**名字对不上时报什么错**（这一步才是面试的落点）：
+
+```text
+@Resource(name = "channel")（不存在）  → NoSuchBeanDefinitionException: No bean named 'channel' available
+                                          ↑ 它根本没查类型，容器里有 3 个 PayChannel 也不管
+@Resource 字段名 channel（不存在）      → 退回 resolveDependency（按类型）→ NoUniqueBeanDefinitionException
+                                          ↑ 和 @Autowired 完全同一个错
+```
+
+源码一句话：`CommonAnnotationBeanPostProcessor.autowireResource:546` 的条件是
+`fallbackToDefaultTypeMatch && isDefaultName && !containsBean(name)` ——
+**只有「默认名」才允许退回按类型**；显式点了名就是硬要求。
+
+再补两个常被一起问的：
+
+```text
+@Autowired List<T> 零候选    → 照样抛（"expected at least 1 bean"），不是空集合
+@Autowired(required=false)   → 给 null，不是空集合
+List 的顺序 = @Order；Map 的顺序 = 注册顺序，key = bean 名（源码里 Map 分支没有排序）
+```

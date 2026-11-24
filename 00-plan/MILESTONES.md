@@ -119,12 +119,14 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > | 2026-11-20 | **W05 Day 1 · Spring IOC / DI**（`w05-spring-ioc-di/` 从 `.gitkeep` 建工程，M2 开工） | 手工 `lib/` 放 Spring 5.3.39 六个 jar（本机无 Maven）；`day1/ManualWiring`（A 三入口各自 `new` → **3 份仓储**、B 集中装配 → 1 份、C 数源码：换实现 A 段 3 处 / B 段 1 处，加依赖 3 处）+ `day1/SpringWiring`（A 构造发生在 `+312~338 ms`、`refresh` 返回 `+354 ms`；栈上 `BeanUtils.instantiateClass:213` + `createBeanInstance:1222/1232` + `preInstantiateSingletons:955`；B `s1 == s2`；C 入口代码 `new X(` = **0**；D jdbc→memory 零改调用点；E `@Lazy` `containsSingleton` false→true；F prototype `p1 == p2 : false`、不进池）+ `day1/ContainerQuestions`（Q1 两种 `NoSuchBeanDefinitionException`；Q2 `@Autowired` 在 `new` 出来是 null、注册后是 jdbc；Q3a 字段注入解环成功 `b.a == a`、Q3b 构造器注入三层异常到 `BeanCurrentlyInCreationException`；Q4 定义 13 / 单例 19，取过 prototype+lazy 后 13/20）+ `day1-result.txt`（355 行）+ `day1-spring-source.txt`（6 段源码，行号与栈对撞）；笔记 W05 Day 1 整节（9 小节）+ 踩坑 4 条 + 面试 10 条 + 参考要点 Q1/Q2/Q3；`Spring.md` 0 → **3 题** |
 > | 2026-11-23 | **W05 Day 2 · Bean 生命周期** | `day2/LifecycleOrder`（A 六回调时间线：①构造 `+375.7` → ②BPP.before `+386.7` → ③`@PostConstruct` `+389.0` → ④`afterPropertiesSet` `+389.5` → ⑤`initMethod` `+390.2` → ⑥BPP.after `+390.5` →⑦`@PreDestroy` →⑧`destroy` →⑨`destroyMethod`；属性注入用「构造时 repo=null / 初始化时 repo=jdbc」夹住；B 销毁**逆序 + 依赖方先死**；C prototype 销毁回调 **0 次**，源头 `AbstractBeanFactory:1942` 的 `!mbd.isPrototype()`；D `@Bean` 默认推断 `close()`：1 次 vs `destroyMethod=""` 的 0 次）+ `day2/PostProcessorTrace`（A 计数表：正常 Bean **2/2**、`bppFirst`/`bppSecond`/`earlyDependent` **0/0**；B `@PostConstruct` 栈 `InitDestroyAnnotationBeanPostProcessor:157` ← `applyBPPBefore:440` ← `initializeBean:1796`；C 三追问；D `Ordered` 序列 `[first.before, second.before, first.after, second.after]`）+ 新增 `support/Stacks` + `lib/javax.annotation-api-1.3.2.jar`；`day2-result.txt`（140 行）+ `day2-spring-source.txt`（7 段源码）；笔记 W05 Day 2 整节（9 小节）+ 踩坑 3 条 + 面试 8 条 + 参考要点 Q4/Q5；`Spring.md` 3 → **5 题** |
 > | 2026-11-23 | **W05 Day 3 · Bean 作用域** | `day3/ScopeMatrix`（A `singleton` vs `prototype` 三条判据：`refresh` 后构造数 `1 / 0`、两次 `getBean` 的 `==` 为 `true / false`、`containsSingleton` `true / false`、`close()` 后销毁 `1+1 vs 0+0`；B `registerScope("singleton", …)` → `Cannot replace existing scopes`，`getRegisteredScopeNames()` 只有 `[thread]`，`SimpleThreadScope` 每线程一个实例并打 WARN「不支持销毁回调」；C 四作用域判据矩阵）+ `day3/WebScopeTrap`（A `request` → `IllegalStateException: No Scope registered for scope name 'request'`，`doGetBean:369`，**refresh 不报错、getBean 才报**；B `session` 同款；C `proxyMode` 三组：无代理三次 `id()` 全 `1`（造 1 个）、`TARGET_CLASS` 后 `2/3/4`（造 3 个）、定义被拆成 `scopedTarget.requestProxy`（`scope=request`）+ `requestProxy`（`ScopedProxyFactoryBean` 单例）、`request` + 代理后 `getBean` 不抛而首次调用抛（栈多一帧 `SimpleBeanTargetSource:35`）；D 自定义 `Scope`「每 2 次换实例」→ `A A B B`、轮换销毁 1 次、`close()` 后仍 1 次）+ `day3/ScopeProbe`；`day3-result.txt`（154 行）+ `day3-spring-source.txt`（7 段源码）；笔记 W05 Day 3 整节（6 小节）+ 踩坑 5 条 + 面试 6 条 + 参考要点 Q6/Q7；`Spring.md` 5 → **7 题** |
+> | 2026-11-24 | **W05 Day 4 · 注入方式的取舍** | `day4/InjectionChoice`（A 三个候选 + 字段名对不上 → `NoUniqueBeanDefinitionException: expected single matching bean but found 3: alipayChannel,wechatChannel,unionPayChannel`，**死在 `refresh()` 里**（栈：`resolveNotUnique:220` ← `doResolveDependency:1369` ← `AutowiredFieldElement.resolveFieldValue:710` ← `postProcessProperties:408` ← `populateBean:1431` ← `doCreateBean:619`）；B **字段名回退**：字段名 `wechatChannel` + 零注解 → 注入到 `wechat`；C `@Qualifier("alipayChannel")` → `alipay`，点名不存在 → `expected at least 1 bean which qualifies as autowire candidate`；D 字段名依旧 `wechatChannel` + `@Primary` → 注入 `preferred`（**Primary 在名字之前**）；E `@Resource` 默认名 = 字段名 → `unionpay`，`name="alipayChannel"` + 字段名 `anything` → `alipay`；F1 显式名对不上 → **`No bean named 'channel' available`**（不查类型）；F2 默认名对不上 → 退回按类型 → 同一个 `NoUnique`） + `day4/CollectionInject`（A `List` / 数组 = `wechat → alipay → unionpay` 按 `@Order`；B `Map` key = bean 名、顺序 = 注册顺序 `[alipayChannel, wechatChannel, unionPayChannel]`，源码 1493-1500 无一行排序；C 零候选三段：`required=true` 的 `List` **照样抛** `expected at least 1 bean` / `required=false` 给 **null**（不是空集合）/ 单值同款异常；D 集合 + `@Qualifier` → 缩到 1 个再全收） + `day4/CtorInject`（A 单构造器免注解 → `log`；B1 两个构造器无无参 → `BeanInstantiationException: No default constructor found`，B2 有无参则**静默**走无参；C 标了 `@Autowired` 的那个赢；D1 原型 `getObject()` 两次 = `temp-1 / temp-2`，D2 零候选 `getIfAvailable`/`getIfUnique` 都是 null，D3 三候选 `getIfUnique()` null 但 `getIfAvailable()` **抛** `NoUnique`；E 反射读到的参数名 = `arg0`（`isNamePresent=false`）→ 参数名回退失效）+ `support/Quiet`；`day4-result.txt`（145 行）+ `day4-spring-source.txt`（8 段源码）；笔记 W05 Day 4 整节（8 小节）+ 踩坑 4 条 + 面试 8 条 + 参考要点 Q8/Q9；`Spring.md` 7 → **9 题** |
 >
 > **W02 已封板（2026-11-03）**，六天全部完成。**W03 已封板（2026-11-11）**，四天全部完成。
 > **W04 已封板（2026-11-19）**，两天全部完成 —— 五个知识点全勾。
 > **M1 已封板（2026-11-20）**：M1 要的「4 份笔记 + 4 个可运行工程 + 8 道面试题」全部超额
 > —— W01~W04 四份笔记、四个一条命令能跑起来的工程、题库 24（Java基础）+ 12（Java并发）＝ **36 道**。
-> 当前在 **M2 · Spring 内核**：W05 已开工，Day 1（IOC/DI）+ Day 2（生命周期）+ Day 3（作用域）完成，
+> 当前在 **M2 · Spring 内核**：W05 已开工，Day 1（IOC/DI）+ Day 2（生命周期）+ Day 3（作用域）+
+> Day 4（注入取舍）完成，
 > 工程从 `.gitkeep` 建起，`lib/` 手工放 7 个 jar（Day 2 多了 `javax.annotation-api`）。
 >
 > W04 Day 2 最值钱的三条结论（全部有实测数字）：
@@ -345,11 +347,25 @@ D 自定义 `Scope`「每 2 次换实例」→ `A A B B`、轮换销毁 1 次、
 照样抛同一个 ISE，只是从 `getBean` 挪到了第一次方法调用 —— 顺带记住「自定义作用域的销毁回调交给
 `scope.registerDestructionCallback`，`ctx.close()` 只销毁单例」。
 
-下一个时间盒（60 分钟）：**W05 Day 4 · 注入方式的取舍** ——
-① 同一接口两个实现，`@Autowired`（byType）/ `@Resource`（byName）/ `@Qualifier` / `@Primary`
-四种写法的结果与报错原文（`NoUniqueBeanDefinitionException`）；
-② 集合注入 `List<T>` / `Map<String,T>`，key = beanName，`@Order` 决定顺序；
-③ 构造器注入的两个细节（单构造器免注解 / 多构造器必须标一个）+ `ObjectProvider` 延迟取；
-④ 输出 `day4-result.txt` + 观察 `AutowiredAnnotationBeanPostProcessor` 的栈（接 Day 2 的后处理器）。
-时间盒见 `00-plan/today.md`（每天开工前先打开它，收工时覆盖）。
+**W05 Day 4 已完成（2026-11-24）· 注入方式的取舍**：`day4/InjectionChoice`（A 三候选 + 字段名对不上 →
+`NoUniqueBeanDefinitionException: expected single matching bean but found 3`，死在 `refresh()` 而不是 `getBean`；
+B **字段名回退**：字段名 `wechatChannel` + 零注解 → 注入 `wechat`；C `@Qualifier` → `alipay`；
+D 字段名不变 + `@Primary` → `preferred`；E `@Resource` 默认名 = 字段名；F1 显式名对不上 →
+`No bean named 'channel' available`（不查类型）/ F2 默认名对不上 → 退回按类型 → 同一个 `NoUnique`）
++ `day4/CollectionInject`（`List` 按 `@Order`、`Map` 按注册顺序且 key = bean 名、零候选三段：
+`required=true` 照样抛 / `required=false` 给 null / 单值同款）+ `day4/CtorInject`（单构造器免注解、
+多构造器不标的两种结局、`ObjectProvider` 三局面、参数名回退要 `-parameters`）+ `support/Quiet`。
+产出 `day4-result.txt`（145 行）+ `day4-spring-source.txt`（8 段源码）。
 
+三条核心结论：① **挑人是四级链**：`@Qualifier` 先缩范围 → `@Primary` → `@Priority` → 名字匹配，
+所以 `@Primary` 能让「字段名对得上」失效，反过来不成立；② **`@Autowired` 不是纯按类型**，
+多候选时拿字段名当 bean 名回退；`@Resource` 默认名也是字段名，但**显式点名时不查类型** ——
+这就是两种注解报错不同的原因；③ **集合不是兜底**：零候选 + `required=true` 照样抛，
+`required=false` 给 `null`；`Map` 不像 `List` 那样按 `@Order` 排序（源码 Map 分支无排序）。
+
+下一个时间盒（60 分钟）：**W05 Day 5 · 收尾封板** ——
+① 把第四格「Spring 到底在帮你管理什么」写成能脱稿讲的三段（对象图 / 生命周期 / 边界），每段配一个本周实测数字；
+② `pom.xml` 结账：本机没 Maven，写了也不声称验证过，或明确记为「装 Maven 后补」；
+③ 题库抽 Q1 / Q4 / Q8 脱稿讲一遍；
+④ `MILESTONES.md` 把 W05 标 🟩、W06 AOP 置为下一个，`today.md` 覆盖。
+时间盒见 `00-plan/today.md`（每天开工前先打开它，收工时覆盖）。

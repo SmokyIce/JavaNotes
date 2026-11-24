@@ -28,6 +28,9 @@
 ./run.sh day2.PostProcessorTrace
 ./run.sh day3.ScopeMatrix
 ./run.sh day3.WebScopeTrap
+./run.sh day4.InjectionChoice
+./run.sh day4.CollectionInject
+./run.sh day4.CtorInject
 ```
 
 `run.bat` 同款。`run.sh` 里 classpath 是 `out;lib/*`（Windows 分隔符是 `;`，Git Bash 下也别改成 `:`）。
@@ -46,6 +49,8 @@ w05-spring-ioc-di/
 ├── day2-spring-source.txt       Day 2 源码取证（7 段：initializeBean / 销毁登记 / BPP 注册…）
 ├── day3-result.txt              Day 3 两段实验的实测（154 行）
 ├── day3-spring-source.txt       Day 3 源码取证（7 段：doGetBean 作用域分支 / registerScope / SimpleThreadScope / ScopedProxyUtils…）
+├── day4-result.txt              Day 4 三段实验的实测（145 行）
+├── day4-spring-source.txt       Day 4 源码取证（8 段：doResolveDependency / determineAutowireCandidate / Map 不排序 / @Resource 回退条件…）
 └── src/main/java/com/newt/java48/w05/
     ├── support/
     │   ├── Trace.java           「谁 new 的、什么时候 new 的」打点
@@ -74,11 +79,27 @@ w05-spring-ioc-di/
         ├── EarlyDependent.java  被后处理器 @Autowired → 提前创建 → 拿不到代理
         ├── PlainBean.java       普通 Bean，2/2 的样本
         └── StackDumpBean.java   在 @PostConstruct 里打印栈
-    └── day3/
+    ├── day3/
         ├── ScopeMatrix.java     A singleton vs prototype 三条判据 / B thread 作用域 / C 判据矩阵
         ├── WebScopeTrap.java    A request 报错原文 / B session / C proxyMode / D 自定义 Scope
         └── ScopeProbe.java      探针 Bean：构造数 / @PreDestroy / destroy 三个计数
+    └── day4/
+        ├── InjectionChoice.java A 三候选爆炸 + 栈 / B 字段名回退 / C @Qualifier / D @Primary 压过名字
+        │                        / E @Resource 按名 / F 两种注解名字对不上的报错对照
+        ├── CollectionInject.java A List 按 @Order / B Map 按注册顺序 / C 零候选三段 / D 集合 + @Qualifier
+        ├── CtorInject.java      A 单构造器免注解 / B 多构造器不标（炸 or 静默走无参）/ C 标一个 /
+        │                        D ObjectProvider 三种局面 / E 参数名回退要 -parameters
+        └── pay/
+            ├── PayChannel.java      接口（单抽象方法，方便写 lambda）
+            ├── AlipayChannel.java   @Order(2)，bean 名 alipayChannel
+            ├── WechatChannel.java   @Order(1)，bean 名 wechatChannel
+            └── UnionPayChannel.java @Order(3)，bean 名 unionPayChannel
 ```
+
+> `support/Quiet.java` 是 Day 4 加的：Day 4 大量「故意让容器启动失败」的实验，
+> Spring 每条都会打一遍完整 JUL 警告，和自己打印的异常链完全重复。它只关掉
+> `AnnotationConfigApplicationContext` 这一个 logger（**名字是枚举 `LogManager` 查出来的**，不是猜的 ——
+> 按父类名设 `Level.OFF` 压不掉，因为字段是 `LogFactory.getLog(getClass())`）。
 
 ## 三、五段实验各自证明了什么
 
@@ -172,7 +193,37 @@ Q4 那个 **19 → 20** 是原型作用域最干净的证据：原型造完连�
 3. **自定义作用域的销毁回调交给 scope 自己**（`AbstractBeanFactory:1952~1960` 的 else 分支），
    而 `ctx.close()` 只销毁单例 —— 所以作用域实现者必须自己收尾。
 
-## 四、九个坑
+### 7. `InjectionChoice` / `CollectionInject` / `CtorInject` —— 「给哪个」是一条四级链
+
+| 段 | 结论 | 证据（实测） |
+| :--- | :--- | :--- |
+| A | 三候选 + 字段名对不上 → 抛 | `NoUniqueBeanDefinitionException: expected single matching bean but found 3: alipayChannel,wechatChannel,unionPayChannel` |
+| A 栈 | 它死在 `refresh()`，抛点在后处理器 | `resolveNotUnique:220 ← doResolveDependency:1369 ← AutowiredFieldElement.resolveFieldValue:710 ← postProcessProperties:408 ← populateBean:1431 ← doCreateBean:619` |
+| B | `@Autowired` **不纯按类型**：多候选时按字段名回退 | 字段名 `wechatChannel`、零注解 → 注入到 `wechat` |
+| C | `@Qualifier` 在「筛候选」那一步就生效 | 点名 `alipayChannel` → `alipay`；点名不存在 → `NoSuchBeanDefinitionException: expected at least 1 bean which qualifies as autowire candidate` |
+| D | `@Primary` 压过「字段名回退」 | 字段名仍是 `wechatChannel`，注入到 `preferred` |
+| E | `@Resource` 按名字（默认名 = 字段名） | 字段名 `unionPayChannel` → `unionpay`；`name="alipayChannel"` + 字段名 `anything` → `alipay` |
+| F1 | 显式名对不上 → 不查类型 | `No bean named 'channel' available`（容器里明明有 3 个 `PayChannel`） |
+| F2 | 默认名对不上 → 退回按类型 | 同一个 `NoUniqueBeanDefinitionException`（和 `@Autowired` 一模一样） |
+| 集合 A | `List` / 数组按 `@Order` | `wechat → alipay → unionpay`（注册顺序是 alipay 打头） |
+| 集合 B | `Map` **不排序**，key = bean 名 | `[alipayChannel, wechatChannel, unionPayChannel]` = 注册顺序；源码 1493-1500 无一行排序 |
+| 集合 C | 集合没有特权 | `required=true` 零候选 → `expected at least 1 bean`；`required=false` → `null`（不是空集合） |
+| 构造器 A/B | 单构造器免注解；多构造器不标看运气 | 无无参构造器 → `BeanInstantiationException: No default constructor found`；有则**静默**走无参 |
+| 构造器 C | 标了 `@Autowired` 的那个赢 | 走 `ctor(Notifier, String)` |
+| `ObjectProvider` | 把解析推迟到调用时 | 原型两次 `getObject()` = `temp-1 / temp-2`；零候选 `getIfAvailable()` = null；三候选 `getIfUnique()` = null 但 `getIfAvailable()` 抛 `NoUnique` |
+| 参数名回退 | 要 `-parameters`（或 `-g`） | 反射读到 `arg0`、`isNamePresent=false` → `NoUnique`；字段名回退不需要 |
+
+四条能直接拿去面试的：
+
+1. **判定链的顺序是 Primary → Priority → 名字**（`DefaultListableBeanFactory:1635/1639/1642`）——
+   所以 `@Primary` 能让「字段名对得上」失效，而反过来不成立。
+2. **`@Autowired` 的第三级回退是「字段名当 bean 名」**，这是它「其实也按名字」的那一半。
+3. **两种注解真正的差别在报错**：显式名对不上是 `No bean named`（不查类型），
+   默认名对不上则退回按类型、和 `@Autowired` 同一个 `NoUnique`。
+4. **集合注入不是兜底**：零候选 + `required=true` 照样抛；`required=false` 给 `null`。
+   「收成 List 就天然为空」是讹传，实测推翻。
+
+## 四、十三个坑
 
 1. **`Src.count` 把自己数进去了。** 第一版把针脚 `"new JdbcOrderRepository("` 写在统计代码里当字符串常量，
    于是 `SpringWiring`（明明 0 个 new）数出 3、`AppConfig` 也数出 3。改成 `countNew(src, "JdbcOrderRepository")`
@@ -200,10 +251,23 @@ Q4 那个 **19 → 20** 是原型作用域最干净的证据：原型造完连�
    `SimpleThreadScope.SCOPE_NAME`，编译不过 —— 它的作用域名在配置里写死字符串 `"thread"`。
    同类的坑：`registerDisposableBeanIfNecessary` 声明在 1942，但 `!isPrototype()` 那句在 1944，
    引行号必须说清「声明 / 语句」。
+10. **「零候选的集合注入给空集合」是讹传。** 我第一版文案就这么写的，实跑三段全对不上：
+   `required=true` 的 `List` 照样抛 `expected at least 1 bean`，`required=false` 给的是 `null`。
+   源码：Collection / Map 分支 `if (matchingBeans.isEmpty()) return null;` → 掉回单值分支 → 抛。
+11. **注入失败不是死在 `getBean`，是死在 `refresh`。** 第一版把 `try/catch` 包在 `ctx.getBean()` 上，
+   程序直接 `Exception in thread "main"` 退出 —— 因为那个 bean 不是 lazy、也没人依赖它，
+   `preInstantiateSingletons` 自己就把它造了。改法：`failOf(...)` 只包 `refresh()`。
+12. **JUL logger 名是子类，不是父类。** 想压掉 `refresh` 失败的警告，按 `AbstractApplicationContext`
+   设 `Level.OFF` 无效 —— 字段是 `LogFactory.getLog(getClass())`，真名是
+   `org.springframework.context.annotation.AnnotationConfigApplicationContext`（枚举 `LogManager` 才查到）。
+13. **只打印 root cause 会丢掉最有用的那层。** `No default constructor found` 在中间的
+   `BeanInstantiationException` 上，只打根因只剩一句 `NoSuchMethodException: …<init>()`。
+   异常链的信息分布是「中间层最说明问题」。
 
-## 五、待办（W05 剩下的六天）
+## 五、待办（W05 剩下的五天）
 
 - [x] Bean 生命周期（Day 2 完成：六回调 + 后处理器 + 三个追问）
 - [x] Bean 作用域（Day 3 完成：四条判据 + `request` 报错原文 + `proxyMode` + 自定义 Scope）
-- [ ] `@Autowired` vs `@Resource` vs 构造器注入的取舍
+- [x] `@Autowired` vs `@Resource` vs 构造器注入的取舍（Day 4 完成：判定链四级 + 两种注解报错对照 + 集合/零候选）
 - [ ] 补 `pom.xml`（装了 Maven 之后）
+- [ ] W05 收尾：`Spring 到底在帮你管理什么` 那一格（现在只有半张答案）

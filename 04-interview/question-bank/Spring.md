@@ -6,6 +6,7 @@
 > W05 Day 1 补前三题（IOC/DI 的价值 / Bean 何时创建 / 循环依赖）。
 > W05 Day 2 补 Q4 / Q5（生命周期顺序 / `BeanPostProcessor` 漏掉谁）。
 > W05 Day 3 补 Q6 / Q7（作用域四种判据 / `proxyMode` 是把错误推迟）。
+> W05 Day 4 补 Q8 / Q9（多候选的判定链 / `@Resource` 与 `@Autowired` 的报错差别）。
 > 「项目案例」是按常见场景写的**讲稿模板**，细节和数字换成自己项目里的真实版本再背。
 
 ## 题目
@@ -320,3 +321,134 @@ requestProxy.id()       → IllegalStateException: No Scope registered for scope
 > `Signer`（每次要有独立的状态）。压测发现并发下签名串错乱 —— 因为单例里那个 `Signer`
 > 从启动到停机都是同一个，状态被多线程共享。改成 `proxyMode = TARGET_CLASS`（或 `ObjectProvider`）后正常。
 > 落点：**「单例里注入原型」不会报错，只会静默变成「其实是单例」——这是最典型的作用域陷阱。**
+
+---
+
+### 8. 同一个接口有三个实现，`@Autowired` 怎么挑？挑不出来报什么错？怎么收场？
+
+**我的回答（自己的话）：**
+
+它按一条**四级链**挑，顺序是写死的（`DefaultListableBeanFactory:1633-1655`）：
+
+```text
+按类型筛出候选（@Qualifier 在这一步就把范围缩好）
+  → ① @Primary 有且只有一个   → 用它
+  → ② @Priority 最大的        → 用它
+  → ③ 名字匹配：字段名 / 参数名 == bean 名（或别名）
+  → ④ 都不行 → resolveNotUnique → NoUniqueBeanDefinitionException
+```
+
+**关键的第一个反直觉点：`@Autowired` 不是纯按类型。** 类型匹配到多个之后，它还有一级「按名字」回退，
+对字段来说这个名字就是字段名。三个候选（`alipayChannel` / `wechatChannel` / `unionPayChannel`）：
+
+```text
+字段名 channel       → NoUniqueBeanDefinitionException:
+                        expected single matching bean but found 3: alipayChannel,wechatChannel,unionPayChannel
+字段名 wechatChannel → 注入成功，拿到 wechat        ← 第 ③ 级回退，一个注解都没多写
+```
+
+**第二个反直觉点：`@Primary` 在名字之前。** 同样字段名 `wechatChannel`，容器里加一个 `@Primary`
+的 bean，注入的就变成 `preferred` 了 —— 名字对得上也不管用。所以「按字段名回退」是最后一级，不是第二级。
+
+**第三个点：这个异常死在 `refresh()`，不是 `getBean`。** 那个 bean 没标 `@Lazy`、也没人依赖它，
+`preInstantiateSingletons` 自己就把它造了：
+
+```text
+at DependencyDescriptor.resolveNotUnique:220
+at DefaultListableBeanFactory.doResolveDependency:1369
+at AutowiredAnnotationBeanPostProcessor$AutowiredFieldElement.resolveFieldValue:710
+at AutowiredAnnotationBeanPostProcessor.postProcessProperties:408
+at AbstractAutowireCapableBeanFactory.populateBean:1431
+at AbstractAutowireCapableBeanFactory.doCreateBean:619
+```
+
+**收场方式按场景选：**
+
+| 场景 | 写法 |
+| :--- | :--- |
+| 有一个明确的默认实现 | `@Primary` |
+| 只有一个调用点要特殊实现 | `@Qualifier("beanName")` |
+| 想按名字、且不想被类型匹配干扰 | `@Resource(name = "beanName")` |
+| 全都要（策略/插件式） | `List<T>`（按 `@Order`）或 `Map<String,T>`（key = bean 名） |
+
+**追问预判：**
+
+- 「`@Qualifier` 和 `@Primary` 谁优先？」——`@Qualifier` 更早：它在 `findAutowireCandidates` 那一步
+  就把候选集缩掉了，`@Primary` 是候选集**里面**再挑。
+- 「`@Qualifier` 点名一个不存在的会怎样？」——`NoSuchBeanDefinitionException: expected at least 1 bean
+  which qualifies as autowire candidate`，message 里会打印 `@Qualifier("xxx")` 原文。
+- 「`@Priority` 和 `@Order` 一样吗？」——不一样。`@Priority`（`javax.annotation.Priority`）参与注入的
+  候选取舍；`@Order` 只管集合排序和 AOP/后处理器的执行顺序，**不参与**「多候选挑一个」。
+  实测：三个候选 order 分别是 1/2/3，没有 `@Primary` 时照样 `NoUniqueBeanDefinitionException` ——
+  如果 `@Order` 能救，就不会抛。（另：源码 1713 行，两个候选 `@Priority` 相同也会抛 `NoUnique`，
+  说「Multiple beans found with the same priority」；这条只读过源码，没实测。）
+- 「为什么 `@Bean` 方法返回接口类型时 bean 名是方法名？」——`@Bean` 的默认名字就是方法名，
+  所以 `@Bean PayChannel preferredChannel()` 的名字是 `preferredChannel`，而不是类名小写。
+
+**项目里的实际案例：**
+
+> 讲稿模板：支付渠道从 1 个扩到 3 个之后，`OrderService` 里那个 `@Autowired PayChannel payChannel`
+> 第二天上线直接 `NoUniqueBeanDefinitionException`，本地却没事 —— 因为本地只配了沙箱的那一个实现。
+> 修法是给「默认渠道」加 `@Primary`，需要指定渠道的调用点改成 `@Qualifier` 或 `Map<String, PayChannel>`
+> 按名字取。落点：**多实现这件事一旦上线才出现，说明环境之间的 bean 集合不一致，
+> 这类问题必须在启动期炸，而不是等到某笔订单进来才炸。**
+
+---
+
+### 9. `@Resource` 和 `@Autowired` 的区别，除了「名字 vs 类型」还有什么？
+
+**我的回答（自己的话）：**
+
+真正的差别在**名字对不上时报什么错** —— 这一步才说明两者的机制不同。
+
+```text
+@Resource(name = "channel")（不存在）
+  → NoSuchBeanDefinitionException: No bean named 'channel' available
+    ↑ 它根本没查类型：容器里明明有 3 个 PayChannel，也照样报「没有这个名字」
+
+@Resource 字段名 channel（不存在，即默认名）
+  → NoUniqueBeanDefinitionException: expected single matching bean but found 3: ...
+    ↑ 退回按类型，于是和 @Autowired 完全同一个错
+```
+
+**源码一句话**（`CommonAnnotationBeanPostProcessor.autowireResource:546`）：
+
+```java
+if (this.fallbackToDefaultTypeMatch && element.isDefaultName && !factory.containsBean(name)) {
+    resource = beanFactory.resolveDependency(descriptor, ...);   // 退回按类型
+}
+else {
+    resource = beanFactory.resolveBeanByName(name, descriptor);  // 硬按名字
+}
+```
+
+而 `isDefaultName` 在 `:649` 算出：没写 `name` 属性 → 默认名 = **字段名**（`member.getName()`）。
+所以「`@Resource` 默认按字段名」这句话对，但它只是「默认名」，查不到还会退回按类型。
+
+**再补两个经常被一起问的边界：**
+
+```text
+@Autowired（required=true）List<T>，容器里零候选 → 照样抛，不是空集合
+@Autowired(required=false)                      → 给 null，不是空集合
+List 的顺序 = @Order；Map 的顺序 = bean 定义注册顺序，key = bean 名
+```
+
+**追问预判：**
+
+- 「`@Resource` 支持构造器参数吗？」——不支持，它只能标在字段和 setter 上；
+  `@Autowired` 可以标构造器、方法、参数。
+- 「`@Resource` 能不写 name 又指定类型吗？」——`@Resource(type = Xxx.class)` 可以，
+  但 name 非空时 type 只做校验，最终还是按名字取。
+- 「`@Autowired` 为什么能标在构造器上而 `@Resource` 不能？」——因为两者是不同的后处理器：
+  `AutowiredAnnotationBeanPostProcessor` 实现了 `SmartInstantiationAwareBeanPostProcessor`
+  （能决定用哪个构造器），`CommonAnnotationBeanPostProcessor` 只做属性/方法注入。
+- 「`@Inject` 呢？」——JSR-330，等价于 `@Autowired`（按类型），需要 `javax.inject` 依赖，
+  且没有 `required` 属性。
+
+**项目里的实际案例：**
+
+> 讲稿模板：一个 `@Resource(name = "smsSender")` 的字段，重构时把 bean 改名成 `aliyunSmsSender`，
+> 启动直接 `No bean named 'smsSender' available` —— 一眼就能定位，因为报错里带着名字。
+> 同一个改动如果是 `@Autowired`，报的会是 `No qualifying bean of type 'SmsSender'`，
+> 你得自己去想「以前是按哪个名字进来的」。落点：**显式点名的写法可读性和可排查性都更好，
+> 代价是它绕过了「按类型 + 多候选」那套机制，注入失败不会被 `@Primary` 救回来。**

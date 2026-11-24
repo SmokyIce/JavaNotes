@@ -1,0 +1,230 @@
+================================================================
+ W05 Day 4 · 注入方式相关源码（Spring 5.3.39 sources jar）
+ 用法：行号与 day4-result.txt 里栈上的行号逐一对撞
+ 文件：spring-beans -> DefaultListableBeanFactory.java
+       spring-context -> CommonAnnotationBeanPostProcessor.java
+================================================================
+
+### 1. DefaultListableBeanFactory.doResolveDependency:1343-1378（多候选到底怎么收场）
+    1349 先试"多元素"分支（数组 / 集合 / Map），拿不到才继续往下
+    1352 单值路：候选为空 + required -> raiseNoMatchingBeanFound
+         （集合零候选返回 null 之后也是掉到这句 —— C1 段抛的就是它）
+    1365 候选 > 1 -> determineAutowireCandidate 做取舍
+    1369 取舍不出来 -> resolveNotUnique -> NoUniqueBeanDefinitionException（栈上就是 1369）
+----------------------------------------------------------------
+					return (descriptor.getField() != null ?
+							converter.convertIfNecessary(value, type, descriptor.getField()) :
+							converter.convertIfNecessary(value, type, descriptor.getMethodParameter()));
+				}
+			}
+
+			Object multipleBeans = resolveMultipleBeans(descriptor, beanName, autowiredBeanNames, typeConverter);
+			if (multipleBeans != null) {
+				return multipleBeans;
+			}
+
+			Map<String, Object> matchingBeans = findAutowireCandidates(beanName, type, descriptor);
+			if (matchingBeans.isEmpty()) {
+				if (isRequired(descriptor)) {
+					raiseNoMatchingBeanFound(type, descriptor.getResolvableType(), descriptor);
+				}
+				return null;
+			}
+
+			String autowiredBeanName;
+			Object instanceCandidate;
+
+			if (matchingBeans.size() > 1) {
+				autowiredBeanName = determineAutowireCandidate(matchingBeans, descriptor);
+				if (autowiredBeanName == null) {
+					if (isRequired(descriptor) || !indicatesMultipleBeans(type)) {
+						return descriptor.resolveNotUnique(descriptor.getResolvableType(), matchingBeans);
+					}
+					else {
+						// In case of an optional Collection/Map, silently ignore a non-unique case:
+						// possibly it was meant to be an empty collection of multiple regular beans
+						// (before 4.3 in particular when we didn't even look for collection beans).
+						return null;
+					}
+				}
+				instanceCandidate = matchingBeans.get(autowiredBeanName);
+
+### 2. determineAutowireCandidate:1633-1655（判定链的顺序，今天最核心的一段）
+    1635 Primary -> 1639 Priority -> 1642 起才是"名字匹配"
+    B 段（字段名回退成功）和 D 段（@Primary 压过字段名）的分水岭就在这三步的先后
+----------------------------------------------------------------
+	 * <p>Looks for {@code @Primary} and {@code @Priority} (in that order).
+	 * @param candidates a Map of candidate names and candidate instances
+	 * that match the required type, as returned by {@link #findAutowireCandidates}
+	 * @param descriptor the target dependency to match against
+	 * @return the name of the autowire candidate, or {@code null} if none found
+	 */
+	@Nullable
+	protected String determineAutowireCandidate(Map<String, Object> candidates, DependencyDescriptor descriptor) {
+		Class<?> requiredType = descriptor.getDependencyType();
+		String primaryCandidate = determinePrimaryCandidate(candidates, requiredType);
+		if (primaryCandidate != null) {
+			return primaryCandidate;
+		}
+		String priorityCandidate = determineHighestPriorityCandidate(candidates, requiredType);
+		if (priorityCandidate != null) {
+			return priorityCandidate;
+		}
+		// Fallback
+		for (Map.Entry<String, Object> entry : candidates.entrySet()) {
+			String candidateName = entry.getKey();
+			Object beanInstance = entry.getValue();
+			if ((beanInstance != null && this.resolvableDependencies.containsValue(beanInstance)) ||
+					matchesBeanName(candidateName, descriptor.getDependencyName())) {
+				return candidateName;
+			}
+		}
+		return null;
+	}
+
+	/**
+
+### 3. matchesBeanName:1774-1777（名字匹配连别名一起认）
+----------------------------------------------------------------
+	 * stored in this bean definition.
+	 */
+	protected boolean matchesBeanName(String beanName, @Nullable String candidateName) {
+		return (candidateName != null &&
+				(candidateName.equals(beanName) || ObjectUtils.containsElement(getAliases(beanName), candidateName)));
+	}
+
+
+### 4. resolveMultipleBeans:1446-1500（数组排序 / Collection 排序 / Map 不排序）
+    1468-1474 数组：size>1 时按 comparator 排（@Order 因此生效）
+    1478-1486 Collection：同上，且空候选直接 return null
+    1493-1500 Map：findAutowireCandidates 原样返回，一行排序都没有 <- B 段的证据
+----------------------------------------------------------------
+			}
+			TypeConverter converter = (typeConverter != null ? typeConverter : getTypeConverter());
+			Object result = converter.convertIfNecessary(matchingBeans.values(), resolvedArrayType);
+			if (result instanceof Object[]) {
+				Comparator<Object> comparator = adaptDependencyComparator(matchingBeans);
+				if (comparator != null) {
+					Arrays.sort((Object[]) result, comparator);
+				}
+			}
+			return result;
+		}
+		else if (Collection.class.isAssignableFrom(type) && type.isInterface()) {
+			Class<?> elementType = descriptor.getResolvableType().asCollection().resolveGeneric();
+			if (elementType == null) {
+				return null;
+			}
+			Map<String, Object> matchingBeans = findAutowireCandidates(beanName, elementType,
+					new MultiElementDescriptor(descriptor));
+			if (matchingBeans.isEmpty()) {
+				return null;
+			}
+			if (autowiredBeanNames != null) {
+				autowiredBeanNames.addAll(matchingBeans.keySet());
+			}
+			TypeConverter converter = (typeConverter != null ? typeConverter : getTypeConverter());
+			Object result = converter.convertIfNecessary(matchingBeans.values(), type);
+			if (result instanceof List) {
+				if (((List<?>) result).size() > 1) {
+					Comparator<Object> comparator = adaptDependencyComparator(matchingBeans);
+					if (comparator != null) {
+						((List<?>) result).sort(comparator);
+					}
+				}
+			}
+			return result;
+		}
+		else if (Map.class == type) {
+			ResolvableType mapType = descriptor.getResolvableType().asMap();
+			Class<?> keyType = mapType.resolveGeneric(0);
+			if (String.class != keyType) {
+				return null;
+			}
+			Class<?> valueType = mapType.resolveGeneric(1);
+			if (valueType == null) {
+				return null;
+			}
+			Map<String, Object> matchingBeans = findAutowireCandidates(beanName, valueType,
+					new MultiElementDescriptor(descriptor));
+			if (matchingBeans.isEmpty()) {
+				return null;
+			}
+			if (autowiredBeanNames != null) {
+				autowiredBeanNames.addAll(matchingBeans.keySet());
+			}
+			return matchingBeans;
+
+### 5. raiseNoMatchingBeanFound（集合零候选时抛的就是它，栈上是 1801）
+----------------------------------------------------------------
+			Class<?> type, ResolvableType resolvableType, DependencyDescriptor descriptor) throws BeansException {
+
+		checkBeanNotOfRequiredType(type, descriptor);
+
+		throw new NoSuchBeanDefinitionException(resolvableType,
+				"expected at least 1 bean which qualifies as autowire candidate. " +
+				"Dependency annotations: " + ObjectUtils.nullSafeToString(descriptor.getAnnotations()));
+	}
+
+	/**
+	 * Raise a BeanNotOfRequiredTypeException for an unresolvable dependency, if applicable,
+	 * i.e. if the target type of the bean would match but an exposed proxy doesn't.
+	 */
+	private void checkBeanNotOfRequiredType(Class<?> type, DependencyDescriptor descriptor) {
+		for (String beanName : this.beanDefinitionNames) {
+			try {
+				RootBeanDefinition mbd = getMergedLocalBeanDefinition(beanName);
+				Class<?> targetType = mbd.getTargetType();
+
+### 6. CommonAnnotationBeanPostProcessor.autowireResource:537-557（@Resource 的两条路）
+    546 条件是 fallbackToDefaultTypeMatch && isDefaultName && !containsBean(name)
+        -> 默认名查不到才退回 resolveDependency（按类型，于是和多候选爆炸同一条路）
+    553 否则 resolveBeanByName -> "No bean named 'channel' available"（F1 的原文）
+----------------------------------------------------------------
+			throws NoSuchBeanDefinitionException {
+
+		Object resource;
+		Set<String> autowiredBeanNames;
+		String name = element.name;
+
+		if (factory instanceof AutowireCapableBeanFactory) {
+			AutowireCapableBeanFactory beanFactory = (AutowireCapableBeanFactory) factory;
+			DependencyDescriptor descriptor = element.getDependencyDescriptor();
+			if (this.fallbackToDefaultTypeMatch && element.isDefaultName && !factory.containsBean(name)) {
+				autowiredBeanNames = new LinkedHashSet<>();
+				resource = beanFactory.resolveDependency(descriptor, requestingBeanName, autowiredBeanNames, null);
+				if (resource == null) {
+					throw new NoSuchBeanDefinitionException(element.getLookupType(), "No resolvable resource object");
+				}
+			}
+			else {
+				resource = beanFactory.resolveBeanByName(name, descriptor);
+				autowiredBeanNames = Collections.singleton(name);
+			}
+		}
+
+### 7. CommonAnnotationBeanPostProcessor 字段注入：isDefaultName 与默认名从哪来
+    649 isDefaultName = name 属性为空
+    650-651 默认名 = 字段名（member.getName()），所以 @Resource 的"按名字"就是按字段名
+----------------------------------------------------------------
+			super(member, pd);
+			Resource resource = ae.getAnnotation(Resource.class);
+			String resourceName = resource.name();
+			Class<?> resourceType = resource.type();
+			this.isDefaultName = !StringUtils.hasLength(resourceName);
+			if (this.isDefaultName) {
+				resourceName = this.member.getName();
+				if (this.member instanceof Method && resourceName.startsWith("set") && resourceName.length() > 3) {
+					resourceName = Introspector.decapitalize(resourceName.substring(3));
+				}
+			}
+			else if (embeddedValueResolver != null) {
+
+### 8. 结论对照表（源码 -> 实测）
+----------------------------------------------------------------
+  判定链 1635/1639/1642  ->  D 段：字段名 wechatChannel + @Primary -> 注入 preferred
+  Map 无排序 1493-1500   ->  B 段：Map 顺序 = 注册顺序 alipay,wechat,unionpay
+  Collection 排序 1478   ->  A 段：List 顺序 = @Order 顺序 wechat,alipay,unionpay
+  empty -> null 1478/1493->  C1：required=true 报"至少 1 个"；C2：required=false 给 null
+  名字匹配 1774          ->  InjectionChoice B 段：字段名 wechatChannel 免注解注入成功
+  546 回退条件           ->  F2：@Resource 默认名查不到 -> 退回类型 -> NoUnique

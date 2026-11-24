@@ -10,7 +10,7 @@
 **三条规则**：① 60 分钟产出「知识点 / 代码 / 笔记」任意两样即算数，只有「没打开 IDE」才算失败；
 ② **取消补课** —— 断档后从当天该做的那一小步接着走；③ 只细化当前与下一个里程碑。
 
-## 当前状态（2026-11-23）
+## 当前状态（2026-11-24）
 
 M0 封板 10-27；**M1 封板 11-20**；当前 **M2 · Spring 内核**。
 
@@ -20,11 +20,11 @@ M0 封板 10-27；**M1 封板 11-20**；当前 **M2 · Spring 内核**。
 | W02 泛型/异常/Optional/Lambda/Stream/收集器 | ✅ 封板 11-03 |
 | W03 并发（4 天） | ✅ 封板 11-11 |
 | W04 线程池 / CompletableFuture（2 天） | ✅ 封板 11-19 |
-| W05 Spring IOC/DI | 🟨 Day 1（11-20 IOC/DI）+ Day 2（生命周期）+ **Day 3（11-23 作用域）完成** |
+| W05 Spring IOC/DI | 🟨 Day 1（11-20 IOC/DI）+ Day 2（生命周期）+ Day 3（11-23 作用域）+ **Day 4（11-24 注入取舍）完成** |
 
-- **下一步：W05 Day 4 = 注入方式的取舍**（`@Autowired` byType vs `@Resource` byName / `@Qualifier` /
-  `@Primary` / 集合注入 `List`·`Map` + `@Order` / 构造器注入两细节）；AOP 那部分交给 W06。
-- 题库：`Java基础.md` 24、`Java并发.md` 12、`Spring.md` **7**（M2 只要 6 道，已超额）。
+- **下一步：W05 Day 5 = 收尾封板**（第四格「Spring 到底在帮你管理什么」写成三段：对象图 / 生命周期 / 边界；
+  `pom.xml` 结账；题库抽 Q1/Q4/Q8 脱稿；MILESTONES 标 W05 🟩 → 开 W06 AOP）。
+- 题库：`Java基础.md` 24、`Java并发.md` 12、`Spring.md` **9**（M2 只要 6 道，已超额）。
 - 已知待办：`pom.xml` 推到 W05 收尾（本机没 Maven，写了验证不了）。
 
 ## W05 工程（唯一需要 jar 的工程）
@@ -133,6 +133,16 @@ singleton 是·是·`1+1`·正常，prototype 否·否·`0+0`·正常，request/
 （栈多 `SimpleBeanTargetSource:35`）；自定义作用域的销毁回调交给 `scope.registerDestructionCallback`
 （`:1952~1960` else 分支，prototype 在 1944 就短路），`ctx.close()` **只销毁单例**；
 `SimpleThreadScope` 就是一个 `NamedThreadLocal`，且**不支持销毁回调只打 WARN**。
+
+**Spring 注入取舍（W05 D4）**：挑人是**四级链**（`DefaultListableBeanFactory:1633-1655`）——
+`@Qualifier` 先缩候选 → `@Primary` → `@Priority` → 名字匹配 → `resolveNotUnique`（1369）；
+**`@Autowired` 不纯按类型**，多候选时按**字段名**回退（`wechatChannel` 零注解就注入成功），
+而 `@Primary` 在名字之前（同样字段名 → `preferred`）；`@Resource` 默认名 = 字段名，
+**显式点名时不查类型**（`No bean named 'channel' available`），默认名查不到才退回按类型（同一个 `NoUnique`）；
+`List` 按 `@Order`、**`Map` 不排序**（源码 Map 分支无排序，key = bean 名）；
+**集合不是兜底**：`required=true` 零候选照样抛，`required=false` 给 **null** 不是空集合；
+注入失败死在 **`refresh()`** 不是 `getBean`；`ObjectProvider` 三局面（原型每次新 / `getIfAvailable` 不兜多候选 /
+`getIfUnique` 吞成 null）；构造器参数名回退要 `-parameters`（默认只剩 `arg0`）。
 
 ## 工作方式上的硬教训（每条都踩过两次以上）
 
