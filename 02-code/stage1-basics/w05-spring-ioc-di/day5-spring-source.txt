@@ -1,0 +1,91 @@
+================================================================
+ W05 Day 5 · 封板自检用到的源码（Spring 5.3.39 sources jar）
+ 用法：行号与 day5-result.txt 里 S4 段的异常链逐一对撞
+ 今天只挖一件事：为什么「内层异常一样、外层包装不一样」
+   spring-beans   -> AutowiredAnnotationBeanPostProcessor
+   spring-context -> CommonAnnotationBeanPostProcessor
+================================================================
+
+### 0. 先看继承：NoUnique 是 NoSuchBean 的子类（javap spring-beans-5.3.39.jar）
+    public class NoUniqueBeanDefinitionException
+        extends NoSuchBeanDefinitionException
+    public class NoSuchBeanDefinitionException
+        extends BeansException
+    这一步决定了后面两个 catch 谁接得住它。
+
+### 1. AutowiredAnnotationBeanPostProcessor.resolveFieldValue:702-714
+    712 catch (BeansException ex)
+    713 -> UnsatisfiedDependencyException   ← @Autowired 失败时看到的**外层**
+    因为 NoUnique 顺着 NoSuchBean -> BeansException 一路上溯，全被这句接住。
+----------------------------------------------------------------
+  702  		private Object resolveFieldValue(Field field, Object bean, @Nullable String beanName) {
+  703  			DependencyDescriptor desc = new DependencyDescriptor(field, this.required);
+  704  			desc.setContainingClass(bean.getClass());
+  705  			Set<String> autowiredBeanNames = new LinkedHashSet<>(2);
+  706  			Assert.state(beanFactory != null, "No BeanFactory available");
+  707  			TypeConverter typeConverter = beanFactory.getTypeConverter();
+  708  			Object value;
+  709  			try {
+  710  				value = beanFactory.resolveDependency(desc, beanName, autowiredBeanNames, typeConverter);
+  711  			}
+  712  			catch (BeansException ex) {
+  713  				throw new UnsatisfiedDependencyException(null, beanName, new InjectionPoint(field), ex);
+  714  			}
+
+### 2. CommonAnnotationBeanPostProcessor.postProcessProperties:326-334
+    332 -> BeanCreationException("Injection of resource dependencies failed")
+    和 713 行不是同一个包装：@Resource 走的是「资源注入失败」这条。
+    所以「两种注解报同一个错」这句话要加限定 —— 内层一样，外层不一样。
+----------------------------------------------------------------
+  320  	@Override
+  321  	public boolean postProcessAfterInstantiation(Object bean, String beanName) {
+  322  		return true;
+  323  	}
+  324  
+  325  	@Override
+  326  	public PropertyValues postProcessProperties(PropertyValues pvs, Object bean, String beanName) {
+  327  		InjectionMetadata metadata = findResourceMetadata(beanName, bean.getClass(), pvs);
+  328  		try {
+  329  			metadata.inject(bean, beanName, pvs);
+  330  		}
+  331  		catch (Throwable ex) {
+  332  			throw new BeanCreationException(beanName, "Injection of resource dependencies failed", ex);
+  333  		}
+  334  		return pvs;
+  335  	}
+  336  
+
+### 3. CommonAnnotationBeanPostProcessor.autowireResource:536-556（两条路的分岔）
+    537 方法声明上就写了 throws NoSuchBeanDefinitionException
+    546 三个条件同时成立才「退回按类型」：fallbackToDefaultTypeMatch && isDefaultName && !containsBean(name)
+    548 退回后走 resolveDependency —— 于是踩到和 @Autowired 同一个 NoUnique（D 段实测）
+    554 否则 resolveBeanByName —— 显式点名，名字不存在直接 NoSuchBean，**不查类型**
+----------------------------------------------------------------
+  536  	protected Object autowireResource(BeanFactory factory, LookupElement element, @Nullable String requestingBeanName)
+  537  			throws NoSuchBeanDefinitionException {
+  538  
+  539  		Object resource;
+  540  		Set<String> autowiredBeanNames;
+  541  		String name = element.name;
+  542  
+  543  		if (factory instanceof AutowireCapableBeanFactory) {
+  544  			AutowireCapableBeanFactory beanFactory = (AutowireCapableBeanFactory) factory;
+  545  			DependencyDescriptor descriptor = element.getDependencyDescriptor();
+  546  			if (this.fallbackToDefaultTypeMatch && element.isDefaultName && !factory.containsBean(name)) {
+  547  				autowiredBeanNames = new LinkedHashSet<>();
+  548  				resource = beanFactory.resolveDependency(descriptor, requestingBeanName, autowiredBeanNames, null);
+  549  				if (resource == null) {
+  550  					throw new NoSuchBeanDefinitionException(element.getLookupType(), "No resolvable resource object");
+  551  				}
+  552  			}
+  553  			else {
+  554  				resource = beanFactory.resolveBeanByName(name, descriptor);
+  555  				autowiredBeanNames = Collections.singleton(name);
+  556  			}
+
+### 4. 结论对撞表（day5-result.txt S4 段实测）
+    写法                               外层异常                         内层异常
+    @Autowired 多候选                  UnsatisfiedDependencyException   NoUniqueBeanDefinitionException
+    @Resource(name="channel") 不存在    BeanCreationException            NoSuchBeanDefinitionException
+    @Resource 默认名不存在              BeanCreationException            NoUniqueBeanDefinitionException
+    读法：内层讲「为什么」，外层讲「谁在灌字段的时候炸的」。

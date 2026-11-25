@@ -7,6 +7,7 @@
 > W05 Day 2 补 Q4 / Q5（生命周期顺序 / `BeanPostProcessor` 漏掉谁）。
 > W05 Day 3 补 Q6 / Q7（作用域四种判据 / `proxyMode` 是把错误推迟）。
 > W05 Day 4 补 Q8 / Q9（多候选的判定链 / `@Resource` 与 `@Autowired` 的报错差别）。
+> W05 Day 5 补 Q10（启动期注入失败的异常链怎么读）+ 修正 Q9 里「完全同一个错」的说法（内层一样、外层不同）。
 > 「项目案例」是按常见场景写的**讲稿模板**，细节和数字换成自己项目里的真实版本再背。
 
 ## 题目
@@ -408,7 +409,7 @@ at AbstractAutowireCapableBeanFactory.doCreateBean:619
 
 @Resource 字段名 channel（不存在，即默认名）
   → NoUniqueBeanDefinitionException: expected single matching bean but found 3: ...
-    ↑ 退回按类型，于是和 @Autowired 完全同一个错
+    ↑ 退回按类型，内层和 @Autowired 踩的是同一个 NoUnique（但外层包装不同，见 Q10）
 ```
 
 **源码一句话**（`CommonAnnotationBeanPostProcessor.autowireResource:546`）：
@@ -452,3 +453,77 @@ List 的顺序 = @Order；Map 的顺序 = bean 定义注册顺序，key = bean �
 > 同一个改动如果是 `@Autowired`，报的会是 `No qualifying bean of type 'SmsSender'`，
 > 你得自己去想「以前是按哪个名字进来的」。落点：**显式点名的写法可读性和可排查性都更好，
 > 代价是它绕过了「按类型 + 多候选」那套机制，注入失败不会被 `@Primary` 救回来。**
+
+---
+
+### 10. 启动报 `UnsatisfiedDependencyException` / `BeanCreationException`，从异常链能读出什么？
+
+**我的回答（自己的话）：**
+
+**异常链是分层写信息的：外层说「谁在灌字段的时候炸的」，中间层说「哪个 bean」，内层说「为什么」。**
+读反了就会像早期排查那样，只看到「找不到一个构造器」却不知道该去改哪。
+
+实测三种写法（同一个容器、三个 `PayChannel` 候选，`day5-result.txt` S4 段）：
+
+```text
+@Autowired 多候选
+  UnsatisfiedDependencyException
+    ← NoUniqueBeanDefinitionException: expected single matching bean but found 3: ...
+
+@Resource(name = "channel")（不存在）
+  BeanCreationException: Injection of resource dependencies failed
+    ← NoSuchBeanDefinitionException: No bean named 'channel' available
+
+@Resource 默认名（字段名 channel，不存在）
+  BeanCreationException: Injection of resource dependencies failed
+    ← NoUniqueBeanDefinitionException: ...
+```
+
+**为什么外层不一样？** 因为两个注解由不同的后处理器负责，各自 `catch` 完换了个壳：
+
+```java
+// AutowiredAnnotationBeanPostProcessor.resolveFieldValue:712-713
+catch (BeansException ex) {
+    throw new UnsatisfiedDependencyException(null, beanName, new InjectionPoint(field), ex);
+}
+// CommonAnnotationBeanPostProcessor.postProcessProperties:331-332
+catch (Throwable ex) {
+    throw new BeanCreationException(beanName, "Injection of resource dependencies failed", ex);
+}
+```
+
+而 `NoUniqueBeanDefinitionException extends NoSuchBeanDefinitionException extends BeansException`
+（`javap` 一眼可查），所以两处 `catch` 都接得住它，谁接住就用谁的壳。
+
+**所以看报错的口诀是：**
+
+```text
+UnsatisfiedDependencyException  → @Autowired 那条路（构造器 / 字段 / 方法参数）
+BeanCreationException + "Injection of resource dependencies failed" → @Resource 那条路
+内层的 NoUniqueBeanDefinitionException + 候选名清单 → 挑不出来，去加 @Primary / @Qualifier / 收成 List
+内层的 NoSuchBeanDefinitionException + "No bean named" → 名字写错了，不是类型问题
+```
+
+**追问预判：**
+
+- 「`@Autowired` 的注入失败为什么会死在 `refresh()` 而不是 `getBean`？」——因为没被依赖的普通单例，
+  `preInstantiateSingletons` 自己就把它造了；栈底是 `refresh:591`，不是 `getBean`。
+- 「那什么时候才死在 `getBean`？」——它是 `@Lazy`、或者 `prototype`、或者根本不在预实例化的三个条件里
+  （`!isAbstract() && isSingleton() && !isLazyInit()`）。
+- 「还有一种报错你见过吗？」——`is not eligible for getting processed by all BeanPostProcessors
+  (for example: not eligible for auto-proxying)`。这条不是异常，是启动日志的 INFO，
+  但它意味着**代理没套上**，那个类上的 `@Transactional` / `@Async` 一定是假的。
+- 「怎么在不启动整个 Spring 的情况下确认是哪个 bean？」——异常 message 里就带 beanName
+  （`Error creating bean with name 'injectionChoice.NeedsOne'`），外层那句比栈更省事。
+
+**项目里的实际案例：**
+
+> 讲稿模板：一次灰度环境启动失败，日志只有一行 `UnsatisfiedDependencyException`，
+> 运维直接回滚了。真正原因在第三层：`expected single matching bean but found 2`，
+> 灰度环境多加载了一个 mock 实现。落点：**这类问题必须在启动期炸（这次确实炸了），
+> 但排查时要顺着异常链一层层读，别只搜第一行类名** —— 第一行只告诉你「谁在灌字段」，
+> 真正的原因在最后一层。
+
+---
+
+> W05 封板：Q1~Q10 十道题全部有「我的回答 + 追问预判」，对应 `BoardCheck` 的 23 条断言。

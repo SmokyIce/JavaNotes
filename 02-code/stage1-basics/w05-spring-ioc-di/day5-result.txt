@@ -1,0 +1,85 @@
+W05 封板自检 · Spring 5.3.39 / JDK 17.0.12
+
+=== S1. 对象图：3 个调用点 → 1 个装配点 ===
+  手写版：三个入口 → 3 份仓储（jdbc#1 / jdbc#2 / jdbc#3）
+    ✓ 手写装配造出 3 份仓储   实际 3
+  容器版：同样三个入口 → 1 份仓储（jdbc#1）
+    ✓ 容器只造 1 份仓储   实际 1
+    ✓ 三个入口拿到同一个引用   w==j true / j==t true
+
+=== S2. 生命周期：顺序不是背的，是打出来的 ===
+    @PostConstruct 里看到的 repo = jdbc#1（构造时还是 null，注入确实夹在中间）
+  初始化阶段实际顺序：
+    1. ctor
+    2. inject(setter)
+    3. bpp.before
+    4. @PostConstruct
+    5. afterPropertiesSet
+    6. initMethod
+    7. bpp.after
+    ✓ 初始化七步顺序与源码一致   实际 [ctor, inject(setter), bpp.before, @PostConstruct, afterPropertiesSet, initMethod, bpp.after]
+    ✓ prototype 取两次造两个   实际 2
+  销毁阶段实际顺序：
+    1. @PreDestroy
+    2. destroy
+    3. destroyMethod
+    ✓ 销毁三件套顺序   实际 [@PreDestroy, destroy, destroyMethod]
+    ✓ prototype 销毁 0 次（登记阶段就被 !isPrototype() 短路）   @PreDestroy 0 / destroy 0
+
+=== S3. 作用域：造几个 + 谁管埋 ===
+    ✓ refresh 后单例已构造 1 次（预实例化）   实际 1
+    ✓ refresh 后原型构造 0 次   实际 0
+    ✓ 单例两次 getBean 同一个   singleCounted#1 / singleCounted#1
+    ✓ 原型两次 getBean 不同   protoCounted2#1 / protoCounted2#2
+    ✓ 单例进池 / 原型不进池   true / false
+    ✓ close() 销毁单例（@PreDestroy 1 + destroy 1）   1 + 1
+    ✓ close() 不碰原型   destroy 0
+
+=== S4. 边界：三个实现挑一个，挑不出来报什么 ===
+  字段名 channel 对不上任何 bean 名 → UnsatisfiedDependencyException ← NoUniqueBeanDefinitionException
+    ✓ 多候选抛 NoUniqueBeanDefinitionException   UnsatisfiedDependencyException ← NoUniqueBeanDefinitionException
+    ✓ 报错里列出三个候选名   含三个名字
+  字段名 wechatChannel + 零注解 → wechat
+    ✓ 第 3 级「按字段名回退」   wechat
+  字段名依旧是 wechatChannel + 容器里有 @Primary → preferred
+    ✓ @Primary 压过字段名（Primary 在名字之前）   preferred
+  @Qualifier("alipayChannel") → alipay
+    ✓ @Qualifier 在筛候选时生效   alipay
+  @Resource(name="channel") → BeanCreationException ← NoSuchBeanDefinitionException
+    ✓ @Resource 显式点名对不上 → No bean named（不查类型）   BeanCreationException ← NoSuchBeanDefinitionException
+  @Resource 默认名对不上 → BeanCreationException ← NoUniqueBeanDefinitionException
+    ✓ @Resource 默认名对不上 → 退回按类型 → 同一个 NoUnique   BeanCreationException ← NoUniqueBeanDefinitionException
+
+  三条失败链的完整形状（今天才注意到的差别）：
+    @Autowired 多候选：UnsatisfiedDependencyException ← NoUniqueBeanDefinitionException
+    @Resource 显式名错：BeanCreationException ← NoSuchBeanDefinitionException
+    @Resource 默认名错：BeanCreationException ← NoUniqueBeanDefinitionException
+    ✓ @Autowired 失败外层是 UnsatisfiedDependencyException   UnsatisfiedDependencyException
+    ✓ @Resource 失败外层是 BeanCreationException（不是 UnsatisfiedDependency）   BeanCreationException / BeanCreationException
+
+=== S5. 封板表 ===
+  [PASS] 手写装配造出 3 份仓储   (实际 3)
+  [PASS] 容器只造 1 份仓储   (实际 1)
+  [PASS] 三个入口拿到同一个引用   (w==j true / j==t true)
+  [PASS] 初始化七步顺序与源码一致   (实际 [ctor, inject(setter), bpp.before, @PostConstruct, afterPropertiesSet, initMethod, bpp.after])
+  [PASS] prototype 取两次造两个   (实际 2)
+  [PASS] 销毁三件套顺序   (实际 [@PreDestroy, destroy, destroyMethod])
+  [PASS] prototype 销毁 0 次（登记阶段就被 !isPrototype() 短路）   (@PreDestroy 0 / destroy 0)
+  [PASS] refresh 后单例已构造 1 次（预实例化）   (实际 1)
+  [PASS] refresh 后原型构造 0 次   (实际 0)
+  [PASS] 单例两次 getBean 同一个   (singleCounted#1 / singleCounted#1)
+  [PASS] 原型两次 getBean 不同   (protoCounted2#1 / protoCounted2#2)
+  [PASS] 单例进池 / 原型不进池   (true / false)
+  [PASS] close() 销毁单例（@PreDestroy 1 + destroy 1）   (1 + 1)
+  [PASS] close() 不碰原型   (destroy 0)
+  [PASS] 多候选抛 NoUniqueBeanDefinitionException   (UnsatisfiedDependencyException ← NoUniqueBeanDefinitionException)
+  [PASS] 报错里列出三个候选名   (含三个名字)
+  [PASS] 第 3 级「按字段名回退」   (wechat)
+  [PASS] @Primary 压过字段名（Primary 在名字之前）   (preferred)
+  [PASS] @Qualifier 在筛候选时生效   (alipay)
+  [PASS] @Resource 显式点名对不上 → No bean named（不查类型）   (BeanCreationException ← NoSuchBeanDefinitionException)
+  [PASS] @Resource 默认名对不上 → 退回按类型 → 同一个 NoUnique   (BeanCreationException ← NoUniqueBeanDefinitionException)
+  [PASS] @Autowired 失败外层是 UnsatisfiedDependencyException   (UnsatisfiedDependencyException)
+  [PASS] @Resource 失败外层是 BeanCreationException（不是 UnsatisfiedDependency）   (BeanCreationException / BeanCreationException)
+
+  23 / 23 条通过

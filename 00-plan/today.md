@@ -1,104 +1,93 @@
 ---
 title: 今天做什么
-date: 2026-11-24
-weekday: 周二
+date: 2026-11-25
+weekday: 周三
 milestone: M2 · Spring 内核
-task: W05 Day 4 — 注入方式的取舍（判定链四级 + 两种注解的报错 + 集合与零候选）
+task: W05 Day 5 — 收尾封板（三段答案 → 23 条断言 + pom.xml 结账）
 status: 已完成
 ---
 
-# 今天 · 2026-11-24（周二）· 已完成
+# 今天 · 2026-11-25（周三）· 已完成
 
-> 前三个时间盒回答「造几个」「造完做什么」「给几个」，今天回答最后一个：
-> **同一个接口摆三个实现，容器凭什么挑中某一个 —— 挑不出来时它说什么。**
-> 一句话剧透：`@Autowired` 不是纯按类型，`@Resource` 也不是纯按名字；两者的真差别在报错。
+> 前四天回答了四个问题：**造什么**（Day 1）、**造完做什么**（Day 2）、**造几个**（Day 3）、**给哪个**（Day 4）。
+> 今天不提问、不写新 Demo，只做一件事：把这四个答案**变成能跑的程序**，然后封板。
+>
+> 理由：前四天的结论都是「跑一段、用眼睛看输出」。眼睛会漏（Day 4 就把「零候选给空集合」看错了），
+> 数字也会过期（换个 Spring 小版本就不一定成立）。所以今天反过来 —— **先写期望值，再让程序说对不上**。
 
 ## 一、先查的遗留
 
 | 检查项 | 结果 |
 | :--- | :--- |
-| 清空 `out/` 全量重编 w05（40 文件 / 57 class）+ 跑七个入口 | ✅ 全 exit=0（59 / 127 / 154 / 54 / 75 / 51 / 92 行），无回归、无中断代码 |
-| `01-notes` 里的未勾项 | W05 只剩「Spring 到底在帮你管理什么」（= W05 收尾那一格）；W06 起未解锁 |
-| `02-code` 空目录 | `w06-` 起仍是 `.gitkeep`（M2 后续，不是遗留） |
-| 上一个时间盒留的待办 | `pom.xml` 仍推到 W05 收尾（本机没 Maven，写了验不了）；Day 3 的五条踩坑已全部回填 |
-| 与上一个时间盒的关系 | 11-23（周一）停在这里，今天接着走同一个时间盒，不涉及补课 |
+| 清空 `out/` 全量重编 w05（48 文件 / 89 class）+ 跑全部 10 个入口 | ✅ 全 exit=0，行数 59 / 127 / 154 / 54 / 75 / 51 / 92 / 57 / 34 / 40，与 11-24 逐个一致，无回归、无中断代码 |
+| `01-notes` 里的未勾项 | 只剩 W05 第四格（= 今天这格）+ W06 起未解锁内容 |
+| `02-code` 空目录 | 无空目录；`w06-` 起仍是 `.gitkeep`（下一个里程碑，不是遗留） |
+| 上一个时间盒留的待办 | ① 第四格答案 ✅ 今天写；② `pom.xml` ✅ 今天写（但明确标「未验证」）；③ 题库抽讲 Q1/Q4/Q8 ✅ 顺带补了 Q10 |
+| 与前一个时间盒的关系 | 11-24 → 11-25 隔一天（正常节奏），不涉及补课 |
 
-**结论：没有需要补的中断代码。** 起点就是 W05 Day 4。
+**结论：没有需要补的中断代码。** 起点就是 W05 Day 5。
 
-## 二、今天的正题：三个程序 + 一个工具类
+## 二、今天做的三件事
 
-代码在 `02-code/stage1-basics/w05-spring-ioc-di/day4/`：
+| # | 做什么 | 产出 |
+| -: | :--- | :--- |
+| 1 | **把答案写成程序**：`day5/BoardCheck`，四段共 23 条断言，FAIL 就 `exit=1` | `BoardCheck.java` + `day5-result.txt`（85 行，**23 / 23 通过**） |
+| 2 | **两个新观测点**（下面第三节） | 同上 + `day5-spring-source.txt`（4 段，713 / 332 行号对撞） |
+| 3 | **`pom.xml` 结账** + 笔记第四格 + 题库 Q10 + 三处同步 | `pom.xml`、W05 笔记、`Spring.md`（9 → 10 题）、`MILESTONES.md` |
 
-| 文件 | 内容 |
-| :--- | :--- |
-| `InjectionChoice.java` | A 三候选爆炸（报错原文 + 栈）/ B 字段名回退 / C `@Qualifier` / D `@Primary` 压过名字 / E `@Resource` 按名 / F 两种注解名字对不上的报错对照 |
-| `CollectionInject.java` | A `List` 按 `@Order`、数组同源 / B `Map` 按注册顺序（key = bean 名）/ C 零候选三段 / D 集合 + `@Qualifier` |
-| `CtorInject.java` | A 单构造器免注解 / B 多构造器不标的两种结局 / C 标一个 `@Autowired` / D `ObjectProvider` 三种局面 / E 参数名回退要 `-parameters` |
-| `pay/` | `PayChannel` 接口 + 三个 `@Order` 不同的实现（bean 名可预测） |
-| `support/Quiet.java` | 压掉 `refresh` 失败的 JUL 噪音（**logger 名是枚举出来的，不是猜的**） |
+`BoardCheck` 的分段与断言数：S1 对象图 3 / S2 生命周期 4 / S3 作用域 7 / S4 判定链 9。
+设计上**故意不复用** day1~day4 的探针类 —— 封板自检不能依赖「被测对象自己写对了」。
 
-产出两个文件：`day4-result.txt`（145 行）、`day4-spring-source.txt`（8 段源码，行号与栈对撞）。
+## 三、今天挖到的两个点（都是前几天只能间接说的）
 
-## 三、今天挖到的六个点
+1. **属性注入的位置：从「夹住」变「钉死」。**
+   Day 2 只有两个观测点（构造时 `repo=null` / `@PostConstruct` 时 `repo=jdbc`），精度只到「中间某处」。
+   今天给 `LifeProbe` 加一个 **`@Autowired` 的 setter** 打点（setter 是我写的、不是容器回调），实测：
 
-1. **挑人是一条四级链，顺序写死在源码里。**
-   `@Qualifier` 在筛候选那一步就生效 → `@Primary`（1635）→ `@Priority`（1639）→ 名字匹配（1642）→
-   都不行才 `resolveNotUnique`（1369）。`@Primary` 在名字**之前**，所以字段名对得上也会被压过。
+   ```text
+   ctor → inject(setter) → bpp.before → @PostConstruct → afterPropertiesSet → initMethod → bpp.after
+   ```
 
-2. **`@Autowired` 不是纯按类型：第三级回退拿字段名当 bean 名。**
-   三个候选、字段名叫 `wechatChannel`、零注解 → 注入成功拿到 `wechat`。教科书只讲前一半。
+   于是 `populateBean` 落在 `ctor` 与 `bpp.before` 之间，对应 `doCreateBean` 的 582 / 619 / 620 三行。
+   **方法论**：「没有回调」不等于「位置说不清」，在自己的代码里插观测点就行。
 
-3. **两种注解的真差别在报错。**
-   显式 `@Resource(name="channel")` 对不上 → `No bean named 'channel' available`（**连类型都不查**）；
-   默认名对不上 → 退回按类型 → 和 `@Autowired` 一模一样的 `NoUniqueBeanDefinitionException`。
+2. **「两种注解报同一个错」只对了内层。**
+   内层确实都是 `NoUnique`，但外层包装不同：`@Autowired` 是 `UnsatisfiedDependencyException`（713 行），
+   `@Resource` 是 `BeanCreationException` + `Injection of resource dependencies failed`（332 行）。
+   根源是继承关系：`NoUnique` 是 `NoSuchBean` 的子类，两处 `catch` 都接得住，谁接住用谁的壳。
+   **这条修正了 Day 4 笔记里「完全同一个错」的说法**，README 和题库 Q9 已同步收窄。
 
-4. **`Map` 注入**不**按 `@Order` 排序。**
-   同一个容器：`List` = `wechat → alipay → unionpay`（按 order），`Map` key = `[alipayChannel, wechatChannel, unionPayChannel]`
-   （注册顺序）。源码里 Map 分支一行排序都没有。**按顺序跑策略只能用 `List`。**
+## 四、今天踩的坑（两个）
 
-5. **集合没有特权 —— 「零候选给空集合」是讹传（今天唯一被推翻的常识）。**
-   `required=true` 的 `List` 照样抛 `expected at least 1 bean`；`required=false` 给的是 `null`。
-   原因：`resolveMultipleBeans` 在候选为空时 `return null`，等于「我没处理」，掉回单值分支照抛。
-
-6. **`ObjectProvider` 把「取」推迟到调用时，三种局面一次收干净。**
-   原型两次 `getObject()` = `temp-1 / temp-2`；零候选 `getIfAvailable()` / `getIfUnique()` 都是 null；
-   三候选 `getIfUnique()` 给 null 但 `getIfAvailable()` **抛** `NoUnique` —— 名字差一个词，行为差一个异常。
-
-## 四、今天踩的坑（四个）
-
-- **「零候选时集合注入给空集合」我先写成文案才跑**，三段实测全不对。
-  `required` 才是决定因素，不是「类型是不是集合」。这是本月第 N 次「断言先于实测」。
-- **注入失败死在 `refresh()` 不是 `getBean`。** 第一版把 `try/catch` 包在 `getBean` 上，
-  程序直接 `Exception in thread "main"` 退出 —— 那个 bean 不是 lazy、没人依赖它，预实例化循环自己就造了。
-- **JUL logger 名猜错。** 按父类 `AbstractApplicationContext` 设 `Level.OFF` 压不掉；
-  真名是子类 `AnnotationConfigApplicationContext`（字段是 `LogFactory.getLog(getClass())`）。
-  最后靠枚举 `LogManager.getLoggerNames()` 才查清。
-- **只打 root cause 会丢掉最有用的那层。** `No default constructor found` 在中间的
-  `BeanInstantiationException` 上，只打根因只剩一句 `NoSuchMethodException: …<init>()`。
+- **静态计数器跨段污染。** S2 段 `@PostConstruct` 里打出 `repo = jdbc#2`（本以为 `#1`）——
+  S1 段已经造过 `jdbc#1`，而 `BUILT` 是静态的没归零。改成每段开工先 `set(0)`。
+  和「并发 demo 各段互相污染」是同一类病：**静态状态不归零，后一段就替前一段付账。**
+- **复制粘贴的函数签名没改。** `failOf(...)` 从 Day 4 抄过来，方法体 `return Throwable`，
+  签名还留着 `AnnotationConfigApplicationContext` → 4 个「不兼容的类型」。
+  好消息是这次 javac 一次就把两个方向都指出来了。
 
 ## 五、环境备忘
 
-- 跑今天：`./run.sh day4.InjectionChoice` / `day4.CollectionInject` / `day4.CtorInject`（各约 0.3~0.6 s）
-- 入口同样必须写全包名（`run.sh` 短名分支只认 `day1`）
-- 无新增 jar；Day 4 起快照里不再有 JUL 警告（`support/Quiet` 压掉了，Day 2/3 的 WARN 仍保留为证据）
+- 跑今天：`./run.sh day5.BoardCheck`（约 0.5 s）。**FAIL 会 `exit=1`**，可以直接当回归用例。
+- 无新增 jar；`pom.xml` 已写但**本机没有 Maven，未验证**（`python -c` 只验了 XML 格式合法）。
+- 跑之前别忘了 `export PATH="/c/Program Files/Java/jdk-17/bin:$PATH"`。
 
 ---
 
 # 下一个时间盒（60 分钟）
 
-**W05 Day 5：收尾封板 —— 把「Spring 到底在帮你管理什么」那半张答案补全**
+**W06 Day 1：AOP —— 代理到底是什么时候套上去的**
 
-> 四天学了「造什么、造完做什么、造几个、给哪个」。这四件事合起来才是「Spring 管什么」的完整答案。
-> 今天不写新 Demo，只做三件事：**把答案写成能脱稿讲的三段**、把 `pom.xml` 这笔账结掉、然后把 W05 封板。
+> W05 停在「Bean 造完、字段灌完」。W06 接着回答下一个问题：
+> **方法被调用时，Spring 还能插进来做什么？** —— 这一块正是 `@Transactional` / `@Async` 失效的总根源。
 
 | 时间 | 做什么 | 产出 |
 | -: | :--- | :--- |
-| 10 分钟 | 复述 Day 4：四级判定链 + 两种注解的报错差别 + 集合为什么不是兜底 | 口头过 |
-| 25 分钟 | 写第四格答案：**对象图 / 生命周期 / 边界** 三段，每段配一个本周的实测数字 | 笔记「一句话总结」+ 参考要点 Q10 |
-| 10 分钟 | `pom.xml` 处置：本机没 Maven → 写出 `pom.xml` 但**不声称验证过**，或明确记为「装 Maven 后再补」 | 决定 + 一行记录 |
-| 10 分钟 | 题库回顾：`Spring.md` 9 道题抽 3 道脱稿讲（Q1 / Q4 / Q8） | 口头过 |
-| 5 分钟 | `MILESTONES.md` 把 W05 标 🟩、W06 AOP 置为「下一个」，`today.md` 覆盖 | 三份文件同步 |
+| 10 分钟 | 复述 W05 封板三段（对象图 / 生命周期 / 边界），限时 3 分钟 | 口头过 |
+| 15 分钟 | 手写 JDK 动态代理（`InvocationHandler` + `Proxy.newProxyInstance`），数一次调用进了几次 handler | `w06-spring-aop/day1/JdkProxy.java` |
+| 20 分钟 | 同一套类交给 Spring `@Aspect`，打印调用前后的对象身份：**`this` 和容器里那个不是同一个** | `day1/ProxyIdentity.java` |
+| 10 分钟 | 追问：为什么 `this.xxx()` 不走代理（连到 Day 2 的 `is not eligible for auto-proxying`） | 输出段落 |
+| 5 分钟 | 快照 + 源码取证 + 笔记 + `today.md` 覆盖 | 三份文件 |
 
-> 判定「可以封板」的标准（照 M0/M1 的惯例）：四个知识点全勾、四个可运行工程（其实是四天实验同一工程）、
-> 题库 9 道全部有「我的回答 + 追问预判」、踩坑表里每条都有「原因 + 证据」。
-> 现在的状态：前三条已满足，只差第四格的答案。
+> 开工先做：`w06-spring-aop/` 从 `.gitkeep` 建工程（照 w05 的 `run.sh` 抄一份，`lib/` 里已有 `spring-aop`，
+> 但 **`aspectjweaver` 是新依赖**，`@Aspect` 需要它 —— 先确认能不能从 repo1.maven.org 下到）。

@@ -7,15 +7,15 @@
 
 > 交互版进度看板见 `java-48week-roadmap.html`（同样降级为参考）。
 
-**已完成：0 / 48 周（0%）**（不再作为考核指标）
+**已完成：5 / 48 周（W01–W05 已封板，10%）**（不再作为考核指标）
 
 | 周 | 阶段 | 主题 | 笔记 | 代码 | 完成 |
 | :--- | :--- | :--- | :--- | :--- | :--: |
 | W01 | 第一阶段 · 打基础 | Java 集合 | [笔记](../01-notes/stage1-basics/W01-Java集合.md) | `02-code/stage1-basics/w01-collections/` | [x] |
-| W02 | 第一阶段 · 打基础 | Java 泛型 · 异常 · Optional · Stream | [笔记](../01-notes/stage1-basics/W02-泛型-异常-Stream.md) | `02-code/stage1-basics/w02-generics-stream/` | [ ] |
-| W03 | 第一阶段 · 打基础 | Java 并发基础 | [笔记](../01-notes/stage1-basics/W03-Java并发基础.md) | `02-code/stage1-basics/w03-concurrency-basics/` | [ ] |
-| W04 | 第一阶段 · 打基础 | 线程池与 CompletableFuture | [笔记](../01-notes/stage1-basics/W04-线程池与CompletableFuture.md) | `02-code/stage1-basics/w04-threadpool-completablefuture/` | [ ] |
-| W05 | 第一阶段 · 打基础 | Spring IOC / DI | [笔记](../01-notes/stage1-basics/W05-Spring-IOC-DI.md) | `02-code/stage1-basics/w05-spring-ioc-di/` | [ ] |
+| W02 | 第一阶段 · 打基础 | Java 泛型 · 异常 · Optional · Stream | [笔记](../01-notes/stage1-basics/W02-泛型-异常-Stream.md) | `02-code/stage1-basics/w02-generics-stream/` | [x] |
+| W03 | 第一阶段 · 打基础 | Java 并发基础 | [笔记](../01-notes/stage1-basics/W03-Java并发基础.md) | `02-code/stage1-basics/w03-concurrency-basics/` | [x] |
+| W04 | 第一阶段 · 打基础 | 线程池与 CompletableFuture | [笔记](../01-notes/stage1-basics/W04-线程池与CompletableFuture.md) | `02-code/stage1-basics/w04-threadpool-completablefuture/` | [x] |
+| W05 | 第一阶段 · 打基础 | Spring IOC / DI | [笔记](../01-notes/stage1-basics/W05-Spring-IOC-DI.md) | `02-code/stage1-basics/w05-spring-ioc-di/` | [x] |
 | W06 | 第一阶段 · 打基础 | Spring AOP | [笔记](../01-notes/stage1-basics/W06-Spring-AOP.md) | `02-code/stage1-basics/w06-spring-aop/` | [ ] |
 | W07 | 第一阶段 · 打基础 | Spring 事务 ⭐ 重点周 | [笔记](../01-notes/stage1-basics/W07-Spring事务(重点).md) | `02-code/stage1-basics/w07-spring-transaction/` | [ ] |
 | W08 | 第一阶段 · 打基础 | Spring 异步 ⭐ 重点周 | [笔记](../01-notes/stage1-basics/W08-Spring异步(重点).md) | `02-code/stage1-basics/w08-spring-async/` | [ ] |

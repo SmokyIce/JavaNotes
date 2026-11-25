@@ -120,14 +120,17 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > | 2026-11-23 | **W05 Day 2 · Bean 生命周期** | `day2/LifecycleOrder`（A 六回调时间线：①构造 `+375.7` → ②BPP.before `+386.7` → ③`@PostConstruct` `+389.0` → ④`afterPropertiesSet` `+389.5` → ⑤`initMethod` `+390.2` → ⑥BPP.after `+390.5` →⑦`@PreDestroy` →⑧`destroy` →⑨`destroyMethod`；属性注入用「构造时 repo=null / 初始化时 repo=jdbc」夹住；B 销毁**逆序 + 依赖方先死**；C prototype 销毁回调 **0 次**，源头 `AbstractBeanFactory:1942` 的 `!mbd.isPrototype()`；D `@Bean` 默认推断 `close()`：1 次 vs `destroyMethod=""` 的 0 次）+ `day2/PostProcessorTrace`（A 计数表：正常 Bean **2/2**、`bppFirst`/`bppSecond`/`earlyDependent` **0/0**；B `@PostConstruct` 栈 `InitDestroyAnnotationBeanPostProcessor:157` ← `applyBPPBefore:440` ← `initializeBean:1796`；C 三追问；D `Ordered` 序列 `[first.before, second.before, first.after, second.after]`）+ 新增 `support/Stacks` + `lib/javax.annotation-api-1.3.2.jar`；`day2-result.txt`（140 行）+ `day2-spring-source.txt`（7 段源码）；笔记 W05 Day 2 整节（9 小节）+ 踩坑 3 条 + 面试 8 条 + 参考要点 Q4/Q5；`Spring.md` 3 → **5 题** |
 > | 2026-11-23 | **W05 Day 3 · Bean 作用域** | `day3/ScopeMatrix`（A `singleton` vs `prototype` 三条判据：`refresh` 后构造数 `1 / 0`、两次 `getBean` 的 `==` 为 `true / false`、`containsSingleton` `true / false`、`close()` 后销毁 `1+1 vs 0+0`；B `registerScope("singleton", …)` → `Cannot replace existing scopes`，`getRegisteredScopeNames()` 只有 `[thread]`，`SimpleThreadScope` 每线程一个实例并打 WARN「不支持销毁回调」；C 四作用域判据矩阵）+ `day3/WebScopeTrap`（A `request` → `IllegalStateException: No Scope registered for scope name 'request'`，`doGetBean:369`，**refresh 不报错、getBean 才报**；B `session` 同款；C `proxyMode` 三组：无代理三次 `id()` 全 `1`（造 1 个）、`TARGET_CLASS` 后 `2/3/4`（造 3 个）、定义被拆成 `scopedTarget.requestProxy`（`scope=request`）+ `requestProxy`（`ScopedProxyFactoryBean` 单例）、`request` + 代理后 `getBean` 不抛而首次调用抛（栈多一帧 `SimpleBeanTargetSource:35`）；D 自定义 `Scope`「每 2 次换实例」→ `A A B B`、轮换销毁 1 次、`close()` 后仍 1 次）+ `day3/ScopeProbe`；`day3-result.txt`（154 行）+ `day3-spring-source.txt`（7 段源码）；笔记 W05 Day 3 整节（6 小节）+ 踩坑 5 条 + 面试 6 条 + 参考要点 Q6/Q7；`Spring.md` 5 → **7 题** |
 > | 2026-11-24 | **W05 Day 4 · 注入方式的取舍** | `day4/InjectionChoice`（A 三个候选 + 字段名对不上 → `NoUniqueBeanDefinitionException: expected single matching bean but found 3: alipayChannel,wechatChannel,unionPayChannel`，**死在 `refresh()` 里**（栈：`resolveNotUnique:220` ← `doResolveDependency:1369` ← `AutowiredFieldElement.resolveFieldValue:710` ← `postProcessProperties:408` ← `populateBean:1431` ← `doCreateBean:619`）；B **字段名回退**：字段名 `wechatChannel` + 零注解 → 注入到 `wechat`；C `@Qualifier("alipayChannel")` → `alipay`，点名不存在 → `expected at least 1 bean which qualifies as autowire candidate`；D 字段名依旧 `wechatChannel` + `@Primary` → 注入 `preferred`（**Primary 在名字之前**）；E `@Resource` 默认名 = 字段名 → `unionpay`，`name="alipayChannel"` + 字段名 `anything` → `alipay`；F1 显式名对不上 → **`No bean named 'channel' available`**（不查类型）；F2 默认名对不上 → 退回按类型 → 同一个 `NoUnique`） + `day4/CollectionInject`（A `List` / 数组 = `wechat → alipay → unionpay` 按 `@Order`；B `Map` key = bean 名、顺序 = 注册顺序 `[alipayChannel, wechatChannel, unionPayChannel]`，源码 1493-1500 无一行排序；C 零候选三段：`required=true` 的 `List` **照样抛** `expected at least 1 bean` / `required=false` 给 **null**（不是空集合）/ 单值同款异常；D 集合 + `@Qualifier` → 缩到 1 个再全收） + `day4/CtorInject`（A 单构造器免注解 → `log`；B1 两个构造器无无参 → `BeanInstantiationException: No default constructor found`，B2 有无参则**静默**走无参；C 标了 `@Autowired` 的那个赢；D1 原型 `getObject()` 两次 = `temp-1 / temp-2`，D2 零候选 `getIfAvailable`/`getIfUnique` 都是 null，D3 三候选 `getIfUnique()` null 但 `getIfAvailable()` **抛** `NoUnique`；E 反射读到的参数名 = `arg0`（`isNamePresent=false`）→ 参数名回退失效）+ `support/Quiet`；`day4-result.txt`（145 行）+ `day4-spring-source.txt`（8 段源码）；笔记 W05 Day 4 整节（8 小节）+ 踩坑 4 条 + 面试 8 条 + 参考要点 Q8/Q9；`Spring.md` 7 → **9 题** |
+> | 2026-11-25 | **W05 Day 5 · 收尾封板** | `day5/BoardCheck`（**把四天的口述结论写成 23 条断言**，FAIL 即 `exit=1`：S1 对象图 3 条 `3 份 → 1 份`、S2 生命周期 4 条（七步顺序 `[ctor, inject(setter), bpp.before, @PostConstruct, afterPropertiesSet, initMethod, bpp.after]` / 销毁三件套 / prototype 造 2 销 0）、S3 作用域 7 条（refresh 后 `1 / 0`、`==` 的 `true / false`、进池 `T/F`、销毁 `1+1 / 0`）、S4 判定链 9 条（NoUnique 原文含三候选名 / 字段名回退 `wechat` / `@Primary` 压名字 `preferred` / `@Qualifier` `alipay` / 两种报错 / 两种外层包装）；实测 **23/23 通过**）+ `day5-result.txt`（85 行）+ `day5-spring-source.txt`（4 段，713 vs 332 行号对撞）+ `pom.xml`（**未用 mvn 验证**：本机无 Maven，只验了 XML 合法）；笔记 W05 第四格答案三段（对象图 / 生命周期 / 边界）+ Day 5 整节（6 小节）+ 一句话总结 + 参考要点 Q10 + 踩坑 3 条 + 面试 4 条 + 打卡；`Spring.md` 9 → **10 题**（Q10 异常链怎么读），**并修正 Q9「完全同一个错」→「内层一样、外层不同」** |
 >
 > **W02 已封板（2026-11-03）**，六天全部完成。**W03 已封板（2026-11-11）**，四天全部完成。
 > **W04 已封板（2026-11-19）**，两天全部完成 —— 五个知识点全勾。
 > **M1 已封板（2026-11-20）**：M1 要的「4 份笔记 + 4 个可运行工程 + 8 道面试题」全部超额
 > —— W01~W04 四份笔记、四个一条命令能跑起来的工程、题库 24（Java基础）+ 12（Java并发）＝ **36 道**。
-> 当前在 **M2 · Spring 内核**：W05 已开工，Day 1（IOC/DI）+ Day 2（生命周期）+ Day 3（作用域）+
-> Day 4（注入取舍）完成，
-> 工程从 `.gitkeep` 建起，`lib/` 手工放 7 个 jar（Day 2 多了 `javax.annotation-api`）。
+> 当前在 **M2 · Spring 内核**：**W05 已封板（2026-11-25）**，五个时间盒全部完成
+> （IOC/DI → 生命周期 → 作用域 → 注入取舍 → 封板自检），四个知识点全勾，
+> 工程从 `.gitkeep` 建起、`lib/` 手工放 7 个 jar（Day 2 多了 `javax.annotation-api`），
+> 外加 `pom.xml` 一份（**未用 mvn 验证**）。
+> 下一个是 **W06 · AOP**。
 >
 > W04 Day 2 最值钱的三条结论（全部有实测数字）：
 >
@@ -363,9 +366,26 @@ D 字段名不变 + `@Primary` → `preferred`；E `@Resource` 默认名 = 字�
 这就是两种注解报错不同的原因；③ **集合不是兜底**：零候选 + `required=true` 照样抛，
 `required=false` 给 `null`；`Map` 不像 `List` 那样按 `@Order` 排序（源码 Map 分支无排序）。
 
-下一个时间盒（60 分钟）：**W05 Day 5 · 收尾封板** ——
-① 把第四格「Spring 到底在帮你管理什么」写成能脱稿讲的三段（对象图 / 生命周期 / 边界），每段配一个本周实测数字；
-② `pom.xml` 结账：本机没 Maven，写了也不声称验证过，或明确记为「装 Maven 后补」；
-③ 题库抽 Q1 / Q4 / Q8 脱稿讲一遍；
-④ `MILESTONES.md` 把 W05 标 🟩、W06 AOP 置为下一个，`today.md` 覆盖。
+**W05 Day 5 已完成（2026-11-25）· 收尾封板**：`day5/BoardCheck`（**把四天口述过的结论写成 23 条断言**，
+任一条不成立就 `exit=1`，可以当回归用例跑：S1 对象图 3 条 / S2 生命周期 4 条 / S3 作用域 7 条 / S4 判定链 9 条；
+实测 **23 / 23 通过**）+ `day5-result.txt`（85 行）+ `day5-spring-source.txt`（4 段，713 vs 332 行号对撞）
++ `pom.xml`（`spring-context` 一个坐标带 5 个 spring-*、`javax.annotation-api` 显式写；**未用 mvn 验证**）。
+笔记第四格答案三段 + 一句话总结 + 参考要点 Q10；`Spring.md` 9 → **10 题**。
+
+三条核心结论：① **属性注入的位置可以说死，不只夹住** —— 给 Bean 加一个 `@Autowired` 的 setter 打点
+（setter 是自己的代码、不是容器回调），实测顺序 `ctor → inject(setter) → bpp.before → @PostConstruct → …`，
+`populateBean` 就落在 `ctor` 与 `bpp.before` 之间（对应 `doCreateBean` 的 582 / 619 / 620）；
+② **「两种注解报同一个错」只对了内层** —— `@Autowired` 外层是 `UnsatisfiedDependencyException`
+（`resolveFieldValue:713` 的 `catch (BeansException)`），`@Resource` 外层是 `BeanCreationException`
++ `Injection of resource dependencies failed`（`postProcessProperties:332` 的 `catch (Throwable)`）；
+根源是 `NoUnique extends NoSuchBean extends BeansException`，两处 `catch` 都接得住，谁接住用谁的壳；
+**内层讲「为什么」，外层讲「谁在灌字段的时候炸的」**；
+③ **「讲得出」和「断言得住」是两件事** —— 前者靠理解，后者靠把期望值写下来；
+封板要求后者，因为换个 JDK / Spring 小版本时，只有断言会告诉你哪个数字过期了。
+
+下一个时间盒（60 分钟）：**W06 Day 1 · AOP —— 代理是什么时候套上去的** ——
+① 手写 JDK 动态代理（`InvocationHandler` + `Proxy.newProxyInstance`），数一次调用进几次 handler；
+② 同一套类交给 Spring `@Aspect`，打印「`this` 与容器里那个对象不是同一个」；
+③ 追问 `this.xxx()` 为什么不走代理（接 Day 2 的 `is not eligible for auto-proxying`）；
+④ `w06-spring-aop/` 从 `.gitkeep` 建工程，注意 **`@Aspect` 需要 `aspectjweaver`，是 `lib/` 里没有的新依赖**。
 时间盒见 `00-plan/today.md`（每天开工前先打开它，收工时覆盖）。

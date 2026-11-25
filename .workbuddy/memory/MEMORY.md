@@ -10,9 +10,9 @@
 **三条规则**：① 60 分钟产出「知识点 / 代码 / 笔记」任意两样即算数，只有「没打开 IDE」才算失败；
 ② **取消补课** —— 断档后从当天该做的那一小步接着走；③ 只细化当前与下一个里程碑。
 
-## 当前状态（2026-11-24）
+## 当前状态（2026-11-25）
 
-M0 封板 10-27；**M1 封板 11-20**；当前 **M2 · Spring 内核**。
+M0 封板 10-27；**M1 封板 11-20**；当前 **M2 · Spring 内核**，**W05 已封板 11-25**。
 
 | 周 | 状态 |
 | :--- | :--- |
@@ -20,12 +20,13 @@ M0 封板 10-27；**M1 封板 11-20**；当前 **M2 · Spring 内核**。
 | W02 泛型/异常/Optional/Lambda/Stream/收集器 | ✅ 封板 11-03 |
 | W03 并发（4 天） | ✅ 封板 11-11 |
 | W04 线程池 / CompletableFuture（2 天） | ✅ 封板 11-19 |
-| W05 Spring IOC/DI | 🟨 Day 1（11-20 IOC/DI）+ Day 2（生命周期）+ Day 3（11-23 作用域）+ **Day 4（11-24 注入取舍）完成** |
+| W05 Spring IOC/DI（5 天） | ✅ **封板 11-25**（D1 IOC/DI · D2 生命周期 · D3 作用域 · D4 注入取舍 · D5 封板自检） |
 
-- **下一步：W05 Day 5 = 收尾封板**（第四格「Spring 到底在帮你管理什么」写成三段：对象图 / 生命周期 / 边界；
-  `pom.xml` 结账；题库抽 Q1/Q4/Q8 脱稿；MILESTONES 标 W05 🟩 → 开 W06 AOP）。
-- 题库：`Java基础.md` 24、`Java并发.md` 12、`Spring.md` **9**（M2 只要 6 道，已超额）。
-- 已知待办：`pom.xml` 推到 W05 收尾（本机没 Maven，写了验证不了）。
+- **下一步：W06 Day 1 = AOP**（手写 JDK 代理 → `@Aspect` → `this.xxx()` 为什么不走代理）。
+  `w06-spring-aop/` 需从 `.gitkeep` 建工程；**`aspectjweaver` 是 `lib/` 里没有的新依赖**，先确认能下到。
+- 题库：`Java基础.md` 24、`Java并发.md` 12、`Spring.md` **10**（M2 只要 6 道，已超额）。
+- 已知待办：`pom.xml` 已写（`spring-context` 一个坐标带 5 个 spring-*、`javax.annotation-api` 显式写），
+  但**本机没 Maven、未验证**；装 Maven 后要和 `run.sh day5.BoardCheck` 对撞（两路都须 23/23、exit=0）。
 
 ## W05 工程（唯一需要 jar 的工程）
 
@@ -36,6 +37,9 @@ M0 封板 10-27；**M1 封板 11-20**；当前 **M2 · Spring 内核**。
 - `@Configuration` 被 CGLIB 代理（`AppConfig$$EnhancerBySpringCGLIB$$…`），CGLIB 在 `spring-core` 内，无需额外 jar
 - **JDK 11+ 移除了 `javax.annotation`** → `@PostConstruct` 编译都过不了，必须补 `javax.annotation-api`；
   **Spring 5 用 `javax.*`，Spring 6 才换 `jakarta.*`**，下错包不报错、只是注解不执行（静默失效）
+- `pom.xml` 已写（`spring-context` 一个坐标传递带进 5 个 spring-*；`javax.annotation-api` 必须显式写），
+  但**本机没 Maven、未验证**（只验了 XML 合法）。装 Maven 后须与 `run.sh` 对撞
+- `day5.BoardCheck` = **23 条断言的封板自检**，FAIL 即 `exit=1`，可直接当回归用例
 
 ## 目录职责
 
@@ -144,6 +148,16 @@ singleton 是·是·`1+1`·正常，prototype 否·否·`0+0`·正常，request/
 注入失败死在 **`refresh()`** 不是 `getBean`；`ObjectProvider` 三局面（原型每次新 / `getIfAvailable` 不兜多候选 /
 `getIfUnique` 吞成 null）；构造器参数名回退要 `-parameters`（默认只剩 `arg0`）。
 
+**Spring 封板自检（W05 D5）**：把四天口述结论写成 **23 条断言**（`day5/BoardCheck`，FAIL 即 `exit=1`），
+实测 23/23；**断言化**这一步让「结论」变成「回归用例」，换 JDK / Spring 小版本后一条命令就知道哪个数字过期。
+两个新结论：① **属性注入的位置能钉死不只夹住** —— 给 Bean 加 `@Autowired` 的 setter 打点（自己的代码不是回调），
+实测 `ctor → inject(setter) → bpp.before → @PostConstruct → …`，`populateBean` 落在 `ctor` 与 `bpp.before` 之间
+（`doCreateBean` 582/619/620）；② **「两种注解报同一个错」只对了内层** —— `@Autowired` 外层
+`UnsatisfiedDependencyException`（`resolveFieldValue:713` 的 `catch (BeansException)`）、`@Resource` 外层
+`BeanCreationException` + `Injection of resource dependencies failed`（`postProcessProperties:332` 的
+`catch (Throwable)`）；根因 `NoUnique extends NoSuchBean extends BeansException`，两处 catch 都接得住。
+**内层讲「为什么」，外层讲「谁在灌字段的时候炸的」。**
+
 ## 工作方式上的硬教训（每条都踩过两次以上）
 
 - **断言先于实测**：本月反复栽（`sorted` 屏障、`Predicate` 优先级、`monitorenter`、活锁必然性、
@@ -161,6 +175,10 @@ singleton 是·是·`1+1`·正常，prototype 否·否·`0+0`·正常，request/
 - **可见性试验三件套**：线程握手 + 循环体**不许有方法调用**（`nanoTime` 会挡 JIT 提升）+ 让目标线程先被编译。
 - **同步工具会改变时序**（`CyclicBarrier` 把两线程错开）→ 用自旋 gate + 「真的重叠了吗」探针（`(1,1)` 计数）。
 - **并发 demo 各段会互相污染**：别复用已死锁的锁对象。
+- **静态计数器不归零，后一段就替前一段付账**（`JdbcRepo.BUILT` 没 reset，S2 打出 `jdbc#2`）；
+  分段实验一律「开工先清零」，别信「这次不会碰」。
+- **复制粘贴的函数签名最容易留下**（方法体返回 `Throwable`、签名还是上下文类型 → 4 个编译错）；
+  同一个文件里既造容器又返回异常，签名要重看一遍。
 - **`jstack` 抓现场**要在一条命令内「起进程→等→读 `ProcessHandle.current().pid()`→jstack」；
   **Git Bash 的 `$!` 是 MSYS pid**；线程名只用 ASCII。
 - 收集多个编译错误要按 javac 阶段拆文件（attribution 报错会让 flow 整段跳过）。

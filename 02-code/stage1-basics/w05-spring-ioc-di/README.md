@@ -31,17 +31,22 @@
 ./run.sh day4.InjectionChoice
 ./run.sh day4.CollectionInject
 ./run.sh day4.CtorInject
+./run.sh day5.BoardCheck      # 封板自检：23 条断言，FAIL 时 exit=1
 ```
 
 `run.bat` 同款。`run.sh` 里 classpath 是 `out;lib/*`（Windows 分隔符是 `;`，Git Bash 下也别改成 `:`）。
 
-> `pom.xml` 留给 W05 收尾时补（装了 Maven 再加），现在补了也验证不了 —— 不写没验证过的东西。
+> `pom.xml` 已于 Day 5 补上，**但没有验证过**（本机没有 Maven）—— 它是一个「声明」，不是「证据」。
+> 装好 Maven 后第一件事是拿它和 `run.sh` 做一次对撞：两条路都要打出 `23 / 23 条通过`、exit=0，
+> 对不上说明 pom 有问题。`lib/` 的 7 个 jar 里，`spring-context` 一个坐标就传递带进另外 5 个 spring-*，
+> `javax.annotation-api` 必须显式写（它不是 Spring 的传递依赖）。
 
 ## 二、目录
 
 ```text
 w05-spring-ioc-di/
 ├── lib/                         7 个 jar，见上表
+├── pom.xml                      Day 5 补：声明式依赖（**未用 mvn 验证过**，见上）
 ├── run.sh / run.bat             javac -cp "lib/*" + java -cp "out;lib/*"
 ├── day1-result.txt              三段实验的完整实测（355 行）
 ├── day1-spring-source.txt       Spring 源码取证（行号能和栈对上）
@@ -51,11 +56,14 @@ w05-spring-ioc-di/
 ├── day3-spring-source.txt       Day 3 源码取证（7 段：doGetBean 作用域分支 / registerScope / SimpleThreadScope / ScopedProxyUtils…）
 ├── day4-result.txt              Day 4 三段实验的实测（145 行）
 ├── day4-spring-source.txt       Day 4 源码取证（8 段：doResolveDependency / determineAutowireCandidate / Map 不排序 / @Resource 回退条件…）
+├── day5-result.txt              Day 5 封板自检的实测（85 行，23 条断言）
+├── day5-spring-source.txt       Day 5 源码取证：713 vs 332（两种注解外层包装为什么不同）
 └── src/main/java/com/newt/java48/w05/
     ├── support/
     │   ├── Trace.java           「谁 new 的、什么时候 new 的」打点
     │   ├── Src.java             数源码里 new Xxx( 出现几次
-    │   └── Stacks.java          「这个回调是谁调的」——从栈上读
+    │   ├── Stacks.java          「这个回调是谁调的」——从栈上读
+    │   └── Quiet.java           压掉 refresh 失败的 JUL 噪音（logger 名是枚举出来的）
     ├── day1/
     │   ├── ManualWiring.java    A 三处各自 new / B 集中装配 / C 量化改动点
     │   ├── SpringWiring.java    A 谁+何时 / B 单例 / C 装配行数 / D 换实现 / E @Lazy / F prototype
@@ -94,12 +102,18 @@ w05-spring-ioc-di/
             ├── AlipayChannel.java   @Order(2)，bean 名 alipayChannel
             ├── WechatChannel.java   @Order(1)，bean 名 wechatChannel
             └── UnionPayChannel.java @Order(3)，bean 名 unionPayChannel
+    └── day5/
+        └── BoardCheck.java      封板自检：S1 对象图 / S2 生命周期 / S3 作用域 / S4 判定链 / S5 封板表
+                                 （一个文件自包含，不依赖 day1~day4 的探针；FAIL 时 exit=1）
 ```
 
 > `support/Quiet.java` 是 Day 4 加的：Day 4 大量「故意让容器启动失败」的实验，
 > Spring 每条都会打一遍完整 JUL 警告，和自己打印的异常链完全重复。它只关掉
 > `AnnotationConfigApplicationContext` 这一个 logger（**名字是枚举 `LogManager` 查出来的**，不是猜的 ——
 > 按父类名设 `Level.OFF` 压不掉，因为字段是 `LogFactory.getLog(getClass())`）。
+>
+> `day5` 的 `BoardCheck` 刻意**不**复用 day1~day4 的探针类：封板自检要能独立回答「结论还站不站得住」，
+> 复用探针会把「探针自己写错了」这个变量带进来。代价是重复了几个小类，换来一个能当回归用例跑的文件。
 
 ## 三、五段实验各自证明了什么
 
@@ -223,7 +237,53 @@ Q4 那个 **19 → 20** 是原型作用域最干净的证据：原型造完连�
 4. **集合注入不是兜底**：零候选 + `required=true` 照样抛；`required=false` 给 `null`。
    「收成 List 就天然为空」是讹传，实测推翻。
 
-## 四、十三个坑
+### 8. `BoardCheck` —— 封板自检：把四天口述过的结论变成 23 条断言
+
+前七天每个论点都是「跑一段、用眼睛看输出」。今天反过来：**先写期望值，再让程序说对不上**。
+理由很直接 —— 眼睛会漏，断言不会；而且下次换 JDK 或 Spring 小版本，`./run.sh day5.BoardCheck`
+一条命令就知道哪些结论还站得住。
+
+| 段 | 断言的东西 | 条数 |
+| :--- | :--- | ---: |
+| S1 对象图 | 手写 3 份 / 容器 1 份 / 三个入口同一引用 | 3 |
+| S2 生命周期 | 初始化七步顺序（含注入点）、销毁三件套顺序、prototype 造 2 个销 0 个 | 4 |
+| S3 作用域 | refresh 后 `1 / 0`、`==` 的 `true / false`、进不进池、销毁 `1+1 / 0` | 7 |
+| S4 边界 | NoUnique 原文含三个候选名、字段名回退、`@Primary` 压名字、`@Qualifier`、两种报错、两种外层包装 | 9 |
+
+**今天新增的两个观测点**（前两天只能间接说的事，今天钉死了）：
+
+1. **属性注入的位置不再是「夹住」而是「钉死」。** 给 `LifeProbe` 加一个 `@Autowired` 的 **setter**，
+   在 setter 里打点（setter 是我写的方法，不是容器回调）。实测顺序：
+
+   ```text
+   ctor → inject(setter) → bpp.before → @PostConstruct → afterPropertiesSet → initMethod → bpp.after
+   ```
+
+   `populateBean` 就落在 `ctor` 与 `bpp.before` 之间 —— Day 2 那句「初始化的是**已经装配好的**对象」
+   到这里才有直接证据，不再只是「构造时 null / 初始化时有值」两头夹。
+
+2. **「两种注解报同一个错」只对了内层。** Day 4 我写的是「默认名对不上 → 同一个 `NoUnique`」，
+   内层确实一样，但**外层包装不同**：
+
+   | 写法 | 外层 | 内层 |
+   | :--- | :--- | :--- |
+   | `@Autowired` 多候选 | `UnsatisfiedDependencyException` | `NoUniqueBeanDefinitionException` |
+   | `@Resource(name="channel")` 不存在 | `BeanCreationException` | `NoSuchBeanDefinitionException` |
+   | `@Resource` 默认名不存在 | `BeanCreationException` | `NoUniqueBeanDefinitionException` |
+
+   原因是异常继承：`NoUniqueBeanDefinitionException extends NoSuchBeanDefinitionException extends BeansException`。
+   于是两处 `catch` 都接得住它，各自换个壳子扔出去：
+
+   ```text
+   AutowiredAnnotationBeanPostProcessor.resolveFieldValue:712-713
+       catch (BeansException ex) → new UnsatisfiedDependencyException(null, beanName, new InjectionPoint(field), ex)
+   CommonAnnotationBeanPostProcessor.postProcessProperties:331-332
+       catch (Throwable ex)     → new BeanCreationException(beanName, "Injection of resource dependencies failed", ex)
+   ```
+
+   面试里这一层能加分：**内层讲「为什么」，外层讲「谁在灌字段的时候炸的」**。
+
+## 四、十五个坑
 
 1. **`Src.count` 把自己数进去了。** 第一版把针脚 `"new JdbcOrderRepository("` 写在统计代码里当字符串常量，
    于是 `SpringWiring`（明明 0 个 new）数出 3、`AppConfig` 也数出 3。改成 `countNew(src, "JdbcOrderRepository")`
@@ -263,11 +323,21 @@ Q4 那个 **19 → 20** 是原型作用域最干净的证据：原型造完连�
 13. **只打印 root cause 会丢掉最有用的那层。** `No default constructor found` 在中间的
    `BeanInstantiationException` 上，只打根因只剩一句 `NoSuchMethodException: …<init>()`。
    异常链的信息分布是「中间层最说明问题」。
+14. **静态计数器跨段污染。** `BoardCheck` 的 S2 第一次跑时，`@PostConstruct` 里打出的
+   `repo = jdbc#2` —— 因为 S1 的容器已经造过 `jdbc#1`，而 `BUILT` 是静态的、没 reset。
+   数字本身没错（确实是新容器里第 2 个），但会让读的人以为「同一个容器造了两个」。
+   修法：每段开工前 `JdbcRepo.BUILT.set(0)`。**和「并发 demo 各段互相污染」是同一类病**：
+   静态状态不归零，后一段就在替前一段付账。
+15. **复制粘贴函数签名没改。** `failOf(...)` 从 Day 4 抄过来，方法体返回 `Throwable`，
+   签名还是 `AnnotationConfigApplicationContext` → 4 个「不兼容的类型」。
+   同一个文件里既能造容器又要返回异常，签名一定要重看过再用。
 
-## 五、待办（W05 剩下的五天）
+## 五、待办（W05 已封板）
 
 - [x] Bean 生命周期（Day 2 完成：六回调 + 后处理器 + 三个追问）
 - [x] Bean 作用域（Day 3 完成：四条判据 + `request` 报错原文 + `proxyMode` + 自定义 Scope）
 - [x] `@Autowired` vs `@Resource` vs 构造器注入的取舍（Day 4 完成：判定链四级 + 两种注解报错对照 + 集合/零候选）
-- [ ] 补 `pom.xml`（装了 Maven 之后）
-- [ ] W05 收尾：`Spring 到底在帮你管理什么` 那一格（现在只有半张答案）
+- [x] W05 收尾：`Spring 到底在帮你管理什么`（Day 5 完成：三段答案 + 23 条断言的自检程序）
+- [x] 补 `pom.xml`（Day 5 写出，**未验证**：本机没 Maven）
+- [ ] **装 Maven 后**：`mvn -q clean compile` + `mvn -q exec:java` 与 `run.sh` 对撞一次，
+      两路都必须是 `23 / 23 条通过`。在此之前 pom 只能当「声明」不能当「证据」。

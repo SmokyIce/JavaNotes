@@ -246,3 +246,23 @@
 - 新环境坑：**JUL logger 名是子类** `AnnotationConfigApplicationContext`（字段是 `LogFactory.getLog(getClass())`），
   按父类名设 `Level.OFF` 压不掉 → 以后要关某个日志，先枚举 `LogManager.getLoggerNames()` 查真名，别猜。
 - 口径提醒：Day 4 快照里**没有** JUL 警告（Quiet 压掉了）；Day 2/3 的 WARN 是证据，保持原样别去压。
+
+## 2026-11-25（第十七次执行 · W05 Day 5 收尾封板）
+- 开工回归：清空 `out/` 重编 w05（48 文件 / 89 class）+ 跑 10 个入口，全 exit=0，
+  行数 59/127/154/54/75/51/92/57/34/40 与 11-24 逐个一致，**无中断代码**；
+  `01-notes` 未勾项只剩 W05 第四格（= 今日任务）+ W06 起未解锁，`02-code` 无空目录 → 无遗留需补。
+  顺手补掉一个陈旧遗留：`PROGRESS.md` 里 W02–W05 都已封板却没勾（W01 之外全漏），一并勾上、计数改 5/48。
+- 推进 W05 Day 5：新建 `day5/BoardCheck`（**把四天口述结论写成 23 条断言**，FAIL 即 exit=1；
+  S1 对象图 3 / S2 生命周期 4 / S3 作用域 7 / S4 判定链 9；实测 23/23 通过）。
+  产出 `day5-result.txt`（85 行）+ `day5-spring-source.txt`（4 段，713 vs 332 行号对撞）+ `pom.xml`（未验证）。
+- 两个新结论：① `@Autowired` setter 打点把 `populateBean` 钉死在 `ctor` 与 `bpp.before` 之间；
+  ② 两种注解「内层一样、外层不同」（713 `UnsatisfiedDependencyException` vs 332 `BeanCreationException`），
+  并据此**修正 Day 4「完全同一个错」的说法**（笔记/README/题库 Q9 三处同步）。
+- 题库 `Spring.md` 9 → 10（Q10 专门讲启动期异常链怎么读）；同步 W05 笔记（Day 5 整节 6 小节 +
+  一句话总结 + 参考要点 Q10 + 踩坑 +3 → 19 条 + 面试 +4 + 打卡 🟩）、README（§8 + 坑 14/15 + 待办）、
+  `today.md`（11-25 + 下一时间盒）、`MILESTONES.md`（进展表 + 封板段 + 下一时间盒）。
+- 收工回归：重编 49 文件 / 107 class，11 个入口全 exit=0（day5 85 行）。
+- 下次起点：**W06 Day 1 = AOP**（手写 JDK 代理 → `@Aspect` → `this.xxx()` 不走代理）。
+  **注意 `aspectjweaver` 是 `lib/` 里没有的新依赖**，开工先确认能下到。
+- 本次踩坑（已进 MEMORY.md）：静态计数器跨段污染（`JdbcRepo.BUILT` 没归零）；`failOf` 复制粘贴后返回类型没改。
+- 口径提醒：`pom.xml` 只能当「声明」不能当「证据」，笔记里已用 ⚠️ 标明未验证 + 写出验证步骤。

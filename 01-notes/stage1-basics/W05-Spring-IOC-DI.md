@@ -1,7 +1,7 @@
 # W05 · Spring IOC / DI
 
 > **第一阶段 · 打基础（W01–W12）** ｜ 预计投入 ≈ 7 小时（每天 60 分钟）
-> 状态：🟨 进行中（Day 4 11-24）　｜　开始日期：2026-11-20　｜　完成日期：____-__-__
+> 状态：🟩 已封板（Day 5 11-25）　｜　开始日期：2026-11-20　｜　完成日期：2026-11-25
 
 > 💡 目标理解：Spring 到底在帮你管理什么？
 
@@ -12,7 +12,7 @@
 - [x] Bean · IOC · DI
 - [x] Bean 生命周期
 - [x] Bean 作用域
-- [ ] Spring 到底在帮你管理什么
+- [x] Spring 到底在帮你管理什么
 
 > Day 1 勾第一格：`Bean · IOC · DI`。
 > 判断标准不是「背出 IOC 是控制反转、DI 是依赖注入」，而是三条：
@@ -25,12 +25,19 @@
 > **② 能说清 `@PostConstruct` 的调用者是哪个后处理器（栈上有行号）；**
 > **③ 能解释 prototype 的销毁回调为什么「一次都不会被调」（源码在登记阶段就短路了）。**
 >
-> 第四格「Spring 到底在帮你管理什么」要等 Day 6 收尾时才勾 —— 现在只有半张答案。
+> ~~第四格「Spring 到底在帮你管理什么」要等 Day 6 收尾时才勾 —— 现在只有半张答案。~~
+> **改了**：W05 五个时间盒就够（Day 5 即收尾），不必拖到 Day 6。第四格的判断标准见下面 11-25 那条。
 >
 > Day 3 勾第三格：`Bean 作用域`。判断标准三条，全部有实测输出：
 > **① 能说出「造几个」和「谁管埋」是同一个 `scope` 属性的两个后果（四条判据能当场列出来）；**
 > **② 能背出 `No Scope registered for scope name 'request'` 这句，并说清它为什么在 `getBean` 才抛、`refresh` 不抛；**
 > **③ 能解释 `proxyMode` 是「把解析推迟到调用时」而不是「每次新对象」—— 并且知道代价是错误从启动期挪到运行期。**
+>
+> Day 5 勾第四格：`Spring 到底在帮你管理什么`。判断标准三条：
+> **① 三段能脱稿讲（对象图 / 生命周期 / 边界），每段有一个本周实测数字兜底；**
+> **② 这三段能写成一个能跑的程序（`day5/BoardCheck`，23 条断言，FAIL 就 exit=1）——
+>    「讲得出」和「断言得住」是两件事，封板要求后者；**
+> **③ 知道 W05 的边界在哪：Bean 造完之后「方法被调用时发生什么」（AOP）整块没碰，那是 W06。**
 
 ## 二、核心问题（能用自己的话脱稿讲出来，才算学会）
 
@@ -73,6 +80,11 @@ Day 4（已完成 11-24）  工具链：无新增 jar；新增 support/Quiet（�
                          零候选三段（required=true 抛、required=false 给 null、单值同款）/ 集合 + @Qualifier
                        + CtorInject：单构造器免注解 / 多构造器不标的两种结局（炸 vs 静默走无参）/
                          标一个 @Autowired / ObjectProvider 三种局面 / 构造器参数名回退要 -parameters
+Day 5（已完成 11-25）  工具链：无新增 jar；补 pom.xml（**未用 mvn 验证**，本机没 Maven）
+                       + BoardCheck：封板自检，把四天口述过的结论写成 23 条断言
+                         S1 对象图 3 / S2 生命周期 4 / S3 作用域 7 / S4 判定链 9
+                         新增观测点：@Autowired setter 把 populateBean 的位置钉死在 ctor 与 bpp.before 之间；
+                         两种注解的**外层**异常包装不同（713 vs 332 两处 catch）
 ```
 
 ### Day 1 · 2026-11-20（周五）· 「Spring 帮你管理什么」——用 diff 回答，不用定义回答
@@ -815,6 +827,134 @@ D3 那条最容易踩：`getIfAvailable()` 只兜 `NoSuchBean`，不兜它的子
 > `@Autowired` 的名字回退用**字段名**；`@Resource` 的默认名也是字段名，但显式点名时不查类型。
 > 集合是「全收」不是「兜底」：零候选照样抛，`required=false` 给的是 null。
 
+### Day 5 · 2026-11-25（周三）· 收尾封板：把口述答案变成断言
+
+| 时间 | 做什么 | 产出 |
+| -: | :--- | :--- |
+| 10 分钟 | 复述 Day 4：四级判定链 + 两种注解的报错差别 + 集合为什么不是兜底 | 口头过 |
+| 25 分钟 | 写第四格答案（对象图 / 生命周期 / 边界），每段配一个本周数字 | 笔记「一句话总结」+ 参考要点 Q10 |
+| 25 分钟 | **把答案写成能跑的程序**：`BoardCheck`，先写期望值再看实际 | `day5/BoardCheck.java` + `day5-result.txt` |
+| 10 分钟 | `pom.xml` 结账（写了但明确标「未验证」）+ 源码取证 | `pom.xml` + `day5-spring-source.txt` |
+| 5 分钟 | 标 🟩、`today.md` 覆盖、`MILESTONES.md` 同步 | 三份文件 |
+
+实测快照：`w05-spring-ioc-di/day5-result.txt`（85 行，**23 / 23 条通过**，exit=0）
+源码取证：`w05-spring-ioc-di/day5-spring-source.txt`（4 段，行号与异常链对撞）
+
+#### 1. 为什么用程序验收，而不是再写一个 Demo
+
+前四天每个论点都是「跑一段、用眼睛看输出」。问题有两个：
+
+- **眼睛会漏**：Day 4 我就把「零候选给空集合」看错了（其实是根本没跑）；
+- **结论会过期**：换个 Spring 小版本，某个数字就变了，而笔记里的数字不会自己更新。
+
+所以今天反过来：**先写期望值，再让程序说对不上**。`BoardCheck` 的每一条都是
+「我认为是这样（`List.of("ctor", "inject(setter)", ...)`）」对「实际跑出来是什么」。
+任何一条 FAIL 就 `System.exit(1)` —— 这让它可以当**回归用例**用，而不是又一份快照。
+
+顺带一个设计取舍：`BoardCheck` **不复用** day1~day4 的探针类（`Trace` / `ScopeProbe` / `pay/*`），
+代价是重复几个小类，换来的是「封板自检不依赖被测对象自己写对」。
+如果复用，探针里的一个 bug 会同时污染「实验」和「验收」两边，验收就失效了。
+
+#### 2. 四段压成一张表（23 条）
+
+| 段 | 断言 | 关键数字 |
+| :--- | :--- | :--- |
+| S1 对象图 | 手写 3 份 / 容器 1 份 / 三入口同一引用 | `3` → `1`，`w.repo == j.repo == t.repo` |
+| S2 生命周期 | 初始化七步顺序 / 销毁三件套 / prototype 造 2 销 0 | `[ctor, inject(setter), bpp.before, @PostConstruct, afterPropertiesSet, initMethod, bpp.after]` |
+| S3 作用域 | refresh 后 `1 / 0`；`==` 的 `true / false`；进池 `T/F`；销毁 `1+1 / 0` | 4 组判据全中 |
+| S4 判定链 | NoUnique 原文含三个候选名 / 字段名回退 / Primary 压名字 / Qualifier / 两种报错 / 两种外层包装 | `wechat` / `preferred` / `alipay` |
+
+**「23 条全过」这件事本身不稀奇，稀奇的是它现在可重复。** 下次动代码，一条命令就知道有没有踩回去。
+
+#### 3. 新发现一：属性注入的位置，从「夹住」变成「钉死」
+
+Day 2 我用两个观测点夹它：构造器里 `repo = null`、`@PostConstruct` 里 `repo = jdbc`。
+这只说明「注入发生在两者之间」，精度太粗 —— 中间还夹着 `bpp.before`。
+
+今天加一个 **`@Autowired` 的 setter**，在 setter 里打点。关键认识：**setter 是我写的方法，不是容器回调**，
+所以它出现在哪个位置，就是 `populateBean` 的位置：
+
+```text
+1. ctor            ← 我：字段还是 null
+2. inject(setter)  ← 容器在 populateBean 里调了我写的 setter
+3. bpp.before      ← 后处理器（Day 2 的 ②）
+4. @PostConstruct  ← 后处理器调的（Day 2 的 ③）
+5. afterPropertiesSet
+6. initMethod
+7. bpp.after
+```
+
+于是 Day 2 那句「初始化的是**已经装配好的**对象」有了直接证据：`populateBean`（2）
+夹在 `createBeanInstance`（1）与 `initializeBean`（3~7）之间，
+对应源码 `doCreateBean` 的 582 / 619 / 620 三行。
+
+**方法论上的收获**：「没有回调」不等于「位置说不清」。容器不给你回调的地方，
+就在自己的代码里插一个可观测点（setter / 构造器 / getter），精度由你决定。
+
+#### 4. 新发现二：内层一样，外层不一样
+
+Day 4 我写的是「`@Resource` 默认名对不上 → 和 `@Autowired` 同一个 `NoUnique`」。
+今天断言时顺手把**整条链**打了出来，发现外层其实不同：
+
+| 写法 | 外层 | 内层 |
+| :--- | :--- | :--- |
+| `@Autowired` 多候选 | `UnsatisfiedDependencyException` | `NoUniqueBeanDefinitionException` |
+| `@Resource(name="channel")` 不存在 | `BeanCreationException` | `NoSuchBeanDefinitionException` |
+| `@Resource` 默认名不存在 | `BeanCreationException` | `NoUniqueBeanDefinitionException` |
+
+原因从 `javap` 一眼看出来，再回源码定位：
+
+```text
+NoUniqueBeanDefinitionException extends NoSuchBeanDefinitionException extends BeansException
+```
+
+两者都是 `BeansException`，所以两处 `catch` 都接得住，各自换个壳子扔：
+
+```java
+// AutowiredAnnotationBeanPostProcessor.resolveFieldValue:712-713
+catch (BeansException ex) {
+    throw new UnsatisfiedDependencyException(null, beanName, new InjectionPoint(field), ex);
+}
+
+// CommonAnnotationBeanPostProcessor.postProcessProperties:331-332
+catch (Throwable ex) {
+    throw new BeanCreationException(beanName, "Injection of resource dependencies failed", ex);
+}
+```
+
+所以 Day 4 那句「一模一样」要收窄成：**内层一样，外层不同**。
+面试里这句能加分 —— **内层讲「为什么」，外层讲「谁在灌字段的时候炸的」**：
+看到 `UnsatisfiedDependencyException` 就知道是 `@Autowired` 那条路，
+看到 `BeanCreationException` + `Injection of resource dependencies failed` 就知道是 `@Resource`。
+
+#### 5. `pom.xml` 这笔账怎么结的
+
+本机没有 Maven，所以这笔账**不能假装结了**。处理方式：
+
+- 写出来（`spring-context` 一个坐标带进 5 个 spring-*；`javax.annotation-api` 必须显式写，
+  它不是 Spring 的传递依赖）；
+- 在 `pom.xml` 抬头用 `⚠️` 标明「**未验证**」，并写死验证步骤：装 Maven 后
+  `mvn -q clean compile` + `mvn -q exec:java` 必须和 `./run.sh day5.BoardCheck` 一样打出 `23 / 23`；
+- README 的待办里留一条「装 Maven 后对撞一次」。
+
+**「写了」和「验证过」是两件事**，笔记里不能混。这和 Day 2 那句「时间戳每次抖 ±30 ms，
+别抄死数字」是同一个纪律。
+
+#### 6. W05 封板清单（四条全中才勾第四格）
+
+| 封板条件 | 状态 | 证据 |
+| :--- | :--: | :--- |
+| 四个知识点全勾 | ✅ | 第四个今天勾 |
+| 一个能一条命令跑起来的工程 | ✅ | `run.sh` / `run.bat`，10 个入口 + 1 个自检，全 exit=0 |
+| 题库 9 道都有「我的回答 + 追问预判」 | ✅ | `Spring.md` 9 道（今天 +1 → 10 道） |
+| 踩坑表每条都有「原因 + 证据」 | ✅ | 19 条，全部对得上快照或源码行号 |
+
+**额外多做的两件**（照 M0/M1 的惯例）：
+
+1. **23 条断言的自检程序** —— 让「结论」变成「回归用例」，不只写在笔记里；
+2. **行号对撞到「哪个 catch」这一层** —— 713 / 332 两个行号能解释「为什么报错长得不一样」，
+   而不只是「报了什么」。
+
 ## 四、踩坑与 Bug 复盘
 
 | 现象 | 原因 | 排查过程 | 解决 | 底层原理 |
@@ -835,6 +975,9 @@ D3 那条最容易踩：`getIfAvailable()` 只兜 `NoSuchBean`，不兜它的子
 | 第一版把 `try/catch` 包在 `ctx.getBean()` 上，结果 `Exception in thread "main"` 直接退出 | 注入失败发生在 `refresh()` 里：这个 bean 不是 lazy、也没人依赖它，`preInstantiateSingletons` 的循环自己就造了 | 栈底是 `refresh:591 ← ctxOf:259`，不是 `getBean` | 加 `failOf(...)`：`register` 后只包 `refresh()`，返回异常对象 | 「失败在启动期还是取用时」取决于这个 Bean 被谁在什么时候造 —— 没被依赖的普通单例，全部死在 `refresh` |
 | 想压掉 `refresh` 失败的 JUL 警告，按父类名 `AbstractApplicationContext` 设 `Level.OFF`，压不掉 | `AbstractApplicationContext` 里是 `LogFactory.getLog(getClass())`，logger 名是**子类** `AnnotationConfigApplicationContext`；面板上显示的父类名只是 `SimpleFormatter` 打 sourceClass 的结果 | 枚举 `LogManager.getLoggerNames()` 才看到真名 | `support/Quiet` 里按子类名关掉，且只关这一个 logger | 日志名、线程名、行号这三样都属于「不能按感觉写」的类别；拿不准就枚举出来看 |
 | `CtorInject` B1 只打印 root cause，输出成了光秃秃一句 `NoSuchMethodException: ...<init>()` | 最有信息量的那层是中间的 `BeanInstantiationException: No default constructor found`，被 `rootOf` 跳过了 | 输出对不上「预期能看懂」 | 打印策略改成「外层类名 + 首行 message，再补根因首行」 | 异常链的信息分布是「中间层最说明问题」，只取最后一层经常只剩方法签名 |
+| `BoardCheck` S2 段 `@PostConstruct` 里打出 `repo = jdbc#2`（本以为会是 `#1`） | `JdbcRepo.BUILT` 是**静态**计数器，S1 段已经造过一个、没归零 | 一眼看出 2 = 1(上一段) + 1(本段)，去代码里找 reset | 每段开工前 `JdbcRepo.BUILT.set(0)` | 静态状态不归零，后一段就在替前一段付账；和「并发 demo 各段互相污染」是同一类病 |
+| `failOf(...)` 从 Day 4 抄过来，编译报 4 处「不兼容的类型」 | 方法体 `return t`（`Throwable`），签名还留着 `AnnotationConfigApplicationContext` | javac 直接把两行都指出来了（`Throwable` ↔ 上下文，两个方向各两处） | 签名改成 `private static Throwable failOf(...)` | 「能造容器」又要「返回异常」的函数，签名必须重看；复制粘贴最容易忘的就是返回类型 |
+| Day 4 写「`@Resource` 默认名对不上 → 和 `@Autowired` 完全同一个错」 | 只看了**内层**异常，没看外层包装 | 今天把整条链打出来，发现一个 `UnsatisfiedDependencyException`、一个 `BeanCreationException` | 结论收窄成「内层一样，外层不同」，并定位到 713 / 332 两处 `catch` | `NoUnique` 是 `NoSuchBean` 的子类 → 两处 `catch` 都接得住 → 谁接住就用谁的壳。断言要打到「整条链」，不能只打到「根因」 |
 
 ## 五、面试会怎么问
 
@@ -904,10 +1047,33 @@ D3 那条最容易踩：`getIfAvailable()` 只兜 `NoSuchBean`，不兜它的子
   `NoUniqueBeanDefinitionException` 抛出来）。
 - 「构造器注入为什么可以不写 `@Autowired`？」——4.3 起单构造器即唯一候选；
   多构造器时必须标一个，否则有默认构造器就用默认的（**静默**，比报错危险），没有就 `No default constructor found`。
+- 「`@Resource` 和 `@Autowired` 的报错**真的一样**吗？」—— **内层一样，外层不一样**。
+  `@Autowired` 出来的外层是 `UnsatisfiedDependencyException`（`resolveFieldValue:713` 的
+  `catch (BeansException)`），`@Resource` 出来的是 `BeanCreationException`
+  （`postProcessProperties:332`，message 带 `Injection of resource dependencies failed`）。
+  原因：`NoUnique` 是 `NoSuchBean` 的子类，两处 `catch` 都接得住，谁接住就用谁的壳。
+- 「属性注入发生在生命周期的哪一步？」—— `populateBean`，在**构造之后、`BPP.before` 之前**。
+  证据不用背：给自己的 Bean 写一个 `@Autowired` setter 打点，它就排在 `ctor` 和 `bpp.before` 中间。
+- 「你怎么确认自己两周前学的结论还没过期？」—— 写成断言。W05 封板时做了 23 条（`day5/BoardCheck`），
+  一条命令跑完，任一条不成立 `exit=1`。**笔记会骗人，断言不会。**
 
 ## 六、一句话总结
 
+> （封板口述版，照着讲通之后换成自己的话 —— 完整版在文末「参考要点 Q10」。）
 >
+> **Spring 管的是对象图，不是对象 —— 它回答三个问题：谁依赖谁、造几个、造完做什么。**
+>
+> 1. **对象图**：把「谁依赖谁」从每个调用点搬到**一个装配点**。手写版三个入口造出 **3** 份仓储（= 3 个连接池），
+>    容器版 **1** 份，入口代码里的 `new X(` 是 **0**。
+> 2. **生命周期**：Bean 在 `refresh()` 里就造完了，顺序是
+>    **构造 → 注入 → BPP.before → `@PostConstruct` → `afterPropertiesSet` → `initMethod` → BPP.after**，
+>    销毁逆序且**依赖方先死**；prototype 的销毁回调 **0 次**，不是忘了调，是登记阶段就被 `!isPrototype()` 短路。
+> 3. **边界**：它只管「造」和「注入」，**不管方法被调用时发生什么**（那是 AOP，W06）；
+>    prototype、自定义作用域、`@Bean` 的 `destroyMethod` 推断，三处都是「只管造不管埋」。
+>    挑不到唯一实现时它也不猜 —— 四级链走完就抛 `NoUniqueBeanDefinitionException`，把选择权交回给你。
+>
+> 一句压到底：**Spring 把「new 谁、什么时候 new、new 几个、给谁」这四件事收进容器，
+> 换走了三样东西 —— 你的控制权、启动期的可预测性、以及「找不到/挑不出」时的报错质量。**
 
 ---
 
@@ -919,6 +1085,7 @@ D3 那条最容易踩：`getIfAvailable()` 只兜 `NoSuchBean`，不兜它的子
 | 11-23 | 一 | W05 Day 2：Bean 生命周期 —— 六回调顺序 / 后处理器 / 三个追问 | 65 min | `LifecycleOrder` + `PostProcessorTrace` + `day2-result.txt`（140 行）+ `day2-spring-source.txt`（7 段） | ✅ |
 | 11-23 | 一 | W05 Day 3：Bean 作用域 —— 四条判据 / `request` 报错 / `proxyMode` / 自定义 Scope | 60 min | `ScopeMatrix` + `WebScopeTrap` + `ScopeProbe` + `day3-result.txt`（154 行）+ `day3-spring-source.txt`（7 段） | ✅ |
 | 11-24 | 二 | W05 Day 4：注入方式的取舍 —— 判定链四级 / 字段名回退 / `@Resource` 两条路 / 集合与零候选 / 构造器 + `ObjectProvider` | 65 min | `InjectionChoice` + `CollectionInject` + `CtorInject` + `day4-result.txt`（145 行）+ `day4-spring-source.txt`（8 段） | ✅ |
+| 11-25 | 三 | W05 Day 5：收尾封板 —— 三段答案写成 23 条断言 / 注入点位置钉死 / 两种注解外层包装不同 / `pom.xml` 结账（未验证） | 60 min | `day5/BoardCheck.java` + `day5-result.txt`（85 行，23/23 通过）+ `day5-spring-source.txt`（4 段）+ `pom.xml` | ✅ |
 
 ---
 
@@ -1171,3 +1338,58 @@ requestProxy.id()         → IllegalStateException: No Scope registered for sco
 @Autowired(required=false)   → 给 null，不是空集合
 List 的顺序 = @Order；Map 的顺序 = 注册顺序，key = bean 名（源码里 Map 分支没有排序）
 ```
+
+---
+
+**Q10 · 「Spring 到底在帮你管理什么？」——三段答完，每段配一个实测数字。**
+
+这是第四格的标准答案。**不要从「控制反转」开始讲**，那是一个让人点头但不让人信服的定义。
+从「它替你接掉了哪四件事」开始。
+
+**第一段 · 对象图：把「谁依赖谁」从 N 个调用点搬到一个装配点**
+
+```text
+同一套类、三个入口（Web / 定时任务 / 冒烟测试）
+手写版：三个入口各自 new → 3 份仓储 → 3 个连接池
+容器版：@Configuration 里 1 个 @Bean → 1 份仓储，入口代码里 new X( = 0
+```
+
+数字：**3 → 1**（仓储实例）、**3 → 0**（换实现要改的调用点）。
+注意代价也真实存在：`@Bean` 方法里仍然 `new`（计数 1），所以 IOC 省的不是 `new`，是**重复的 `new`**。
+
+追问「Bean 是什么时候创建的」→ **`refresh()` 期间**，`preInstantiateSingletons` 遍历
+「非抽象 + singleton + 非 lazy」，条件是 `!isAbstract() && isSingleton() && !isLazyInit()`。
+时间线：构造 `+375.7 ms`，`refresh()` 返回 `+408.7 ms` —— 全部在 refresh 内。
+
+**第二段 · 生命周期：造完之后还要按固定顺序摆弄一遍**
+
+```text
+ctor → 注入(populateBean) → BPP.before → @PostConstruct → afterPropertiesSet
+     → initMethod → BPP.after        （销毁：@PreDestroy → destroy → destroyMethod）
+```
+
+数字：`+375.7 / 386.7 / 389.0 / 389.5 / 390.2 / 390.5 ms`（六步），刷新返回 `+408.7 ms`。
+三个能接住追问的点：
+
+- `@PostConstruct` 是**后处理器**调的（`InitDestroyAnnotationBeanPostProcessor:157` ← `applyBPPBefore:440`），
+  所以它落在 BPP.before 的遍历里，不是容器主流程里；
+- 注入**没有回调**，但位置能钉死：给自己的 `@Autowired` setter 打点，它排在 `ctor` 与 `bpp.before` 之间；
+- prototype 销毁 **0 次** —— `registerDisposableBeanIfNecessary` 用 `!mbd.isPrototype()`（1944 行）在登记阶段就短路。
+
+**第三段 · 边界：它只管「造」和「灌」，不管「调用」**
+
+三处「只管造不管埋」：prototype、自定义 `Scope`、`SimpleThreadScope`（直接 WARN 不支持销毁回调）。
+`ctx.close()` 只销毁单例；`@Bean` 不写 `destroyMethod` 时会**自动推断** `close()`（1 次 vs `""` 的 0 次）——
+这一条最阴，因为你的类里碰巧有个 `public void close()` 就会被它调掉。
+
+挑不到唯一实现时它**不猜**：四级链（`@Qualifier` → `@Primary` → `@Priority` → 名字）走完就抛
+`NoUniqueBeanDefinitionException`，报错里直接列出候选名（`expected single matching bean but found 3: …`）。
+
+**最后一句把边界说清**：Bean 造完、字段灌完，**方法被调用时发生什么，Spring 一点都不管**——
+那是 AOP 的地盘（W06），也是 `@Transactional` / `@Async` 全部失效场景的源头。
+W05 只到「对象图 + 生命周期」，到此为止是诚实；把 W06 的话提前说了，才是背答案。
+
+---
+
+> **封板方式**：这段答案不只用嘴说，还写成了 `BoardCheck` 的 **23 条断言**（`day5-result.txt`）。
+> 换 JDK / 换 Spring 小版本后跑一遍，任一条 FAIL 就说明上面某个数字过期了 —— 那时改笔记，不是改程序。
