@@ -221,12 +221,12 @@ public static void swap(List<?> list, int i, int j) {
 
 ### Day 2 · 2026-10-29（周四）· 异常体系
 
-| 时间 | 做什么 | 产出 |
-| -: | :--- | :--- |
-| 10 分钟 | 复述 Day 1：擦除擦的是实参 / 实参藏在 Signature / 为什么不能 `new T[]` | 口头过，卡住回看 Day 1 |
-| 20 分钟 | `try-with-resources` 与 `finally` 里 `return` 吞异常 | `day2/TryWithResourcesProbe.java` 五段 |
-| 20 分钟 | 「包装丢栈」到底丢的是什么：cause / suppressed / sneakyThrow | `day2/ExceptionChainProbe.java` 六段 |
-| 10 分钟 | 输出：什么时候该包装、什么时候不该 | 本节第 8 小节 + 核心问题 Q4 / Q5 |
+|    时间 | 做什么                                                 | 产出                                   |
+| ----: | :-------------------------------------------------- | :----------------------------------- |
+| 10 分钟 | 复述 Day 1：擦除擦的是实参 / 实参藏在 Signature / 为什么不能 `new T[]` | 口头过，卡住回看 Day 1                       |
+| 20 分钟 | `try-with-resources` 与 `finally` 里 `return` 吞异常     | `day2/TryWithResourcesProbe.java` 五段 |
+| 20 分钟 | 「包装丢栈」到底丢的是什么：cause / suppressed / sneakyThrow      | `day2/ExceptionChainProbe.java` 六段   |
+| 10 分钟 | 输出：什么时候该包装、什么时候不该                                   | 本节第 8 小节 + 核心问题 Q4 / Q5              |
 
 实测快照：`w02-generics-stream/day2-result.txt`（JDK 17.0.12）
 
