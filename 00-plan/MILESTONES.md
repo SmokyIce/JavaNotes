@@ -121,6 +121,7 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > | 2026-11-23 | **W05 Day 3 · Bean 作用域** | `day3/ScopeMatrix`（A `singleton` vs `prototype` 三条判据：`refresh` 后构造数 `1 / 0`、两次 `getBean` 的 `==` 为 `true / false`、`containsSingleton` `true / false`、`close()` 后销毁 `1+1 vs 0+0`；B `registerScope("singleton", …)` → `Cannot replace existing scopes`，`getRegisteredScopeNames()` 只有 `[thread]`，`SimpleThreadScope` 每线程一个实例并打 WARN「不支持销毁回调」；C 四作用域判据矩阵）+ `day3/WebScopeTrap`（A `request` → `IllegalStateException: No Scope registered for scope name 'request'`，`doGetBean:369`，**refresh 不报错、getBean 才报**；B `session` 同款；C `proxyMode` 三组：无代理三次 `id()` 全 `1`（造 1 个）、`TARGET_CLASS` 后 `2/3/4`（造 3 个）、定义被拆成 `scopedTarget.requestProxy`（`scope=request`）+ `requestProxy`（`ScopedProxyFactoryBean` 单例）、`request` + 代理后 `getBean` 不抛而首次调用抛（栈多一帧 `SimpleBeanTargetSource:35`）；D 自定义 `Scope`「每 2 次换实例」→ `A A B B`、轮换销毁 1 次、`close()` 后仍 1 次）+ `day3/ScopeProbe`；`day3-result.txt`（154 行）+ `day3-spring-source.txt`（7 段源码）；笔记 W05 Day 3 整节（6 小节）+ 踩坑 5 条 + 面试 6 条 + 参考要点 Q6/Q7；`Spring.md` 5 → **7 题** |
 > | 2026-11-24 | **W05 Day 4 · 注入方式的取舍** | `day4/InjectionChoice`（A 三个候选 + 字段名对不上 → `NoUniqueBeanDefinitionException: expected single matching bean but found 3: alipayChannel,wechatChannel,unionPayChannel`，**死在 `refresh()` 里**（栈：`resolveNotUnique:220` ← `doResolveDependency:1369` ← `AutowiredFieldElement.resolveFieldValue:710` ← `postProcessProperties:408` ← `populateBean:1431` ← `doCreateBean:619`）；B **字段名回退**：字段名 `wechatChannel` + 零注解 → 注入到 `wechat`；C `@Qualifier("alipayChannel")` → `alipay`，点名不存在 → `expected at least 1 bean which qualifies as autowire candidate`；D 字段名依旧 `wechatChannel` + `@Primary` → 注入 `preferred`（**Primary 在名字之前**）；E `@Resource` 默认名 = 字段名 → `unionpay`，`name="alipayChannel"` + 字段名 `anything` → `alipay`；F1 显式名对不上 → **`No bean named 'channel' available`**（不查类型）；F2 默认名对不上 → 退回按类型 → 同一个 `NoUnique`） + `day4/CollectionInject`（A `List` / 数组 = `wechat → alipay → unionpay` 按 `@Order`；B `Map` key = bean 名、顺序 = 注册顺序 `[alipayChannel, wechatChannel, unionPayChannel]`，源码 1493-1500 无一行排序；C 零候选三段：`required=true` 的 `List` **照样抛** `expected at least 1 bean` / `required=false` 给 **null**（不是空集合）/ 单值同款异常；D 集合 + `@Qualifier` → 缩到 1 个再全收） + `day4/CtorInject`（A 单构造器免注解 → `log`；B1 两个构造器无无参 → `BeanInstantiationException: No default constructor found`，B2 有无参则**静默**走无参；C 标了 `@Autowired` 的那个赢；D1 原型 `getObject()` 两次 = `temp-1 / temp-2`，D2 零候选 `getIfAvailable`/`getIfUnique` 都是 null，D3 三候选 `getIfUnique()` null 但 `getIfAvailable()` **抛** `NoUnique`；E 反射读到的参数名 = `arg0`（`isNamePresent=false`）→ 参数名回退失效）+ `support/Quiet`；`day4-result.txt`（145 行）+ `day4-spring-source.txt`（8 段源码）；笔记 W05 Day 4 整节（8 小节）+ 踩坑 4 条 + 面试 8 条 + 参考要点 Q8/Q9；`Spring.md` 7 → **9 题** |
 > | 2026-11-25 | **W05 Day 5 · 收尾封板** | `day5/BoardCheck`（**把四天的口述结论写成 23 条断言**，FAIL 即 `exit=1`：S1 对象图 3 条 `3 份 → 1 份`、S2 生命周期 4 条（七步顺序 `[ctor, inject(setter), bpp.before, @PostConstruct, afterPropertiesSet, initMethod, bpp.after]` / 销毁三件套 / prototype 造 2 销 0）、S3 作用域 7 条（refresh 后 `1 / 0`、`==` 的 `true / false`、进池 `T/F`、销毁 `1+1 / 0`）、S4 判定链 9 条（NoUnique 原文含三候选名 / 字段名回退 `wechat` / `@Primary` 压名字 `preferred` / `@Qualifier` `alipay` / 两种报错 / 两种外层包装）；实测 **23/23 通过**）+ `day5-result.txt`（85 行）+ `day5-spring-source.txt`（4 段，713 vs 332 行号对撞）+ `pom.xml`（**未用 mvn 验证**：本机无 Maven，只验了 XML 合法）；笔记 W05 第四格答案三段（对象图 / 生命周期 / 边界）+ Day 5 整节（6 小节）+ 一句话总结 + 参考要点 Q10 + 踩坑 3 条 + 面试 4 条 + 打卡；`Spring.md` 9 → **10 题**（Q10 异常链怎么读），**并修正 Q9「完全同一个错」→「内层一样、外层不同」** |
+> | 2026-11-26 | **W06 Day 1 · AOP：代理什么时候套上去**（`w06-spring-aop/` 从 `.gitkeep` 建工程，`lib/` 新增 **`aspectjweaver-1.9.7`**） | `day1/JdkProxy`（**纯 JDK 不引 Spring**，八段：A 不代理 handler 0 次 / B 一次调用 1 次、类名 `jdk.proxy1.$Proxy0` / C **嵌套调用仍 1 次**，业务跑了 3 个方法 / D 代理套代理 2 次 / E 同接口同类、多实现一个接口换 `$Proxy1` / F `hashCode`·`toString`·`equals` **三个都进** handler / G 强转 **CCE** / H package-private 接口 → 代理类落到接口所在包 `com.newt…day1.$Proxy4`）+ `day1/ProxyIdentity`（S1 手工 `new` 的实例 `before=0` / S2 `jdk.proxy2.$Proxy22`、实现 `SpringProxy`+`Advised`+`DecoratingProxy` / **S2b 两个错**：按类型 `NoSuchBeanDefinition`、按名字+类型 `BeanNotOfRequiredType` / S3 before·around·after **1/1/1**、`getThis()==getTarget()` 为 false / S4 `$$EnhancerBySpringCGLIB$$`、父类就是 `GreetingImpl` / S5 无接口自动 CGLIB + **`final sealed()` 增量 0**（静默失效）/ S6 切面自己 `isAopProxy=false` / S7 顺序 `@Around 进入 → @Before → @After → @Around 返回`）+ `day1/SelfInvocation`（S1 `this` **1** 次 / S2 `self` **2** 次 / S3 `currentProxy()` **2** 次 / S4 **三层探针**：`self==bean` false、`TargetSource=ContextAnnotationAutowireCandidateResolver$1`、`getTarget()==bean` true / S5 没开 `exposeProxy` 的 ISE 原文）+ 源码取证 8 段（`DefaultAopProxyFactory:58` / `JdkDynamicAopProxy:126` 同一句 `newProxyInstance` / `:225·239·241` 取链与 proceed / `AopContext:50` NamedThreadLocal / `AopUtils:68-70` 判据 / `buildLazyResolutionProxy:83·93` / `wrapIfNecessary:328·341·351` / JDK `Proxy:309·427` 类缓存）；`day1-result.txt`（189 行）+ `day1-spring-source.txt`（8 段）；笔记 W06 Day 1 整节（8 小节）+ 踩坑 6 条 + 面试 9 条 + 参考要点 Q1~Q3；`Spring.md` 10 → **12 题** |
 >
 > **W02 已封板（2026-11-03）**，六天全部完成。**W03 已封板（2026-11-11）**，四天全部完成。
 > **W04 已封板（2026-11-19）**，两天全部完成 —— 五个知识点全勾。
@@ -130,7 +131,8 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > （IOC/DI → 生命周期 → 作用域 → 注入取舍 → 封板自检），四个知识点全勾，
 > 工程从 `.gitkeep` 建起、`lib/` 手工放 7 个 jar（Day 2 多了 `javax.annotation-api`），
 > 外加 `pom.xml` 一份（**未用 mvn 验证**）。
-> 下一个是 **W06 · AOP**。
+> **W06 · AOP 已开工（2026-11-26，Day 1 完成）**：代理在 `wrapIfNecessary:328` 那一层被套上去，
+> JDK 与 CGLIB 的分界在 `DefaultAopProxyFactory:58`，`this.xxx()` 的失效在纯 JDK 代理里就能证明。
 >
 > W04 Day 2 最值钱的三条结论（全部有实测数字）：
 >
@@ -383,9 +385,30 @@ D 字段名不变 + `@Primary` → `preferred`；E `@Resource` 默认名 = 字�
 ③ **「讲得出」和「断言得住」是两件事** —— 前者靠理解，后者靠把期望值写下来；
 封板要求后者，因为换个 JDK / Spring 小版本时，只有断言会告诉你哪个数字过期了。
 
-下一个时间盒（60 分钟）：**W06 Day 1 · AOP —— 代理是什么时候套上去的** ——
-① 手写 JDK 动态代理（`InvocationHandler` + `Proxy.newProxyInstance`），数一次调用进几次 handler；
-② 同一套类交给 Spring `@Aspect`，打印「`this` 与容器里那个对象不是同一个」；
-③ 追问 `this.xxx()` 为什么不走代理（接 Day 2 的 `is not eligible for auto-proxying`）；
-④ `w06-spring-aop/` 从 `.gitkeep` 建工程，注意 **`@Aspect` 需要 `aspectjweaver`，是 `lib/` 里没有的新依赖**。
-时间盒见 `00-plan/today.md`（每天开工前先打开它，收工时覆盖）。
+**W06 Day 1 已完成（2026-11-26）· AOP：代理什么时候套上去**：`day1/JdkProxy`（纯 JDK，八段：
+A 不代理 `handler` 0 次 / B 一次调用 1 次 / **C 嵌套调用仍 1 次，而业务真跑了 3 个方法** / D 代理套代理 2 次 /
+E 同接口同类、每 `newProxyInstance` 只换 handler / F `Object` 三方法也进 handler / G 强转 CCE /
+H 非 public 接口 → 代理类落到接口所在包）
++ `day1/ProxyIdentity`（S1 手工 `new` 不进切面 / S2 `jdk.proxy2.$Proxy22` 且实现 `SpringProxy` /
+**S2b 按实现类取 Bean 是「两个不同的错」**：按类型 `NoSuchBeanDefinition`、按名字+类型 `BeanNotOfRequiredType` /
+S3 `getThis()` 是代理、`getTarget()` 是真身 / S4 `proxyTargetClass=true` → CGLIB 子类 /
+**S5 `final` 方法上行切面静默失效**（`before` 增量 0）/ S6 切面自己不被代理 /
+S7 顺序 `@Around 进入 → @Before → @After → @Around 返回`）
++ `day1/SelfInvocation`（`this` **1** 次 / `self` **2** 次 / `currentProxy()` **2** 次；
+**S4 用 `TargetSource` 证明 `self` 是三层**：`@Lazy` 解析代理 → AOP 代理 → 真身）。
+产出 `day1-result.txt`（189 行）+ `day1-spring-source.txt`（8 段源码，行号与输出对撞）。
+
+三条核心结论：① **AOP 改的是「容器里放谁」**，替换发生在
+`AbstractAutoProxyCreator.wrapIfNecessary:328`（后处理器的 `postProcessAfterInitialization` 阶段），
+所以 `new` 出来的对象 `before=0`；② **选型只看一句**
+`isProxyTargetClass() || hasNoUserSuppliedProxyInterfaces()`（`DefaultAopProxyFactory:58`）——
+无接口自动 CGLIB，而 CGLIB 覆写不了 `final`，于是 **`final` 上的切面静默不执行、日志一个字不提**；
+③ **`this.xxx()` 失效不需要 Spring 就能证明**（纯 JDK 代理里业务跑 3 个方法、handler 只进 1 次），
+三种修法的代价分别是「三层代理」「`exposeProxy` + 同线程」「改结构」。
+
+下一个时间盒（60 分钟）：**W06 Day 2 · 切点与通知的全谱** ——
+① 四种切点对照（`execution` / `within` / `args` / `@annotation`），重点看「写宽了」和「写窄了」各是什么表现；
+② `@AfterReturning` 改返回值、`@AfterThrowing` 吞异常，分别试「改得动吗」「吞得掉吗」；
+③ 两个切面的 `@Order`：谁在外层；
+④ Day 3 是 `java-48week-plan.md` 第 6 周的硬要求 —— **手写 mini AOP**（`ProxyFactory` + `MethodInterceptor` + `Advisor`，不用 `@Aspect`）。
+时间盒见 `00-plan/today.md`。

@@ -1,93 +1,98 @@
 ---
 title: 今天做什么
-date: 2026-11-25
-weekday: 周三
+date: 2026-11-26
+weekday: 周四
 milestone: M2 · Spring 内核
-task: W05 Day 5 — 收尾封板（三段答案 → 23 条断言 + pom.xml 结账）
+task: W06 Day 1 — AOP：代理到底是什么时候套上去的
 status: 已完成
 ---
 
-# 今天 · 2026-11-25（周三）· 已完成
+# 今天 · 2026-11-26（周四）· 已完成
 
-> 前四天回答了四个问题：**造什么**（Day 1）、**造完做什么**（Day 2）、**造几个**（Day 3）、**给哪个**（Day 4）。
-> 今天不提问、不写新 Demo，只做一件事：把这四个答案**变成能跑的程序**，然后封板。
+> W05 停在「Bean 造完、字段灌完」。今天回答下一个问题：
+> **方法被调用的时候，Spring 还能插进来做什么？**
 >
-> 理由：前四天的结论都是「跑一段、用眼睛看输出」。眼睛会漏（Day 4 就把「零候选给空集合」看错了），
-> 数字也会过期（换个 Spring 小版本就不一定成立）。所以今天反过来 —— **先写期望值，再让程序说对不上**。
+> 答案不是「切面编程」，是**容器里放的不是你的对象，是一个代理**。
+> 所以今天不写博客式的 `@Aspect` demo，只做一件事：把「谁拿到了代理」这件事量出来。
 
 ## 一、先查的遗留
 
 | 检查项 | 结果 |
 | :--- | :--- |
-| 清空 `out/` 全量重编 w05（48 文件 / 89 class）+ 跑全部 10 个入口 | ✅ 全 exit=0，行数 59 / 127 / 154 / 54 / 75 / 51 / 92 / 57 / 34 / 40，与 11-24 逐个一致，无回归、无中断代码 |
-| `01-notes` 里的未勾项 | 只剩 W05 第四格（= 今天这格）+ W06 起未解锁内容 |
-| `02-code` 空目录 | 无空目录；`w06-` 起仍是 `.gitkeep`（下一个里程碑，不是遗留） |
-| 上一个时间盒留的待办 | ① 第四格答案 ✅ 今天写；② `pom.xml` ✅ 今天写（但明确标「未验证」）；③ 题库抽讲 Q1/Q4/Q8 ✅ 顺带补了 Q10 |
-| 与前一个时间盒的关系 | 11-24 → 11-25 隔一天（正常节奏），不涉及补课 |
+| 清空 `out/` 全量重编 w05（49 文件 / 107 class）+ 跑全部 11 个入口 | ✅ 全 exit=0，`day5.BoardCheck` **23/23** 通过，无回归、无中断代码 |
+| `01-notes` 里的未勾项 | 只剩 W06 的四个知识点（= 今天要动的）+ W07 起未解锁内容 |
+| `02-code` 空目录 | 无空目录；`w06-` 起仍是 `.gitkeep`，今天从 `.gitkeep` 建 `w06-spring-aop/` |
+| 上一个时间盒留的待办 | ① `w06-spring-aop/` 建工程 ✅；② 确认 `aspectjweaver` 能下 ✅（2,087,074 B）；③ `pom.xml` 验证 ❌（本机仍无 Maven，且 W06 先不写 pom） |
+| 与前一个时间盒的关系 | 11-25 → 11-26 隔一天（正常节奏），不涉及补课 |
 
-**结论：没有需要补的中断代码。** 起点就是 W05 Day 5。
+**结论：没有需要补的中断代码。** 起点就是 W06 Day 1。
 
 ## 二、今天做的三件事
 
 | # | 做什么 | 产出 |
 | -: | :--- | :--- |
-| 1 | **把答案写成程序**：`day5/BoardCheck`，四段共 23 条断言，FAIL 就 `exit=1` | `BoardCheck.java` + `day5-result.txt`（85 行，**23 / 23 通过**） |
-| 2 | **两个新观测点**（下面第三节） | 同上 + `day5-spring-source.txt`（4 段，713 / 332 行号对撞） |
-| 3 | **`pom.xml` 结账** + 笔记第四格 + 题库 Q10 + 三处同步 | `pom.xml`、W05 笔记、`Spring.md`（9 → 10 题）、`MILESTONES.md` |
+| 1 | **纯 JDK 手写动态代理**，八段（A 不代理 → H 非 public 接口），数 handler 进几次 | `day1/JdkProxy.java` |
+| 2 | **同一套类交给 Spring**：代理身份 / 选型 / 自调用，七段 + 六段 | `day1/ProxyIdentity.java`、`day1/SelfInvocation.java` |
+| 3 | 快照 + 源码取证（8 段，行号与栈对撞）+ 笔记 + 题库 + 三处同步 | `day1-result.txt`（189 行）、`day1-spring-source.txt`、W06 笔记、`Spring.md` 10 → 12 |
 
-`BoardCheck` 的分段与断言数：S1 对象图 3 / S2 生命周期 4 / S3 作用域 7 / S4 判定链 9。
-设计上**故意不复用** day1~day4 的探针类 —— 封板自检不能依赖「被测对象自己写对了」。
+工程从 `.gitkeep` 建起，`lib/` 沿用 W05 的 7 个 jar，**新增 `aspectjweaver-1.9.7.jar`**（2.0 MB）：
+`@Aspect` / `@Pointcut` 的注解和切点解析都在它里面，只放 `spring-aop` 会**编译不过**（不是运行才炸）。
 
-## 三、今天挖到的两个点（都是前几天只能间接说的）
+## 三、今天挖到的四个点
 
-1. **属性注入的位置：从「夹住」变「钉死」。**
-   Day 2 只有两个观测点（构造时 `repo=null` / `@PostConstruct` 时 `repo=jdbc`），精度只到「中间某处」。
-   今天给 `LifeProbe` 加一个 **`@Autowired` 的 setter** 打点（setter 是我写的、不是容器回调），实测：
+1. **`this.xxx()` 不需要 Spring 就能证明。** 纯 JDK 代理里，`placeThenCancel()` 内部调 `place()` 和 `cancel()`：
+   **业务跑了 3 个方法，handler 只进 1 次**。那两次是 `invokevirtual` 直连真身。
+   这一条比任何「代理模式」的定义都有说服力，也是 W07 讲事务失效的地基。
 
-   ```text
-   ctor → inject(setter) → bpp.before → @PostConstruct → afterPropertiesSet → initMethod → bpp.after
-   ```
+2. **Spring 的 JDK 代理就是你手写的那一句。** `JdkDynamicAopProxy:126`
+   `return Proxy.newProxyInstance(determineClassLoader(classLoader), this.proxiedInterfaces, this);`
+   第三个参数是 `this`，因为它自己就是 `InvocationHandler`。我们把「计数器」换成了「顾问链」。
 
-   于是 `populateBean` 落在 `ctor` 与 `bpp.before` 之间，对应 `doCreateBean` 的 582 / 619 / 620 三行。
-   **方法论**：「没有回调」不等于「位置说不清」，在自己的代码里插观测点就行。
+3. **`self` 是三层代理，而这件事只能靠 `TargetSource` 分清。**
+   `self.getClass() == bean.getClass()` 是 `true`（JDK 代理类按接口列表缓存），完全不能当证据；
+   真正的证据是 `self == bean` 为 `false` + `self` 的 `TargetSource` 是
+   `ContextAnnotationAutowireCandidateResolver$1` + `self.getTarget() == bean` 为 `true`。
+   链路：`@Lazy` 解析代理 → AOP 代理 → `GreetingImpl`。
 
-2. **「两种注解报同一个错」只对了内层。**
-   内层确实都是 `NoUnique`，但外层包装不同：`@Autowired` 是 `UnsatisfiedDependencyException`（713 行），
-   `@Resource` 是 `BeanCreationException` + `Injection of resource dependencies failed`（332 行）。
-   根源是继承关系：`NoUnique` 是 `NoSuchBean` 的子类，两处 `catch` 都接得住，谁接住用谁的壳。
-   **这条修正了 Day 4 笔记里「完全同一个错」的说法**，README 和题库 Q9 已同步收窄。
+4. **`final` 方法上的切面是「静默失效」。** `PlainJob.sealed()` 调用前后 `before` 增量 **0**，
+   启动日志一个字都不提。这类「配了像没配」比抛异常难查十倍。
 
-## 四、今天踩的坑（两个）
+## 四、今天踩的坑（三个，都是「先写后验」）
 
-- **静态计数器跨段污染。** S2 段 `@PostConstruct` 里打出 `repo = jdbc#2`（本以为 `#1`）——
-  S1 段已经造过 `jdbc#1`，而 `BUILT` 是静态的没归零。改成每段开工先 `set(0)`。
-  和「并发 demo 各段互相污染」是同一类病：**静态状态不归零，后一段就替前一段付账。**
-- **复制粘贴的函数签名没改。** `failOf(...)` 从 Day 4 抄过来，方法体 `return Throwable`，
-  签名还留着 `AnnotationConfigApplicationContext` → 4 个「不兼容的类型」。
-  好消息是这次 javac 一次就把两个方向都指出来了。
+- **「按实现类取 Bean 抛 `BeanNotOfRequiredTypeException`」只对了一半。**
+  实测 `getBean(GreetingImpl.class)` 抛的是 `NoSuchBeanDefinitionException`（按类型匹配，连候选都不是），
+  只有 `getBean("greeting", GreetingImpl.class)` 才是 `BeanNotOfRequiredTypeException`。
+  两个错混为一谈，面试里会被追到崩。
+- **`AopUtils` 不在 `aop.framework`，在 `aop.support`。** 凭印象写 import，一次 11 个编译错。
+- **字符串里的 `\$` 是非法转义。** 在 shell 里写 `\$` 防变量替换，抄进 Java 源码就成了语法错。
 
 ## 五、环境备忘
 
-- 跑今天：`./run.sh day5.BoardCheck`（约 0.5 s）。**FAIL 会 `exit=1`**，可以直接当回归用例。
-- 无新增 jar；`pom.xml` 已写但**本机没有 Maven，未验证**（`python -c` 只验了 XML 格式合法）。
+- 跑今天：`./run.sh JdkProxy` / `./run.sh ProxyIdentity` / `./run.sh SelfInvocation`（各约 0.5 s）。
+- 新增 jar：`lib/aspectjweaver-1.9.7.jar`（`curl` 自 repo1.maven.org，http=200）。
+- 源码取证：`/tmp` 下解压了 `spring-aop-5.3.39-sources.jar` 与 JDK 的 `src.zip`，
+  8 段原文已抄进 `day1-spring-source.txt`，`/tmp` 清了也不影响。
 - 跑之前别忘了 `export PATH="/c/Program Files/Java/jdk-17/bin:$PATH"`。
 
 ---
 
 # 下一个时间盒（60 分钟）
 
-**W06 Day 1：AOP —— 代理到底是什么时候套上去的**
+**W06 Day 2：切点与通知的全谱 —— `execution` 到底怎么匹配，`@AfterThrowing` 能不能吞异常**
 
-> W05 停在「Bean 造完、字段灌完」。W06 接着回答下一个问题：
-> **方法被调用时，Spring 还能插进来做什么？** —— 这一块正是 `@Transactional` / `@Async` 失效的总根源。
+> Day 1 只用了 `within()` 一个切点、`@Before/@Around/@After` 三种通知。
+> Day 2 把剩下的补齐 —— 因为真正难查的不是「切面写错」，是**切点写得太宽/太窄**：
+> 写宽了给所有方法开事务，写窄了该拦的没拦住，两种都安静得像没问题。
 
 | 时间 | 做什么 | 产出 |
 | -: | :--- | :--- |
-| 10 分钟 | 复述 W05 封板三段（对象图 / 生命周期 / 边界），限时 3 分钟 | 口头过 |
-| 15 分钟 | 手写 JDK 动态代理（`InvocationHandler` + `Proxy.newProxyInstance`），数一次调用进了几次 handler | `w06-spring-aop/day1/JdkProxy.java` |
-| 20 分钟 | 同一套类交给 Spring `@Aspect`，打印调用前后的对象身份：**`this` 和容器里那个不是同一个** | `day1/ProxyIdentity.java` |
-| 10 分钟 | 追问：为什么 `this.xxx()` 不走代理（连到 Day 2 的 `is not eligible for auto-proxying`） | 输出段落 |
-| 5 分钟 | 快照 + 源码取证 + 笔记 + `today.md` 覆盖 | 三份文件 |
+| 10 分钟 | 复述 Day 1：代理在哪一步套上（`wrapIfNecessary:328`）/ JDK 与 CGLIB 的分界（`:58`）/ `this` 为什么失效 | 口头过 |
+| 20 分钟 | **四种切点写法对照**：`execution` / `within` / `args` / `@annotation`，同一批方法各打一次，看谁命中谁不命中（含 `execution(* com..*.*(..))` 写宽了的后果） | `day2/PointcutForms.java` |
+| 15 分钟 | **`@AfterReturning` 改返回值** + **`@AfterThrowing` 吞异常**：分别试「改得动吗」「吞得掉吗」 | `day2/AdviceTypes.java` |
+| 10 分钟 | **两个切面的 `@Order`**：同一个方法上两个切面，谁在外层；`@Order` 反过来会怎样 | `day2/AspectOrder.java` |
+| 5 分钟 | 快照 + 笔记 + `today.md` 覆盖 | 三份文件 |
 
-> 开工先做：`w06-spring-aop/` 从 `.gitkeep` 建工程（照 w05 的 `run.sh` 抄一份，`lib/` 里已有 `spring-aop`，
-> 但 **`aspectjweaver` 是新依赖**，`@Aspect` 需要它 —— 先确认能不能从 repo1.maven.org 下到）。
+> 开工先做：无新增 jar（`aspectjweaver` 已在）。切点表达式里如果要用 `args()` 绑定参数，
+> 注意它匹配的是**运行时实参类型**，和 `execution` 的声明类型不是一回事 —— 这一点要先跑再写。
+> 下一步 Day 3 是**手写 mini AOP**（`ProxyFactory` + `MethodInterceptor` + `Advisor`，
+> 不用 `@Aspect`），那是 `java-48week-plan.md` 第 6 周的硬要求。

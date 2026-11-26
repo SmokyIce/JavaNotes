@@ -266,3 +266,27 @@
   **注意 `aspectjweaver` 是 `lib/` 里没有的新依赖**，开工先确认能下到。
 - 本次踩坑（已进 MEMORY.md）：静态计数器跨段污染（`JdbcRepo.BUILT` 没归零）；`failOf` 复制粘贴后返回类型没改。
 - 口径提醒：`pom.xml` 只能当「声明」不能当「证据」，笔记里已用 ⚠️ 标明未验证 + 写出验证步骤。
+
+## 2026-11-26（第十八次执行 · W06 Day 1 AOP）
+- 开工回归：清空 `out/` 重编 w05（49 文件 / 107 class）+ 跑 11 个入口全 exit=0，
+  `day5.BoardCheck` 23/23，**无中断代码**；`01-notes` 未勾项只剩 W06 四个知识点，`02-code` 无空目录 → 无遗留需补。
+- 推进 W06 Day 1：`w06-spring-aop/` 从 `.gitkeep` 建工程（run.sh / run.bat / README）。
+  工具链：`lib/` 沿 W05 七个 jar + **curl 下 `aspectjweaver-1.9.7.jar`（2,087,074 B，http=200）**。
+  新建 `day1/{Greeting, GreetingImpl, PlainJob, TraceAspect, JdkProxy, ProxyIdentity, SelfInvocation}`，共 22 段实验。
+  产出 `day1-result.txt`（189 行）+ `day1-spring-source.txt`（8 段源码：`DefaultAopProxyFactory:58` /
+  `JdkDynamicAopProxy:126·225·239·241` / `AopContext:50·66` / `AopUtils:68·81·93` /
+  `buildLazyResolutionProxy:83·93` / `wrapIfNecessary:328·341·351` / JDK `Proxy:309·427`）。
+- 三条硬结论：① 代理在 `wrapIfNecessary:328`（后处理器 `postProcessAfterInitialization`）套上，`new` 的对象 `before=0`；
+  ② 选型 `isProxyTargetClass() || hasNoUserSuppliedProxyInterfaces()`，无接口自动 CGLIB，**`final` 方法静默失效**；
+  ③ 纯 JDK 代理就能证明 `this.xxx()`：业务跑 3 个方法、handler 只进 1 次；`self` **2** 次、`currentProxy()` **2** 次。
+- 同步：W06 笔记（Day 1 8 小节 + 踩坑 6 + 面试 9 + 参考要点 Q1~Q3 + 打卡 + 勾三格，CGLIB 留 Day 2）、
+  README（§1~§5）、`Spring.md` 10 → **12**（Q11/Q12）、`today.md`（11-26 + 下一时间盒）、
+  `MILESTONES.md`（进展行 + W06 Day 1 段 + 下一时间盒）、`MEMORY.md` 重写压缩（18.2 KB → 13.3 KB）。
+- 收工回归：清空重编 16 class，三个入口全 exit=0（60 / 74 / 49 行）。
+- 三次「先写后验」被抓回（已进 MEMORY.md）：① 按实现类取 Bean 的两个错分清了
+  （按类型 `NoSuchBeanDefinition`、按名字+类型 `BeanNotOfRequiredType`）；② `self.getClass()==bean.getClass()`
+  不能证明层级（代理类按接口列表缓存）→ 改用 `TargetSource`；③ `@After` 在 `@Around 返回` 之前。
+- 下次起点：**W06 Day 2 = 切点与通知全谱**（四种切点 + `@AfterReturning`/`@AfterThrowing` + `@Order`），
+  无新增 jar；Day 3 手写 mini AOP（`ProxyFactory` + `MethodInterceptor` + `Advisor`）。
+- 口径提醒：`ProxyIdentity` 输出里的 `$Proxy22` / `$$…$$<hash>` 每次运行会变，笔记里已标注「编号可能变」，
+  不能再当固定值引用。

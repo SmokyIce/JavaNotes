@@ -1,0 +1,250 @@
+W06 Day 1 · AOP 源码取证（Spring 5.3.39 + JDK 17.0.12）
+所有行号都用 sed -n 从 sources jar 里原样切出，与运行输出里的栈 / 类名逐条对撞。
+
+################################################################
+[1] 选 JDK 代理还是 CGLIB —— DefaultAopProxyFactory.createAopProxy:56-72
+    证据：ProxyIdentity S2 走 JDK、S4 强制 CGLIB、S5 无接口自动 CGLIB
+################################################################
+	private static final long serialVersionUID = 7930414337282325166L;
+
+
+	@Override
+	public AopProxy createAopProxy(AdvisedSupport config) throws AopConfigException {
+		if (!NativeDetector.inNativeImage() &&
+				(config.isOptimize() || config.isProxyTargetClass() || hasNoUserSuppliedProxyInterfaces(config))) {
+			Class<?> targetClass = config.getTargetClass();
+			if (targetClass == null) {
+				throw new AopConfigException("TargetSource cannot determine target class: " +
+						"Either an interface or a target is required for proxy creation.");
+			}
+			if (targetClass.isInterface() || Proxy.isProxyClass(targetClass) || ClassUtils.isLambdaClass(targetClass)) {
+				return new JdkDynamicAopProxy(config);
+			}
+			return new ObjenesisCglibAopProxy(config);
+		}
+		else {
+			return new JdkDynamicAopProxy(config);
+		}
+	}
+
+    ↑ 第 58 行是全部答案：isProxyTargetClass() || hasNoUserSuppliedProxyInterfaces()
+      → 只要「显式要求 CGLIB」或「没给接口」，就进 CGLIB 分支；否则第 70 行 JDK。
+      第 64 行还有一层兜底：目标本身是接口/已是代理/lambda → 仍走 JDK。
+
+################################################################
+[2] JDK 代理的「那一句」 —— JdkDynamicAopProxy.getProxy:122-127
+    证据：JdkProxy B 段手写的 newProxyInstance 与这里一模一样
+################################################################
+	@Override
+	public Object getProxy(@Nullable ClassLoader classLoader) {
+		if (logger.isTraceEnabled()) {
+			logger.trace("Creating JDK dynamic proxy: " + this.advised.getTargetSource());
+		}
+		return Proxy.newProxyInstance(determineClassLoader(classLoader), this.proxiedInterfaces, this);
+	}
+
+    ↑ 第 126 行 Proxy.newProxyInstance(loader, this.proxiedInterfaces, this)
+      —— 第三个参数 this，因为 JdkDynamicAopProxy 自己就实现了 InvocationHandler。
+      我们手写的 CountingHandler 就是它的替身：Spring 只是把「计数器」换成了「顾问链」。
+
+################################################################
+[3] invoke 里到底做了什么 —— JdkDynamicAopProxy.invoke:225-241
+    证据：ProxyIdentity S3 一次调用 before/around/after 各 1
+################################################################
+			Class<?> targetClass = (target != null ? target.getClass() : null);
+
+			// Get the interception chain for this method.
+			List<Object> chain = this.advised.getInterceptorsAndDynamicInterceptionAdvice(method, targetClass);
+
+			// Check whether we have any advice. If we don't, we can fall back on direct
+			// reflective invocation of the target, and avoid creating a MethodInvocation.
+			if (chain.isEmpty()) {
+				// We can skip creating a MethodInvocation: just invoke the target directly
+				// Note that the final invoker must be an InvokerInterceptor so we know it does
+				// nothing but a reflective operation on the target, and no hot swapping or fancy proxying.
+				Object[] argsToUse = AopProxyUtils.adaptArgumentsIfNecessary(method, args);
+				retVal = AopUtils.invokeJoinpointUsingReflection(target, method, argsToUse);
+			}
+			else {
+				// We need to create a method invocation...
+				MethodInvocation invocation =
+						new ReflectiveMethodInvocation(proxy, target, method, args, targetClass, chain);
+				// Proceed to the joinpoint through the interceptor chain.
+				retVal = invocation.proceed();
+			}
+
+			// Massage return value if necessary.
+
+    ↑ 225 取链（这个方法决定「哪些通知要上」）
+      239 把链包成 ReflectiveMethodInvocation
+      241 proceed() 才开始真正往下走 —— 通知的顺序全在 chain 里
+
+################################################################
+[4] AopContext 就是一个 ThreadLocal —— AopContext:50 + currentProxy:66-74
+    证据：SelfInvocation S5 的 IllegalStateException 原文
+################################################################
+	 * @see ProxyConfig#setExposeProxy
+	 */
+	private static final ThreadLocal<Object> currentProxy = new NamedThreadLocal<>("Current AOP proxy");
+
+    ...
+	 * method was invoked outside an AOP invocation context, or because the
+	 * AOP framework has not been configured to expose the proxy
+	 */
+	public static Object currentProxy() throws IllegalStateException {
+		Object proxy = currentProxy.get();
+		if (proxy == null) {
+			throw new IllegalStateException(
+					"Cannot find current proxy: Set 'exposeProxy' property on Advised to 'true' to make it available, and " +
+							"ensure that AopContext.currentProxy() is invoked in the same thread as the AOP invocation context.");
+		}
+		return proxy;
+	}
+
+
+    ↑ 50 行 NamedThreadLocal；67 行取，68 行判空，69-71 抛的就是我们实测那句话。
+      「同一个线程」这个限制的物理原因：ThreadLocal 不跨线程传。
+      这也解释了 @Async / 线程池里 currentProxy() 为什么必然失败。
+
+################################################################
+[5] isJdkDynamicProxy 的判据 —— AopUtils:68-70 / 81-83 / 93-96
+    证据：ProxyIdentity S2 打印的四个接口里有 SpringProxy
+################################################################
+	 * @see #isCglibProxy
+	 */
+	public static boolean isAopProxy(@Nullable Object object) {
+		return (object instanceof SpringProxy && (Proxy.isProxyClass(object.getClass()) ||
+				object.getClass().getName().contains(ClassUtils.CGLIB_CLASS_SEPARATOR)));
+	}
+    ...
+	 * @see java.lang.reflect.Proxy#isProxyClass
+	 */
+	public static boolean isJdkDynamicProxy(@Nullable Object object) {
+		return (object instanceof SpringProxy && Proxy.isProxyClass(object.getClass()));
+	}
+
+    ...
+	 * @see ClassUtils#isCglibProxy(Object)
+	 */
+	public static boolean isCglibProxy(@Nullable Object object) {
+		return (object instanceof SpringProxy &&
+				object.getClass().getName().contains(ClassUtils.CGLIB_CLASS_SEPARATOR));
+	}
+
+
+    ↑ 判据是「instanceof SpringProxy」+「Proxy.isProxyClass / 类名含 $$」——
+      不是「看类名像不像代理」。所以自己手写的 $Proxy0 不会被认成 AOP 代理（它没实现 SpringProxy）。
+
+################################################################
+[6] @Lazy 注入自己时，注进来的到底是什么 —— ContextAnnotationAutowireCandidateResolver:77-100
+    证据：SelfInvocation S4 打印 TargetSource 类名 = ContextAnnotationAutowireCandidateResolver$1
+################################################################
+	protected Object buildLazyResolutionProxy(final DependencyDescriptor descriptor, final @Nullable String beanName) {
+		BeanFactory beanFactory = getBeanFactory();
+		Assert.state(beanFactory instanceof DefaultListableBeanFactory,
+				"BeanFactory needs to be a DefaultListableBeanFactory");
+		final DefaultListableBeanFactory dlbf = (DefaultListableBeanFactory) beanFactory;
+
+		TargetSource ts = new TargetSource() {
+			@Override
+			public Class<?> getTargetClass() {
+				return descriptor.getDependencyType();
+			}
+			@Override
+			public boolean isStatic() {
+				return false;
+			}
+			@Override
+			public Object getTarget() {
+				Set<String> autowiredBeanNames = (beanName != null ? new LinkedHashSet<>(1) : null);
+				Object target = dlbf.doResolveDependency(descriptor, beanName, autowiredBeanNames, null);
+				if (target == null) {
+					Class<?> type = getTargetClass();
+					if (Map.class == type) {
+						return Collections.emptyMap();
+					}
+
+    ↑ 77 行建代理，83 行 new 了个匿名 TargetSource —— 这正是实测里那个「$1」。
+      93-95 行 getTarget() 每次调用都回容器 doResolveDependency 一次，
+      所以拿到的就是容器里那个 AOP 代理 → 链路是「解析代理 → AOP 代理 → 真身」三层。
+
+################################################################
+[7] 代理是在哪一步套上去的 —— AbstractAutoProxyCreator.wrapIfNecessary:328-347
+    证据：ProxyIdentity S1（new 出来的对象 before=0）
+################################################################
+	 * Wrap the given bean if necessary, i.e. if it is eligible for being proxied.
+	 * @param bean the raw bean instance
+	 * @param beanName the name of the bean
+	 * @param cacheKey the cache key for metadata access
+	 * @return a proxy wrapping the bean, or the raw bean instance as-is
+	 */
+	protected Object wrapIfNecessary(Object bean, String beanName, Object cacheKey) {
+		if (StringUtils.hasLength(beanName) && this.targetSourcedBeans.contains(beanName)) {
+			return bean;
+		}
+		if (Boolean.FALSE.equals(this.advisedBeans.get(cacheKey))) {
+			return bean;
+		}
+		if (isInfrastructureClass(bean.getClass()) || shouldSkip(bean.getClass(), beanName)) {
+			this.advisedBeans.put(cacheKey, Boolean.FALSE);
+			return bean;
+		}
+
+		// Create proxy if we have advice.
+		Object[] specificInterceptors = getAdvicesAndAdvisorsForBean(bean.getClass(), beanName, null);
+		if (specificInterceptors != DO_NOT_PROXY) {
+			this.advisedBeans.put(cacheKey, Boolean.TRUE);
+			Object proxy = createProxy(
+					bean.getClass(), beanName, specificInterceptors, new SingletonTargetSource(bean));
+			this.proxyTypes.put(cacheKey, proxy.getClass());
+			return proxy;
+		}
+
+    ↑ 它是 BeanPostProcessor 的 postProcessAfterInitialization 调的（288 行的声明、293 行的调用）。
+      341 行问「这个 Bean 有顾问吗」：有就 344-345 用 new SingletonTargetSource(bean) 把真身包起来、返回代理；
+      没有（DO_NOT_PROXY）就一路落到 351 行原样 return bean。
+      S1 里 new 出来的对象不进切面，就是因为它根本没走过容器 —— 没人问过 341 行这个问题。
+
+################################################################
+[8] 为什么「同样的接口」只生成一个代理类 —— JDK Proxy:309 + 417-440
+    证据：JdkProxy E 段 p1/p2 同类、加个接口就换 $Proxy1
+################################################################
+    /**
+     * a cache of proxy constructors with
+     * {@link Constructor#setAccessible(boolean) accessible} flag already set
+     */
+    private static final ClassLoaderValue<Constructor<?>> proxyCache =
+        new ClassLoaderValue<>();
+
+    /**
+    ...
+    private static Constructor<?> getProxyConstructor(Class<?> caller,
+                                                      ClassLoader loader,
+                                                      Class<?>... interfaces)
+    {
+        // optimization for single interface
+        if (interfaces.length == 1) {
+            Class<?> intf = interfaces[0];
+            if (caller != null) {
+                checkProxyAccess(caller, loader, intf);
+            }
+            return proxyCache.sub(intf).computeIfAbsent(
+                loader,
+                (ld, clv) -> new ProxyBuilder(ld, clv.key()).build()
+            );
+        } else {
+            // interfaces cloned
+            final Class<?>[] intfsArray = interfaces.clone();
+            if (caller != null) {
+                checkProxyAccess(caller, loader, intfsArray);
+            }
+            final List<Class<?>> intfs = Arrays.asList(intfsArray);
+            return proxyCache.sub(intfs).computeIfAbsent(
+                loader,
+                (ld, clv) -> new ProxyBuilder(ld, clv.key()).build()
+            );
+        }
+    }
+
+    ↑ 309 行 proxyCache 是 ClassLoaderValue（按 loader 分桶），427/438 行按「接口列表」做 key。
+      所以「动态代理」动态的是生成时机，不是每次调用都生成新类 —— 类只生成一次，之后都在换 handler。

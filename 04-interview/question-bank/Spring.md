@@ -8,6 +8,7 @@
 > W05 Day 3 补 Q6 / Q7（作用域四种判据 / `proxyMode` 是把错误推迟）。
 > W05 Day 4 补 Q8 / Q9（多候选的判定链 / `@Resource` 与 `@Autowired` 的报错差别）。
 > W05 Day 5 补 Q10（启动期注入失败的异常链怎么读）+ 修正 Q9 里「完全同一个错」的说法（内层一样、外层不同）。
+> W06 Day 1 补 Q11 / Q12（代理什么时候套上去 + JDK 与 CGLIB 怎么选 / `this.xxx()` 为什么让事务失效）。
 > 「项目案例」是按常见场景写的**讲稿模板**，细节和数字换成自己项目里的真实版本再背。
 
 ## 题目
@@ -527,3 +528,115 @@ BeanCreationException + "Injection of resource dependencies failed" → @Resourc
 ---
 
 > W05 封板：Q1~Q10 十道题全部有「我的回答 + 追问预判」，对应 `BoardCheck` 的 23 条断言。
+
+### 11. Spring AOP 的代理是什么时候套上去的？JDK 代理和 CGLIB 怎么选？
+
+**我的回答（自己的话）：**
+
+**AOP 没改我的类，它改的是「容器里放谁」。** 我写的 `GreetingImpl` 一个字节没变，
+容器在 `BeanPostProcessor.postProcessAfterInitialization` 阶段调
+`AbstractAutoProxyCreator.wrapIfNecessary:328`：这个 Bean 有顾问就
+`createProxy(..., new SingletonTargetSource(bean))` 返回代理（`:344-347`），没有就原样 `return bean`（`:351`）。
+
+从那以后，**谁 `getBean`、谁被注入，拿到的都是代理；拿到真身的人没有切面。**
+
+实测三条（`w06-spring-aop/day1-result.txt`）：
+
+| | 结果 |
+| :--- | :--- |
+| 手工 `new` 的实例调方法 | `before=0`（切面完全不认识它） |
+| 容器里那个对象 | `jdk.proxy2.$Proxy22`，实现 `Greeting` + `SpringProxy` + `Advised` + `DecoratingProxy` |
+| `@Before` 里的 `getThis()` vs `getTarget()` | 代理 vs 真身，`==` 为 `false` |
+
+选型在 `DefaultAopProxyFactory.createAopProxy:58`：
+
+```java
+if (config.isOptimize() || config.isProxyTargetClass() || hasNoUserSuppliedProxyInterfaces(config)) {
+    // 目标本身是接口 / 已是代理 / lambda → 仍 JDK；否则 ObjenesisCglibAopProxy
+}
+else {
+    return new JdkDynamicAopProxy(config);
+}
+```
+
+翻译：**显式要求 CGLIB，或者目标没有接口 → CGLIB；否则 JDK。**
+我实测的三种情况：有接口默认 → `jdk.proxy2.$Proxy22`；`proxyTargetClass=true` →
+`GreetingImpl$$EnhancerBySpringCGLIB$$<hash>`（父类就是 `GreetingImpl`）；没有接口 → 自动 CGLIB。
+
+两者的本质差别只有一句：**JDK 生成「实现同接口的兄弟」，CGLIB 生成「覆写方法的子类」**。
+所以：
+
+- JDK：`(GreetingImpl) proxy` 直接 `ClassCastException`；按实现类取 Bean 会失败；
+- CGLIB：`final` 类 / `final` 方法**静默不拦**（我那个 `final sealed()` 调用前后 `before` 增量是 `0`，
+  启动日志一个字都不提）；`private` 构造器也不行。
+
+**追问预判：**
+
+- 「Spring 默认用 JDK，Spring Boot 为什么改成 CGLIB？」——`proxyTargetClass=true`。
+  为的是「按实现类注入」还能用：JDK 代理只实现接口，`@Autowired GreetingImpl` 会拿不到。
+- 「按实现类取 Bean 报什么错？」——两个不同的错，别混：
+  `getBean(GreetingImpl.class)` → `NoSuchBeanDefinitionException`（按类型匹配，Bean 定义声明的类型是接口）；
+  `getBean("greeting", GreetingImpl.class)` → `BeanNotOfRequiredTypeException`（名字命中，实例类型不对）。
+- 「怎么判断一个对象是不是 AOP 代理？」——`AopUtils.isAopProxy`，判据是
+  `instanceof SpringProxy && (Proxy.isProxyClass || 类名含 $$)`（`AopUtils:68-70`），
+  **不是看类名猜**。自己手写的 `$Proxy0` 没实现 `SpringProxy`，所以不会被误认。
+- 「代理对象的 `toString()` 会触发切面吗？」——会。`Object` 三个方法也被转发进 handler
+  （手写版实测 +1/+1/+1），所以 debug 打日志也可能触发懒加载或多一次 SQL。
+
+**项目里的实际案例：**
+
+> 讲稿模板：一个 `OrderService` 加了 `@Transactional`，日志里事务日志就是不出现。
+> 排查顺序：① `AopUtils.isAopProxy(bean)` 是不是 false；② 启动日志有没有
+> `not eligible for auto-proxying`；③ 是不是 `final` 方法 / `final` 类；
+> ④ 最后才是「是不是 `this` 调的」。前三步都在查「代理有没有套上」，第四步才查「有没有拿到代理」。
+
+---
+
+### 12. `this.xxx()` 为什么让 `@Transactional` / `@Async` 失效？三种修法各有什么代价？
+
+**我的回答（自己的话）：**
+
+**因为代理只活在「别人拿到的那根引用」上，而 `this` 是真身。**
+类内部写 `this.hi()`，编译成 `invokevirtual GreetingImpl.hi`，直接落在真身上，`InvocationHandler` 根本没被调用。
+
+我用纯 JDK（不引 Spring）就能证明：一个代理对象调 `placeThenCancel()`，
+里面再调 `place()` 和 `cancel()` —— **业务真跑了 3 个方法，handler 只进 1 次**。
+
+交给 Spring 之后，三个数字（`SelfInvocation`，`day1-result.txt`）：
+
+| 写法 | 被拦的方法 | before |
+| :--- | :--- | ---: |
+| `this.hi()` | `[Greeting.outer]` | **1** |
+| `self.hi()`（`@Lazy` 注入自己） | `[Greeting.outerViaSelf, Greeting.hi]` | **2** |
+| `AopContext.currentProxy().hi()` | `[Greeting.outerViaAopContext, Greeting.hi]` | **2** |
+
+三种写法业务返回一模一样，差别只在「有没有回到代理」。
+
+**三种修法，代价不一样：**
+
+| 修法 | 做法 | 代价 |
+| :--- | :--- | :--- |
+| 注入自己 | `@Autowired @Lazy Greeting self;` → `self.hi()` | 这是**三层**代理：`@Lazy` 解析代理 → AOP 代理 → 真身（`self==bean` 为 false，`TargetSource` 是 `ContextAnnotationAutowireCandidateResolver$1`）；不加 `@Lazy` 就是循环依赖，构造器注入直接 `BeanCurrentlyInCreationException` |
+| `AopContext` | `((Greeting) AopContext.currentProxy()).hi()` | 必须 `@EnableAspectJAutoProxy(exposeProxy = true)`，否则运行时 `IllegalStateException: Cannot find current proxy…`；而且 `AopContext` 是 `NamedThreadLocal`（`AopContext:50`），**必须在同一线程** —— 线程池 / `@Async` 里必炸 |
+| 拆 Bean | 把被调的方法挪到另一个 Bean，注入进来 | 最干净，但要改结构。很多时候这才是正确答案 |
+
+**追问预判：**
+
+- 「为什么 `self` 是三层？不能直接注入吗？」——不加 `@Lazy`，`GreetingImpl` 依赖 `GreetingImpl`，
+  创建到一半就要一个完整的自己 → 循环依赖。加了 `@Lazy`，注入的是一个「调用时才回容器解析」的代理，
+  而它解析出来的正是 AOP 代理，所以中间多一层。
+- 「`currentProxy()` 为什么不能跨线程？」——ThreadLocal 的本质就是不共享。所以异步方法里做 AOP 自调用，
+  只能靠注入 `self`，不能靠 `AopContext`。
+- 「`@Transactional` 失效还有别的原因吗？」——有，而且都指向同一件事「代理没套上或没拿到」：
+  ① `final` 方法 / `final` 类（CGLIB 覆写不了）；② 方法不是 `public`（Spring 5 的 JDK 代理只拦 public）；
+  ③ Bean 被提前创建，启动日志 `not eligible for auto-proxying`；④ 异常被自己 `catch` 了（这是事务边界问题，不是代理问题）。
+- 「那 `@Async` 呢？」——完全同构：它也是一个 `MethodInterceptor`，失效原因逐条对应，
+  只是「没生效」的表现从「没回滚」变成「还是同步执行」。
+
+**项目里的实际案例：**
+
+> 讲稿模板：一段「下单成功后发券」的逻辑写在 `OrderService.create()` 里，
+> 直接调 `this.grantCoupon()`（那个方法上有 `@Transactional(propagation = REQUIRES_NEW)`）。
+> 结果主事务回滚时，券也跟着回滚了 —— 因为 `REQUIRES_NEW` 根本没生效，自调用没经过代理。
+> 最后是把发券拆到 `CouponService`。落点：**「传播级别不生效」这种问题，
+> 先看调用是不是经过代理，别先去怀疑数据库。**
