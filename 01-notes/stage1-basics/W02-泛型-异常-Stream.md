@@ -3,7 +3,7 @@
 > **第一阶段 · 打基础（W01–W12）** ｜ 预计投入 ≈ 7 小时（每天 60 分钟）
 > 状态：🟩 已完成（Day 1 / Day 2 / Day 3 / Day 4 / Day 5 / Day 6 全部完成）　｜　开始日期：2026-10-28　｜　完成日期：2026-11-03
 
-> 💡 周六练习：给一个 List<User>，完成 过滤 → 排序 → 分组 → 统计。（Day 6 已完成）
+> 💡 周六练习：给一个 List\<User>，完成 过滤 → 排序 → 分组 → 统计。（Day 6 已完成）
 
 ---
 
@@ -50,12 +50,12 @@ Day 6（已完成 11-03）  List<User> 报表：过滤（Predicate 组合）+ �
 
 ### Day 1 · 2026-10-28（周三）· 类型擦除 + PECS
 
-| 时间 | 做什么 | 产出 |
-| -: | :--- | :--- |
-| 10 分钟 | 复述 W01：HashMap put 四步 + 扩容为什么只拆两条链 | 口头过，卡住回看 W01 Day 4 |
-| 25 分钟 | 擦除到底擦掉了什么：`List<String>` 和 `List<Integer>` 运行时是同一个类 | `ErasureProof` 的 A / B / C 段 |
-| 15 分钟 | 把「擦除」推到它的必然结果：泛型数组、桥方法、四条硬限制 | `ErasureProof` D / E / F + `compile-errors/` |
-| 10 分钟 | PECS：不变性 → extends → super → copy → Stack | `PecsDemo` 五段 |
+|    时间 | 做什么                                                 | 产出                                           |
+| ----: | :-------------------------------------------------- | :------------------------------------------- |
+| 10 分钟 | 复述 W01：HashMap put 四步 + 扩容为什么只拆两条链                  | 口头过，卡住回看 W01 Day 4                           |
+| 25 分钟 | 擦除到底擦掉了什么：`List<String>` 和 `List<Integer>` 运行时是同一个类 | `ErasureProof` 的 A / B / C 段                 |
+| 15 分钟 | 把「擦除」推到它的必然结果：泛型数组、桥方法、四条硬限制                        | `ErasureProof` D / E / F + `compile-errors/` |
+| 10 分钟 | PECS：不变性 → extends → super → copy → Stack           | `PecsDemo` 五段                                |
 
 实测快照：`w02-generics-stream/day1-result.txt`（JDK 17.0.12，含 javac 报错原文）
 
