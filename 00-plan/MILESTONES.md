@@ -122,6 +122,7 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > | 2026-11-24 | **W05 Day 4 · 注入方式的取舍** | `day4/InjectionChoice`（A 三个候选 + 字段名对不上 → `NoUniqueBeanDefinitionException: expected single matching bean but found 3: alipayChannel,wechatChannel,unionPayChannel`，**死在 `refresh()` 里**（栈：`resolveNotUnique:220` ← `doResolveDependency:1369` ← `AutowiredFieldElement.resolveFieldValue:710` ← `postProcessProperties:408` ← `populateBean:1431` ← `doCreateBean:619`）；B **字段名回退**：字段名 `wechatChannel` + 零注解 → 注入到 `wechat`；C `@Qualifier("alipayChannel")` → `alipay`，点名不存在 → `expected at least 1 bean which qualifies as autowire candidate`；D 字段名依旧 `wechatChannel` + `@Primary` → 注入 `preferred`（**Primary 在名字之前**）；E `@Resource` 默认名 = 字段名 → `unionpay`，`name="alipayChannel"` + 字段名 `anything` → `alipay`；F1 显式名对不上 → **`No bean named 'channel' available`**（不查类型）；F2 默认名对不上 → 退回按类型 → 同一个 `NoUnique`） + `day4/CollectionInject`（A `List` / 数组 = `wechat → alipay → unionpay` 按 `@Order`；B `Map` key = bean 名、顺序 = 注册顺序 `[alipayChannel, wechatChannel, unionPayChannel]`，源码 1493-1500 无一行排序；C 零候选三段：`required=true` 的 `List` **照样抛** `expected at least 1 bean` / `required=false` 给 **null**（不是空集合）/ 单值同款异常；D 集合 + `@Qualifier` → 缩到 1 个再全收） + `day4/CtorInject`（A 单构造器免注解 → `log`；B1 两个构造器无无参 → `BeanInstantiationException: No default constructor found`，B2 有无参则**静默**走无参；C 标了 `@Autowired` 的那个赢；D1 原型 `getObject()` 两次 = `temp-1 / temp-2`，D2 零候选 `getIfAvailable`/`getIfUnique` 都是 null，D3 三候选 `getIfUnique()` null 但 `getIfAvailable()` **抛** `NoUnique`；E 反射读到的参数名 = `arg0`（`isNamePresent=false`）→ 参数名回退失效）+ `support/Quiet`；`day4-result.txt`（145 行）+ `day4-spring-source.txt`（8 段源码）；笔记 W05 Day 4 整节（8 小节）+ 踩坑 4 条 + 面试 8 条 + 参考要点 Q8/Q9；`Spring.md` 7 → **9 题** |
 > | 2026-11-25 | **W05 Day 5 · 收尾封板** | `day5/BoardCheck`（**把四天的口述结论写成 23 条断言**，FAIL 即 `exit=1`：S1 对象图 3 条 `3 份 → 1 份`、S2 生命周期 4 条（七步顺序 `[ctor, inject(setter), bpp.before, @PostConstruct, afterPropertiesSet, initMethod, bpp.after]` / 销毁三件套 / prototype 造 2 销 0）、S3 作用域 7 条（refresh 后 `1 / 0`、`==` 的 `true / false`、进池 `T/F`、销毁 `1+1 / 0`）、S4 判定链 9 条（NoUnique 原文含三候选名 / 字段名回退 `wechat` / `@Primary` 压名字 `preferred` / `@Qualifier` `alipay` / 两种报错 / 两种外层包装）；实测 **23/23 通过**）+ `day5-result.txt`（85 行）+ `day5-spring-source.txt`（4 段，713 vs 332 行号对撞）+ `pom.xml`（**未用 mvn 验证**：本机无 Maven，只验了 XML 合法）；笔记 W05 第四格答案三段（对象图 / 生命周期 / 边界）+ Day 5 整节（6 小节）+ 一句话总结 + 参考要点 Q10 + 踩坑 3 条 + 面试 4 条 + 打卡；`Spring.md` 9 → **10 题**（Q10 异常链怎么读），**并修正 Q9「完全同一个错」→「内层一样、外层不同」** |
 > | 2026-11-26 | **W06 Day 1 · AOP：代理什么时候套上去**（`w06-spring-aop/` 从 `.gitkeep` 建工程，`lib/` 新增 **`aspectjweaver-1.9.7`**） | `day1/JdkProxy`（**纯 JDK 不引 Spring**，八段：A 不代理 handler 0 次 / B 一次调用 1 次、类名 `jdk.proxy1.$Proxy0` / C **嵌套调用仍 1 次**，业务跑了 3 个方法 / D 代理套代理 2 次 / E 同接口同类、多实现一个接口换 `$Proxy1` / F `hashCode`·`toString`·`equals` **三个都进** handler / G 强转 **CCE** / H package-private 接口 → 代理类落到接口所在包 `com.newt…day1.$Proxy4`）+ `day1/ProxyIdentity`（S1 手工 `new` 的实例 `before=0` / S2 `jdk.proxy2.$Proxy22`、实现 `SpringProxy`+`Advised`+`DecoratingProxy` / **S2b 两个错**：按类型 `NoSuchBeanDefinition`、按名字+类型 `BeanNotOfRequiredType` / S3 before·around·after **1/1/1**、`getThis()==getTarget()` 为 false / S4 `$$EnhancerBySpringCGLIB$$`、父类就是 `GreetingImpl` / S5 无接口自动 CGLIB + **`final sealed()` 增量 0**（静默失效）/ S6 切面自己 `isAopProxy=false` / S7 顺序 `@Around 进入 → @Before → @After → @Around 返回`）+ `day1/SelfInvocation`（S1 `this` **1** 次 / S2 `self` **2** 次 / S3 `currentProxy()` **2** 次 / S4 **三层探针**：`self==bean` false、`TargetSource=ContextAnnotationAutowireCandidateResolver$1`、`getTarget()==bean` true / S5 没开 `exposeProxy` 的 ISE 原文）+ 源码取证 8 段（`DefaultAopProxyFactory:58` / `JdkDynamicAopProxy:126` 同一句 `newProxyInstance` / `:225·239·241` 取链与 proceed / `AopContext:50` NamedThreadLocal / `AopUtils:68-70` 判据 / `buildLazyResolutionProxy:83·93` / `wrapIfNecessary:328·341·351` / JDK `Proxy:309·427` 类缓存）；`day1-result.txt`（189 行）+ `day1-spring-source.txt`（8 段）；笔记 W06 Day 1 整节（8 小节）+ 踩坑 6 条 + 面试 9 条 + 参考要点 Q1~Q3；`Spring.md` 10 → **12 题** |
+> | 2026-11-27 | **W06 Day 2 · 切点与通知的全谱 + 补 CGLIB** | `day2/PointcutForms`（八种切点各配一个 `@Before`，10 次调用打矩阵：`execution buy(String)` 1 / `execution buy(Object)` 1 / `within(Shop)` 6 / `within(shop..*)` **8**（多拦 `Cart#add`·`Cart#size`）/ **`within(Buyer)` 接口 0**（写窄了）/ `args(String)` 4（含 `Shop#buy(Object)` 与 `Warehouse#stock`）/ `args(String,..)` 5 / `@annotation(Traced)` 1；S5 换 JDK 代理后 `within(Shop)` 照样命中 → 切点对着**目标类**算；S6 JDK 代理下 `plain()` 不在接口里，强转 CCE、只能绕真身，两条路都不进切面）+ `day2/WidePointcutTrap`（**宽切点把 `@Configuration` 的 `@Bean` 方法拦了，容器起不来**：异常链 5 层到 `BeanCurrentlyInCreationException`，文案说 circular reference 但实际是创建顺序；线索是栈里 `BrokenCfg$$EnhancerBySpringCGLIB.shop(<generated>)`；修法收到 `day2.shop..*`）+ `day2/AdviceTypes`（S1 `ret.append` 生效 / `ret = new StringBuilder` 不生效·换引用无效改对象有效；S2 `returning=String` 对 `int` **静默不执行**；S3 异常照抛；S4 `throwing` 类型硬过滤；S5 通知抛新异常顶掉原异常且 `cause=null`·`suppressed=0`；S6 只有 `@Around` 能吞；S7 `around-in → before → afterReturning → after → around-return`）+ `day2/AspectOrder`（`@Order(1)` 在外层，对调即翻转；不写 `@Order` 时按**注册顺序**，用反向注册两组证伪「按名字排」）+ `day2/CglibProbe`（`Calc$$EnhancerByCGLIB$$`·父类就是 `Calc` / `sealedAdd` 进 0 次 / final 类 `Cannot subclass final class` / MethodProxy 7.5 ns vs 反射 20.6 ns vs 直接 0.4 ns / Spring CGLIB Bean **构造器 1 次**·Objenesis 绕过构造器 `:62`）；`day2-result.txt`（288 行，5 入口全 exit=0）+ `day2-spring-source.txt`（6 段源码）；笔记 W06 Day 2 整节（9 小节）+ 踩坑 +6 → 13 条 + 面试 +10 → 19 条 + 参考要点 Q4/Q5 + 打卡；`Spring.md` 12 → **14 题**（Q13 切点三种写法的差别 / Q14 两种通知的能力边界）；**W06 四个知识点全勾（第三格 CGLIB 补齐）** |
 >
 > **W02 已封板（2026-11-03）**，六天全部完成。**W03 已封板（2026-11-11）**，四天全部完成。
 > **W04 已封板（2026-11-19）**，两天全部完成 —— 五个知识点全勾。
@@ -131,7 +132,7 @@ W01 原来的 7 天任务里，有性价比高低之分。重新排序如下：
 > （IOC/DI → 生命周期 → 作用域 → 注入取舍 → 封板自检），四个知识点全勾，
 > 工程从 `.gitkeep` 建起、`lib/` 手工放 7 个 jar（Day 2 多了 `javax.annotation-api`），
 > 外加 `pom.xml` 一份（**未用 mvn 验证**）。
-> **W06 · AOP 已开工（2026-11-26，Day 1 完成）**：代理在 `wrapIfNecessary:328` 那一层被套上去，
+> **W06 · AOP 进行中（Day 2 完成 2026-11-27）**：代理在 `wrapIfNecessary:328` 那一层被套上去，
 > JDK 与 CGLIB 的分界在 `DefaultAopProxyFactory:58`，`this.xxx()` 的失效在纯 JDK 代理里就能证明。
 >
 > W04 Day 2 最值钱的三条结论（全部有实测数字）：
@@ -406,9 +407,34 @@ S7 顺序 `@Around 进入 → @Before → @After → @Around 返回`）
 ③ **`this.xxx()` 失效不需要 Spring 就能证明**（纯 JDK 代理里业务跑 3 个方法、handler 只进 1 次），
 三种修法的代价分别是「三层代理」「`exposeProxy` + 同线程」「改结构」。
 
-下一个时间盒（60 分钟）：**W06 Day 2 · 切点与通知的全谱** ——
-① 四种切点对照（`execution` / `within` / `args` / `@annotation`），重点看「写宽了」和「写窄了」各是什么表现；
-② `@AfterReturning` 改返回值、`@AfterThrowing` 吞异常，分别试「改得动吗」「吞得掉吗」；
-③ 两个切面的 `@Order`：谁在外层；
-④ Day 3 是 `java-48week-plan.md` 第 6 周的硬要求 —— **手写 mini AOP**（`ProxyFactory` + `MethodInterceptor` + `Advisor`，不用 `@Aspect`）。
+**W06 Day 2 已完成（2026-11-27）· 切点与通知的全谱 + 补 CGLIB**：`day2/PointcutForms`（八种切点各配一个
+`@Before`，10 次调用打矩阵：`execution buy(String)` 1 / `execution buy(Object)` 1 / `within(Shop)` 6 /
+`within(shop..*)` **8**（多拦 `Cart#add`·`Cart#size`）/ **`within(Buyer)` 接口 0** / `args(String)` 4 /
+`args(String,..)` 5 / `@annotation(Traced)` 1；S5 换 JDK 代理后 `within(Shop)` 照样命中；S6 JDK 代理下
+`plain()` 不在接口里 → 强转 CCE、只能绕真身，两条路都不进切面）
++ `day2/WidePointcutTrap`（**宽切点把 `@Configuration` 的 `@Bean` 方法拦了，容器起不来**：
+异常链 5 层到 `BeanCurrentlyInCreationException`，线索是栈里 `BrokenCfg$$EnhancerBySpringCGLIB.shop(<generated>)`）
++ `day2/AdviceTypes`（`ret.append` 生效 / `ret = new StringBuilder` 不生效；`returning=String` 对 `int`
+**静默不执行**；异常照抛；通知抛新异常顶掉原异常且 `cause=null`·`suppressed=0`；只有 `@Around` 能吞；
+S7 顺序 `around-in → before → afterReturning → after → around-return`）
++ `day2/AspectOrder`（`@Order(1)` 在外层，对调即翻转；不写时按**注册顺序**，两组反向注册证伪「按名字排」）
++ `day2/CglibProbe`（父类就是 `Calc` / `sealedAdd` 进 0 次 / `Cannot subclass final class` /
+MethodProxy 7.5 ns vs 反射 20.6 ns vs 直接 0.4 ns / Spring CGLIB Bean **构造器 1 次**、Objenesis 绕过构造器 `:62`）。
+产出 `day2-result.txt`（288 行，5 入口全 exit=0）+ `day2-spring-source.txt`（6 段源码）。
+
+三条核心结论：① **切点写错的两个方向都不报错** —— 写窄（`within(接口)`）命中 0，
+写宽（`within(包..*)`）多拦同包类，再宽到 `execution(* …pkg..*.*(..))` 连 `@Configuration` 的
+`@Bean` 方法都拦，容器 `BeanCurrentlyInCreationException` 起不来（`..` 是「零个或多个子包」）；
+② **只有 `@Around` 能改结果**，`@AfterReturning` / `@AfterThrowing` 都是 void，
+类型接不住（`returning` / `throwing`）就**静默跳过**，这是「配了像没配」的第二大类原因；
+③ **`@Order` 数字小的在外层**，不写就退化成「切面 Bean 的注册顺序」
+（`AspectJPrecedenceComparator:84` 跨切面相等返回 0，靠排序稳定性保住原序）——
+所以「没写 `@Order` 也能用」是侥幸。
+
+下一个时间盒（60 分钟）：**W06 Day 3 · 手写 mini AOP** ——
+① 只用 `ProxyFactory` + `addAdvice(MethodInterceptor)` 把增强织进去，看计数；
+② 换成 `addAdvisor` + 自己写的 `PointcutAdvisor`，验证「有条件增强」；
+③ 对照 `setProxyTargetClass(true)` 与 `@EnableAspectJAutoProxy(proxyTargetClass)` 是不是一回事；
+④ Day 4 收尾：照 W05 `BoardCheck` 的写法把四天结论写成断言，并把 `@Transactional` 失效的
+三种形态（`this` 调用 / 方法不在接口里 / `final` 方法）各对上一份 AOP 实测。
 时间盒见 `00-plan/today.md`。

@@ -8,7 +8,7 @@
 
 **三条规则**：① 60 分钟产出「知识点 / 代码 / 笔记」任意两样即算数，只有「没打开 IDE」才算失败；② **取消补课** —— 断档后从当天该做的那一小步接着走；③ 只细化当前与下一个里程碑。
 
-## 当前状态（2026-11-26）
+## 当前状态（2026-11-27）
 
 M0 封板 10-27；**M1 封板 11-20**；M2 · Spring 内核进行中：**W05 封板 11-25**，**W06 AOP 进行中**。
 
@@ -19,11 +19,11 @@ M0 封板 10-27；**M1 封板 11-20**；M2 · Spring 内核进行中：**W05 封
 | W03 并发（4 天） | ✅ 封板 11-11 |
 | W04 线程池 / CompletableFuture | ✅ 封板 11-19 |
 | W05 Spring IOC/DI（5 天） | ✅ 封板 11-25 |
-| W06 Spring AOP | 🟨 D1 完成 11-26（代理套在 `wrapIfNecessary:328`；JDK/CGLIB 分界 `DefaultAopProxyFactory:58`；`this` 1 次 / `self` 2 次） |
+| W06 Spring AOP | 🟨 D2 完成 11-27（D1 代理套在 `wrapIfNecessary:328`、分界 `DefaultAopProxyFactory:58`、`this` 1 / `self` 2；**四个知识点全勾**） |
 
-- **下一步：W06 Day 2 = 切点与通知全谱**（`execution`/`within`/`args`/`@annotation` + `@AfterReturning`/`@AfterThrowing` + `@Order`）；
-  Day 3 手写 mini AOP（`ProxyFactory` + `MethodInterceptor` + `Advisor`）。
-- 题库：`Java基础.md` 24、`Java并发.md` 12、`Spring.md` **12**（M2 只要 6 道，已超额）。
+- **下一步：W06 Day 3 = 手写 mini AOP**（`ProxyFactory` + `MethodInterceptor` + `Advisor`，不用 `@Aspect`）；
+  Day 4 收尾封板（照 W05 `BoardCheck` 把结论写成断言）。
+- 题库：`Java基础.md` 24、`Java并发.md` 12、`Spring.md` **14**（M2 只要 6 道，已超额）。
 - 已知待办：w05 的 `pom.xml` 已写但**本机没 Maven、未验证**；装 Maven 后要和 `run.sh day5.BoardCheck` 对撞。
 
 ## 目录职责
@@ -47,6 +47,7 @@ M0 封板 10-27；**M1 封板 11-20**；M2 · Spring 内核进行中：**W05 封
 - **Spring 5 用 `javax.*`，Spring 6 才换 `jakarta.*`**，下错包不报错、只是注解静默不执行
 - `@Aspect` 需要 **`aspectjweaver`**（1.9.x），放在 `lib/`，与 spring-aop 一起上 classpath
 - `@Configuration` 被 CGLIB 代理（`$$EnhancerBySpringCGLIB$$…`），CGLIB 在 `spring-core` 内，无需额外 jar
+- **手写 CGLIB 的包名是 `org.springframework.cglib`**（Spring 5 重打包），不是 `net.sf.cglib`；`lib/` 里没有独立 cglib jar
 
 ## 讲课最值钱的实测结论
 
@@ -63,6 +64,18 @@ M0 封板 10-27；**M1 封板 11-20**；M2 · Spring 内核进行中：**W05 封
 **CompletableFuture（W04 D2）**：默认 `commonPool`、并行度 = 核数-1、**全 JVM 唯一**（14×300 ms：623 ms vs 自建池 308 ms）；`thenApply` 用错**编译通过**只得到 `CF<CF<T>>`；不带 Async 的 `thenXxx` 跑在「完成上游的线程」上；`allOf` 返回 **null**；**`whenComplete` 吞不掉异常**（上游失败时原始异常胜出，新异常只进外层 suppressed；`exceptionally` 里抛 → 原始异常彻底丢失）；`join` 抛 `CompletionException`、`get` 抛 `ExecutionException`；`orTimeout` **不中断**后台任务。
 
 **Spring IOC/DI（W05 D1）**：价值是「**3 个调用点 → 1 个装配点**」；手写版真实代价是 **3 个连接池**；「谁 new 的」读栈（`instantiateClass:213` / `preInstantiateSingletons:955` / `getSingleton:234` 是 `singletonFactory.getObject()`）；Bean 在 `refresh()` 里造完；单例池 定义 13 / 实例 19，**原型造完连账都不记**；循环依赖差别只有三行顺序（582 造 → 613 暴露 → 619 灌）；**注解不是元数据是注册指令**。
+
+**Spring AOP（W06）**：代理在 `wrapIfNecessary:328` 套上，选型一句 `isProxyTargetClass() || hasNoUserSuppliedProxyInterfaces()`；
+`this.xxx()` 用纯 JDK 代理就能证（业务跑 3 方法、handler 只进 1 次）；`self` 是三层，证据只能用 `TargetSource`（类名会戳穿）。
+**`within(接口)` 命中 0 且不报错**（`within` 问「方法声明在哪个类」）；写宽到 `execution(* …pkg..*.*(..))` 会连
+`@Configuration` 的 `@Bean` 方法都拦 —— `..` 是「**零个或多个**子包」—— 容器 `BeanCurrentlyInCreationException` 起不来，
+线索是栈里 `<Cfg>$$EnhancerBySpringCGLIB.shop(<generated>)`；`@Aspect` 反而不受影响（`isInfrastructureClass` 用 `isAspect` 豁免）。
+`args()` 看运行时实参、`execution` 看声明类型，同一个 `buy(Object)` 两边结论相反；`args` 还会把切点变成运行时切点（无缓存）。
+`@AfterReturning` 换引用无效、改对象有效；`@AfterThrowing` 吞不掉（`:70 throw ex` 是源码里明写的）；
+`returning`/`throwing` 类型接不住就**静默跳过**；通知抛新异常顶掉原异常且 `cause=null`·`suppressed=0`（框架不管挂）。
+`@Order` 数字小的在外层，不写时按**注册顺序**（`AspectJPrecedenceComparator:84` 跨切面相等返回 0，靠排序稳定性保原序）。
+CGLIB 父类就是目标类；final 类 `Cannot subclass final class`；MethodProxy 7.5 ns vs 反射 20.6 ns vs 直接 0.4 ns；
+**Spring CGLIB Bean 构造器只跑 1 次**（`ObjenesisCglibAopProxy:62` 绕过构造器，`:70-84` 才是兜底）。
 
 **Spring 生命周期（W05 D2）**：①构造 → ②`BPP.before` → ③`@PostConstruct` → ④`afterPropertiesSet` → ⑤`initMethod` → ⑥`BPP.after`；销毁 ⑦`@PreDestroy` → ⑧`destroy` → ⑨`destroyMethod`；**`@PostConstruct` 是后处理器调的**；属性注入**没有回调**；④ 早于 ⑤ 且重名只跑一次；销毁逆序且**依赖方先死**；**prototype 销毁 0 次**（`!isPrototype()` 在登记阶段就短路）；`@Bean` 默认 `INFER_METHOD` **自动调 `close()`**；BPP 计数表：正常 Bean **2/2**、同批 BPP 与提前创建的 Bean **0/0**；提前创建 → `not eligible for auto-proxying` = **代理套不上 = 事务/异步必然失效**。
 

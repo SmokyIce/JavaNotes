@@ -1,98 +1,111 @@
 ---
 title: 今天做什么
-date: 2026-11-26
-weekday: 周四
+date: 2026-11-27
+weekday: 周五
 milestone: M2 · Spring 内核
-task: W06 Day 1 — AOP：代理到底是什么时候套上去的
+task: W06 Day 2 — 切点与通知的全谱（+ 补 CGLIB）
 status: 已完成
 ---
 
-# 今天 · 2026-11-26（周四）· 已完成
+# 今天 · 2026-11-27（周五）· 已完成
 
-> W05 停在「Bean 造完、字段灌完」。今天回答下一个问题：
-> **方法被调用的时候，Spring 还能插进来做什么？**
->
-> 答案不是「切面编程」，是**容器里放的不是你的对象，是一个代理**。
-> 所以今天不写博客式的 `@Aspect` demo，只做一件事：把「谁拿到了代理」这件事量出来。
+> Day 1 回答了「代理什么时候套上去」，但只用了 `within()` 一个切点、三种通知。
+> 今天把剩下的补齐 —— 因为真正难查的不是「切面写错」，是**切点写得太宽 / 太窄**：
+> 写宽了给所有方法开事务，写窄了该拦的没拦住，两种都安静得像没问题。
 
 ## 一、先查的遗留
 
 | 检查项 | 结果 |
 | :--- | :--- |
-| 清空 `out/` 全量重编 w05（49 文件 / 107 class）+ 跑全部 11 个入口 | ✅ 全 exit=0，`day5.BoardCheck` **23/23** 通过，无回归、无中断代码 |
-| `01-notes` 里的未勾项 | 只剩 W06 的四个知识点（= 今天要动的）+ W07 起未解锁内容 |
-| `02-code` 空目录 | 无空目录；`w06-` 起仍是 `.gitkeep`，今天从 `.gitkeep` 建 `w06-spring-aop/` |
-| 上一个时间盒留的待办 | ① `w06-spring-aop/` 建工程 ✅；② 确认 `aspectjweaver` 能下 ✅（2,087,074 B）；③ `pom.xml` 验证 ❌（本机仍无 Maven，且 W06 先不写 pom） |
-| 与前一个时间盒的关系 | 11-25 → 11-26 隔一天（正常节奏），不涉及补课 |
+| 清空 `out/` 全量重编 w06（7 文件）+ 跑 Day 1 三个入口 | ✅ 全 exit=0（58 / 72 / 47 行），无回归、无中断代码 |
+| `01-notes` 里的未勾项 | 只剩 W06 第三格 `CGLIB`（Day 1 明确写了「留 Day 2」）→ **今天补掉** |
+| `02-code` 空目录 | 无；`w07-` / `w08-` 仍只有 `.gitkeep`，属未解锁里程碑，不动 |
+| 上一个时间盒留的三个待办 | ① 四种切点对照 ✅；② `@AfterReturning` / `@AfterThrowing` ✅；③ `@Order` ✅ |
+| 与上一个时间盒的关系 | 11-26 → 11-27 隔一天（正常节奏），不涉及补课 |
 
-**结论：没有需要补的中断代码。** 起点就是 W06 Day 1。
+**结论：唯一要补的遗留就是 W06 第三格 `CGLIB`**，已并入今天的第五段实验。
 
-## 二、今天做的三件事
+## 二、今天做的五件事
 
 | # | 做什么 | 产出 |
 | -: | :--- | :--- |
-| 1 | **纯 JDK 手写动态代理**，八段（A 不代理 → H 非 public 接口），数 handler 进几次 | `day1/JdkProxy.java` |
-| 2 | **同一套类交给 Spring**：代理身份 / 选型 / 自调用，七段 + 六段 | `day1/ProxyIdentity.java`、`day1/SelfInvocation.java` |
-| 3 | 快照 + 源码取证（8 段，行号与栈对撞）+ 笔记 + 题库 + 三处同步 | `day1-result.txt`（189 行）、`day1-spring-source.txt`、W06 笔记、`Spring.md` 10 → 12 |
+| 1 | 八种切点各配一个 `@Before`，10 次调用打一张命中矩阵 | `day2/PointcutForms.java` + `PointcutMatrix` |
+| 2 | 把「切点写宽」推到极端：宽切点把 `@Configuration` 也拦了 | `day2/WidePointcutTrap.java` |
+| 3 | `@AfterReturning` 改返回值 / `@AfterThrowing` 吞异常 / 类型不匹配静默跳过 | `day2/AdviceTypes.java` |
+| 4 | 两个切面的 `@Order`，正反各一组 + 不写 `@Order` 的两组 | `day2/AspectOrder.java` |
+| 5 | **补 CGLIB**：`Enhancer` / final 类 / `MethodProxy` 耗时 / Objenesis | `day2/CglibProbe.java` |
 
-工程从 `.gitkeep` 建起，`lib/` 沿用 W05 的 7 个 jar，**新增 `aspectjweaver-1.9.7.jar`**（2.0 MB）：
-`@Aspect` / `@Pointcut` 的注解和切点解析都在它里面，只放 `spring-aop` 会**编译不过**（不是运行才炸）。
+快照与取证：`day2-result.txt`（288 行，5 个入口全 exit=0）+ `day2-spring-source.txt`（6 段源码，行号与输出对撞）。
 
-## 三、今天挖到的四个点
+## 三、今天挖到的五个点
 
-1. **`this.xxx()` 不需要 Spring 就能证明。** 纯 JDK 代理里，`placeThenCancel()` 内部调 `place()` 和 `cancel()`：
-   **业务跑了 3 个方法，handler 只进 1 次**。那两次是 `invokevirtual` 直连真身。
-   这一条比任何「代理模式」的定义都有说服力，也是 W07 讲事务失效的地基。
+1. **`within(接口)` 是「写窄了」的标准形态，命中 0 且不报错。**
+   `within` 问的是「方法声明在哪个类里」，不是「对象实现了谁」。实测 `within(Shop)` 6 个、`within(Buyer)` 0 个。
 
-2. **Spring 的 JDK 代理就是你手写的那一句。** `JdkDynamicAopProxy:126`
-   `return Proxy.newProxyInstance(determineClassLoader(classLoader), this.proxiedInterfaces, this);`
-   第三个参数是 `this`，因为它自己就是 `InvocationHandler`。我们把「计数器」换成了「顾问链」。
+2. **`execution` 写宽到 `day2..*`，容器直接起不来。**
+   `..` = 「零个或多个子包」，把 `@Configuration` 的 `@Bean` 工厂方法也匹配了。
+   异常链 5 层都指向 `BeanCurrentlyInCreationException`，文案说 circular reference，
+   但**依赖关系一点没绕，绕的是创建顺序**。线索只有栈里那行 `BrokenCfg$$EnhancerBySpringCGLIB.shop(<generated>)`。
+   顺带查到 `@Aspect` 自己反而不受影响 —— `isInfrastructureClass` 用 `isAspect()` 豁免了它。
 
-3. **`self` 是三层代理，而这件事只能靠 `TargetSource` 分清。**
-   `self.getClass() == bean.getClass()` 是 `true`（JDK 代理类按接口列表缓存），完全不能当证据；
-   真正的证据是 `self == bean` 为 `false` + `self` 的 `TargetSource` 是
-   `ContextAnnotationAutowireCandidateResolver$1` + `self.getTarget() == bean` 为 `true`。
-   链路：`@Lazy` 解析代理 → AOP 代理 → `GreetingImpl`。
+3. **`@AfterReturning` / `@AfterThrowing` 都改不了结果。**
+   实测 `ret.append()` 生效、`ret = new StringBuilder()` 不生效（局部引用 vs 共用对象）；
+   异常照抛，源码 `AspectJAfterThrowingAdvice:70` 就是 `throw ex`。
+   只有 `@Around` 有 `proceed()`。
 
-4. **`final` 方法上的切面是「静默失效」。** `PlainJob.sealed()` 调用前后 `before` 增量 **0**，
-   启动日志一个字都不提。这类「配了像没配」比抛异常难查十倍。
+4. **类型接不住 = 静默不执行，两处机制完全一样。**
+   `returning` 用 `isAssignableValue` 判值、`throwing` 用 `isAssignableFrom` 判类型，
+   不匹配就跳过，启动不报错、调用不报错。这是「异常日志有时有有时没有」的常见原因。
 
-## 四、今天踩的坑（三个，都是「先写后验」）
+5. **`@Order` 数字小的在外层；不写就退化成注册顺序。**
+   对调数字进出顺序整体翻转；不写时按注册顺序（用两组反向注册证伪了「按名字排序」）。
+   源码 `AspectJPrecedenceComparator:84` 只对「同切面」做特殊处理，跨切面相等直接返回 0。
 
-- **「按实现类取 Bean 抛 `BeanNotOfRequiredTypeException`」只对了一半。**
-  实测 `getBean(GreetingImpl.class)` 抛的是 `NoSuchBeanDefinitionException`（按类型匹配，连候选都不是），
-  只有 `getBean("greeting", GreetingImpl.class)` 才是 `BeanNotOfRequiredTypeException`。
-  两个错混为一谈，面试里会被追到崩。
-- **`AopUtils` 不在 `aop.framework`，在 `aop.support`。** 凭印象写 import，一次 11 个编译错。
-- **字符串里的 `\$` 是非法转义。** 在 shell 里写 `\$` 防变量替换，抄进 Java 源码就成了语法错。
+## 四、今天踩的坑（五个，四个是「先写后验」）
+
+- **宽切点炸容器，第一反应去查循环依赖。** 异常文案带 `circular reference`，
+  但五层异常全是「工厂方法失败」。看到 `$$EnhancerBySpringCGLIB.shop(<generated>)` 才反应过来是配置类。
+- **`import net.sf.cglib` 一次 16 个「找不到符号」。** Spring 5 把 CGLIB 重打包进了 `spring-core`，
+  包名是 `org.springframework.cglib`，`lib/` 里也没有独立 cglib jar。
+- **测「final 类」时忘了 `setCallback`，先撞 NPE。** `callbacks is null` 把真正的原因盖住了。
+- **`replaceAll` 的替换串里 `$` 是组引用。** 想抹掉 `$$EnhancerBySpringCGLIB$$<hash>` 做去重，
+  抛 `Illegal group reference`，要 `Matcher.quoteReplacement`。
+- **两处文案写反了，都靠实跑抓回来**：
+  ① 「通知抛新异常会把原异常塞进 cause」——那是我自己传的；加了一组不传的对照，
+  实测 `cause = null`、`suppressed = 0`，原异常彻底丢失。
+  ② 「不写 `@Order` 时按切面名排序」——补了反向注册才排除字母序，确认是注册顺序。
 
 ## 五、环境备忘
 
-- 跑今天：`./run.sh JdkProxy` / `./run.sh ProxyIdentity` / `./run.sh SelfInvocation`（各约 0.5 s）。
-- 新增 jar：`lib/aspectjweaver-1.9.7.jar`（`curl` 自 repo1.maven.org，http=200）。
-- 源码取证：`/tmp` 下解压了 `spring-aop-5.3.39-sources.jar` 与 JDK 的 `src.zip`，
-  8 段原文已抄进 `day1-spring-source.txt`，`/tmp` 清了也不影响。
+- 跑今天：`./run.sh PointcutForms` / `WidePointcutTrap` / `AdviceTypes` / `AspectOrder` / `CglibProbe`
+  （短名现在会自动在 `day1`/`day2` 里找，脚本按 class 文件是否存在来定位）。
+- **无新增 jar**。CGLIB 在 `spring-core` 里，`aspectjweaver` 已在。
+- 源码取证：`/tmp/w06src` 下解压了 `spring-aop` 与 `spring-core` 的 `-sources.jar`（各 http=200），
+  6 段原文已抄进 `day2-spring-source.txt`。
 - 跑之前别忘了 `export PATH="/c/Program Files/Java/jdk-17/bin:$PATH"`。
 
 ---
 
 # 下一个时间盒（60 分钟）
 
-**W06 Day 2：切点与通知的全谱 —— `execution` 到底怎么匹配，`@AfterThrowing` 能不能吞异常**
+**W06 Day 3：手写 mini AOP —— 不用 `@Aspect`，把增强织进去**
 
-> Day 1 只用了 `within()` 一个切点、`@Before/@Around/@After` 三种通知。
-> Day 2 把剩下的补齐 —— 因为真正难查的不是「切面写错」，是**切点写得太宽/太窄**：
-> 写宽了给所有方法开事务，写窄了该拦的没拦住，两种都安静得像没问题。
+> 这是 `java-48week-plan.md` 第 6 周的硬要求。前两天都在用 `@EnableAspectJAutoProxy`，
+> 所有魔法都在注解后面。今天把注解拿掉，只用 `ProxyFactory` / `MethodInterceptor` / `Advisor`
+> 这三样，看同一个「增强」还能不能织进去 —— 织得进去，就说明 `@Aspect` 只是语法糖；
+> 织不进去的地方，才是它真正替我们做的事。
 
 | 时间 | 做什么 | 产出 |
 | -: | :--- | :--- |
-| 10 分钟 | 复述 Day 1：代理在哪一步套上（`wrapIfNecessary:328`）/ JDK 与 CGLIB 的分界（`:58`）/ `this` 为什么失效 | 口头过 |
-| 20 分钟 | **四种切点写法对照**：`execution` / `within` / `args` / `@annotation`，同一批方法各打一次，看谁命中谁不命中（含 `execution(* com..*.*(..))` 写宽了的后果） | `day2/PointcutForms.java` |
-| 15 分钟 | **`@AfterReturning` 改返回值** + **`@AfterThrowing` 吞异常**：分别试「改得动吗」「吞得掉吗」 | `day2/AdviceTypes.java` |
-| 10 分钟 | **两个切面的 `@Order`**：同一个方法上两个切面，谁在外层；`@Order` 反过来会怎样 | `day2/AspectOrder.java` |
+| 10 分钟 | 复述 Day 2：写窄/写宽各什么现象、哪些通知能改结果、`@Order` 谁在外层 | 口头过 |
+| 20 分钟 | **`ProxyFactory` 手工织入**：`addAdvice`（`MethodInterceptor`）→ 调一次看计数；换成 `addAdvisor`（`PointcutAdvisor`）看「有条件的增强」 | `day3/MiniAop.java` |
+| 15 分钟 | **手写一个 `PointcutAdvisor` + `MethodMatcher`**：自己决定哪些方法被拦，不用 `execution` 表达式 | `day3/OwnAdvisor.java` |
+| 10 分钟 | 对照：`ProxyFactory` 的 `setProxyTargetClass(true/false)` 与 `@EnableAspectJAutoProxy(proxyTargetClass)` 是不是一回事 | `day3/FactoryVsAspect.java` |
 | 5 分钟 | 快照 + 笔记 + `today.md` 覆盖 | 三份文件 |
 
-> 开工先做：无新增 jar（`aspectjweaver` 已在）。切点表达式里如果要用 `args()` 绑定参数，
-> 注意它匹配的是**运行时实参类型**，和 `execution` 的声明类型不是一回事 —— 这一点要先跑再写。
-> 下一步 Day 3 是**手写 mini AOP**（`ProxyFactory` + `MethodInterceptor` + `Advisor`，
-> 不用 `@Aspect`），那是 `java-48week-plan.md` 第 6 周的硬要求。
+> 开工先做：确认 `spring-aop` 里的 `ProxyFactory` / `NameMatchMethodPointcut` / `DefaultPointcutAdvisor`
+> 都在（都在 `org.springframework.aop.framework` 与 `org.springframework.aop.support`，不需要新 jar）。
+> 注意 `ProxyFactory` 造出来的是**裸代理**，不经过容器 —— 这一点正好能反证 Day 1 的结论：
+> 代理不需要容器来造，容器只是「替你决定谁该被包」。
+> Day 4 是收尾封板：把四天的结论写成断言（照 W05 的 `BoardCheck` 那套），
+> 并把 `@Transactional` 失效的三种形态各自对上一份 AOP 证据。

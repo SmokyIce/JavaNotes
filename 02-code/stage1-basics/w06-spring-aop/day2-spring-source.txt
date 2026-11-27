@@ -1,0 +1,235 @@
+W06 Day 2 · 切点 / 通知 / 排序 / CGLIB 源码取证（Spring 5.3.39 source jar + JDK 17.0.12）
+所有行号都用 cat -n 从 sources jar 解压出来的 .java 原样数出来，不是从记忆里写的。
+每个片段都标注了它对应 day2-result.txt 里的哪一段输出。
+
+################################################################
+# [1] @AfterReturning 为什么改不了返回值、类型不匹配为什么静默跳过
+#     对应 AdviceTypes S1 / S2
+#     AspectJAfterReturningAdvice.java  (org/springframework/aop/aspectj)
+################################################################
+    62	
+    63		@Override
+    64		public void afterReturning(@Nullable Object returnValue, Method method, Object[] args, @Nullable Object target) throws Throwable {
+    65			if (shouldInvokeOnReturnValueOf(method, returnValue)) {
+    66				invokeAdviceMethod(getJoinPointMatch(), returnValue, null);
+    67			}
+    68		}
+    71		/**
+    72		 * Following AspectJ semantics, if a returning clause was specified, then the
+    73		 * advice is only invoked if the returned value is an instance of the given
+    74		 * returning type and generic type parameters, if any, match the assignment
+    75		 * rules. If the returning type is Object, the advice is *always* invoked.
+    76		 * @param returnValue the return value of the target method
+    77		 * @return whether to invoke the advice method for the given return value
+    78		 */
+    79		private boolean shouldInvokeOnReturnValueOf(Method method, @Nullable Object returnValue) {
+    80			Class<?> type = getDiscoveredReturningType();
+    81			Type genericType = getDiscoveredReturningGenericType();
+    82			// If we aren't dealing with a raw type, check if generic parameters are assignable.
+    83			return (matchesReturnValue(type, method, returnValue) &&
+    84					(genericType == null || genericType == type ||
+    85							TypeUtils.isAssignable(genericType, method.getGenericReturnType())));
+    86		}
+    87	
+    88		/**
+    89		 * Following AspectJ semantics, if a return value is null (or return type is void),
+    90		 * then the return type of target method should be used to determine whether advice
+    91		 * is invoked or not. Also, even if the return type is void, if the type of argument
+    92		 * declared in the advice method is Object, then the advice must still get invoked.
+    93		 * @param type the type of argument declared in advice method
+    94		 * @param method the advice method
+    95		 * @param returnValue the return value of the target method
+    96		 * @return whether to invoke the advice method for the given return value and type
+    97		 */
+    98		private boolean matchesReturnValue(Class<?> type, Method method, @Nullable Object returnValue) {
+    99			if (returnValue != null) {
+   100				return ClassUtils.isAssignableValue(type, returnValue);
+   101			}
+   102			else if (Object.class == type && void.class == method.getReturnType()) {
+   103				return true;
+   104			}
+   105			else {
+   106				return ClassUtils.isAssignable(type, method.getReturnType());
+   107			}
+   108		}
+
+  读法：
+  ① afterReturning():64-68 —— 返回值只是被当成参数传给通知方法（invokeAdviceMethod），
+     通知方法签名必须是 void，返回值从头到尾没有「回写」的通道，所以改不动。
+  ② shouldInvokeOnReturnValueOf():79 是总开关。matchesReturnValue():98 分两条路：
+     返回值非 null → :100 ClassUtils.isAssignableValue(type, 返回值)；
+     返回 null 或 void → :106 ClassUtils.isAssignable(type, 方法声明返回类型)。
+  ③ AdviceTypes S2 里 returning=String、total() 返回 100（非 null），
+     走的是 :100 的 isAssignableValue(String.class, 100) = false → 整条通知不执行。
+     注意是「对值判」而不是「对声明类型判」—— 这点和很多人的印象不同。
+  ④ 类注释 :71-77 写明：returning 声明成 Object 时**永远**执行。
+
+################################################################
+# [2] @AfterThrowing 为什么吞不掉异常、throwing 类型为什么是硬过滤
+#     对应 AdviceTypes S3 / S4 / S5
+#     AspectJAfterThrowingAdvice.java
+################################################################
+    60		@Override
+    61		@Nullable
+    62		public Object invoke(MethodInvocation mi) throws Throwable {
+    63			try {
+    64				return mi.proceed();
+    65			}
+    66			catch (Throwable ex) {
+    67				if (shouldInvokeOnThrowing(ex)) {
+    68					invokeAdviceMethod(getJoinPointMatch(), null, ex);
+    69				}
+    70				throw ex;
+    71			}
+    72		}
+    73	
+    74		/**
+    75		 * In AspectJ semantics, after throwing advice that specifies a throwing clause
+    76		 * is only invoked if the thrown exception is a subtype of the given throwing type.
+    77		 */
+    78		private boolean shouldInvokeOnThrowing(Throwable ex) {
+    79			return getDiscoveredThrowingType().isAssignableFrom(ex.getClass());
+    80		}
+
+  读法：invoke() 就是一个 try/catch —— catch 里先判类型（:67）、再调通知（:68）、
+        然后 **:70 throw ex**。异常从来没有被「取消」的机会。
+  S4 的「类型接不住就跳过」= :79 isAssignableFrom。
+  S5 的两组对照说明：通知里抛新异常会顶掉 :70 这行 throw，
+        而框架**不会**把原异常挂到新异常上（既不是 cause 也不是 suppressed）——
+        第一组还能看到 cause，是因为代码里写了 new RuntimeException("advice-thrown", ex)；
+        第二组不传，原异常就彻底丢了，suppressed 数量实测 0。
+        （对比 W04 Day 2：CompletableFuture 的 whenComplete 至少把它塞进了 suppressed=1）
+
+################################################################
+# [3] 为什么宽切点只炸配置类、不炸切面自己
+#     对应 WidePointcutTrap S1
+#     AnnotationAwareAspectJAutoProxyCreator.java
+################################################################
+   100		@Override
+   101		protected boolean isInfrastructureClass(Class<?> beanClass) {
+   102			// Previously we setProxyTargetClass(true) in the constructor, but that has too
+   103			// broad an impact. Instead we now override isInfrastructureClass to avoid proxying
+   104			// aspects. I'm not entirely happy with that as there is no good reason not
+   105			// to advise aspects, except that it causes advice invocation to go through a
+   106			// proxy, and if the aspect implements e.g the Ordered interface it will be
+   107			// proxied by that interface and fail at runtime as the advice method is not
+   108			// defined on the interface. We could potentially relax the restriction about
+   109			// not advising aspects in the future.
+   110			return (super.isInfrastructureClass(beanClass) ||
+   111					(this.aspectJAdvisorFactory != null && this.aspectJAdvisorFactory.isAspect(beanClass)));
+   112		}
+
+  读法：isInfrastructureClass 多认了一个条件 —— isAspect(beanClass) 为 true 就直接算基础设施、不走代理。
+        所以 @Aspect 的 Bean 不会被自己的切点套住（否则通知调用会无限递归）。
+        而 @Configuration 类没有这层豁免：宽切点一命中它的 @Bean 方法，就出现
+        「造 shop → 要 wideAspect → wideAspect 正在造」的 BeanCurrentlyInCreationException。
+        注释 :102-109 还解释了改成这样的原因：@Aspect 若实现了 Ordered 之类的接口，
+        按接口代理会让通知方法在接口上找不到。
+
+################################################################
+# [4] 同为 LOWEST_PRECEDENCE 时为什么跟着注册顺序走
+#     对应 AspectOrder S3 / S3b
+#     AspectJPrecedenceComparator.java
+################################################################
+    63		/**
+    64		 * Create a default {@code AspectJPrecedenceComparator}.
+    65		 */
+    66		public AspectJPrecedenceComparator() {
+    67			this.advisorComparator = AnnotationAwareOrderComparator.INSTANCE;
+    68		}
+    81		@Override
+    82		public int compare(Advisor o1, Advisor o2) {
+    83			int advisorPrecedence = this.advisorComparator.compare(o1, o2);
+    84			if (advisorPrecedence == SAME_PRECEDENCE && declaredInSameAspect(o1, o2)) {
+    85				advisorPrecedence = comparePrecedenceWithinAspect(o1, o2);
+    86			}
+    87			return advisorPrecedence;
+    88		}
+
+  读法：compare() 只做两件事 —— 先用 AnnotationAwareOrderComparator 比 order（:83）；
+        只有「order 完全相等 **且** 两个通知来自同一个切面」才进 comparePrecedenceWithinAspect（:84-85）。
+        跨切面且 order 相等时直接返回 0（SAME_PRECEDENCE），排序稳定性于是保住顾问链的原始顺序，
+        也就是切面 Bean 的注册顺序。S3 / S3b 的进出顺序随注册顺序整体翻转，就是这条的实测。
+        所以「没写 @Order 也能用」是巧合，不是约定。
+
+################################################################
+# [5] Spring 用 CGLIB 代理时，目标类的构造器为什么只跑一次
+#     对应 CglibProbe E
+#     ObjenesisCglibAopProxy.java
+################################################################
+    39	class ObjenesisCglibAopProxy extends CglibAopProxy {
+    40	
+    41		private static final Log logger = LogFactory.getLog(ObjenesisCglibAopProxy.class);
+    42	
+    43		private static final SpringObjenesis objenesis = new SpringObjenesis();
+    44	
+    45	
+    46		/**
+    47		 * Create a new ObjenesisCglibAopProxy for the given AOP configuration.
+    48		 * @param config the AOP configuration as AdvisedSupport object
+    49		 */
+    50		public ObjenesisCglibAopProxy(AdvisedSupport config) {
+    51			super(config);
+    52		}
+    53	
+    54	
+    55		@Override
+    56		protected Object createProxyClassAndInstance(Enhancer enhancer, Callback[] callbacks) {
+    57			Class<?> proxyClass = enhancer.createClass();
+    58			Object proxyInstance = null;
+    59	
+    60			if (objenesis.isWorthTrying()) {
+    61				try {
+    62					proxyInstance = objenesis.newInstance(proxyClass, enhancer.getUseCache());
+    70			if (proxyInstance == null) {
+    71				// Regular instantiation via default constructor...
+    72				try {
+    73					Constructor<?> ctor = (this.constructorArgs != null ?
+    74							proxyClass.getDeclaredConstructor(this.constructorArgTypes) :
+    75							proxyClass.getDeclaredConstructor());
+    76					ReflectionUtils.makeAccessible(ctor);
+    77					proxyInstance = (this.constructorArgs != null ?
+    78							ctor.newInstance(this.constructorArgs) : ctor.newInstance());
+    79				}
+    80				catch (Throwable ex) {
+    81					throw new AopConfigException("Unable to instantiate proxy using Objenesis, " +
+    82							"and regular proxy instantiation via default constructor fails as well", ex);
+    83				}
+    84			}
+
+  读法：:57 enhancer.createClass() 只生成类、不实例化；:62 objenesis.newInstance(proxyClass, ...) 
+        直接分配对象、绕过构造器 —— 代理实例的字段全是默认值，但它只负责转发，无所谓。
+        :70-84 是兜底路径：Objenesis 不灵才退回 ctor.newInstance()，那时构造器真会再跑一遍
+        （字段初始化两次、副作用执行两遍）—— 这就是 Objenesis 存在的唯一理由。
+        CglibProbe E 的实测：容器里一个 Calc Bean，构造器计数 = 1。
+
+################################################################
+# [6] 切点是对着「目标类」算的，args() 会把它变成运行时切点，静态切点有缓存
+#     对应 PointcutForms S4 / S5
+#     AspectJExpressionPointcut.java
+################################################################
+   130		private transient Map<Method, ShadowMatch> shadowMatchCache = new ConcurrentHashMap<>(32);
+   321		public boolean matches(Method method, Class<?> targetClass, boolean hasIntroductions) {
+   322			ShadowMatch shadowMatch = getTargetShadowMatch(method, targetClass);
+   323	
+   348		public boolean matches(Method method, Class<?> targetClass) {
+   349			return matches(method, targetClass, false);
+   350		}
+   352		@Override
+   353		public boolean isRuntime() {
+   354			return obtainPointcutExpression().mayNeedDynamicTest();
+   355		}
+   358		public boolean matches(Method method, Class<?> targetClass, Object... args) {
+   359			ShadowMatch shadowMatch = getTargetShadowMatch(method, targetClass);
+   360	
+   454		private ShadowMatch getTargetShadowMatch(Method method, Class<?> targetClass) {
+   455			Method targetMethod = AopUtils.getMostSpecificMethod(method, targetClass);
+   456			if (targetMethod.getDeclaringClass().isInterface()) {
+
+  读法：matches(Method, Class targetClass):348 → :455 getMostSpecificMethod(method, targetClass)，
+        匹配的输入是**目标类上的那个方法**，与代理类无关 ——
+        PointcutForms S5 里 jdk.proxy2.$Proxy19 照样命中 within(Shop)，就是这条。
+        isRuntime():353 返回 mayNeedDynamicTest()：带 args() / this() / target() 的切点被判成
+        「运行时切点」，每次调用都要再算（:358 那个带 Object... args 的重载）。
+        静态切点（execution / within / @annotation）命中结果进 shadowMatchCache（:130，key = Method），
+        算一次就复用（:478 get / :539 put）—— 所以能用 execution 就别用 args。

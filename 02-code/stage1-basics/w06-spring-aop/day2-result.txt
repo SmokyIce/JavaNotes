@@ -1,0 +1,288 @@
+W06 Day 2 · 切点与通知的全谱 + CGLIB（Spring 5.3.39 / JDK 17.0.12 / aspectjweaver 1.9.7 / Windows 11）
+生成方式：./run.sh <类名> 逐个跑，输出按顺序拼接；每个入口都是 exit=0。
+带「->」的行是我加的解读，其余是程序原始输出。
+
+################################################################
+# [1] PointcutForms · 八种切点各拦到什么
+################################################################
+PointcutForms · 八种切点各拦到什么
+Spring = 5.3.39
+
+三个目标对象：
+  shop      = com.newt.java48.w06.day2.shop.Shop$$EnhancerBySpringCGLIB$$46e98889   isCglib=true
+  cart      = com.newt.java48.w06.day2.shop.Cart$$EnhancerBySpringCGLIB$$58cb462f
+  warehouse = com.newt.java48.w06.day2.stock.Warehouse$$EnhancerBySpringCGLIB$$369e50de   isCglib=true
+
+== S1 命中矩阵（每格列出被拦的「类#方法(声明参数类型)」） ==
+  execution buy(String)      命中 1 个  [Shop#buy(String)]
+  execution buy(Object)      命中 1 个  [Shop#buy(Object)]
+  within(Shop) 单类            命中 6 个  [Shop#buy(String), Shop#buy(Object), Shop#buy(String,int), Shop#count(), Shop#tagged(), Shop#plain()]
+  within(shop..*) 整包         命中 8 个  [Shop#buy(String), Shop#buy(Object), Shop#buy(String,int), Shop#count(), Shop#tagged(), Shop#plain(), Cart#add(String), Cart#size()]
+  within(Buyer) 接口           命中 0 个  —
+  args(String)               命中 4 个  [Shop#buy(String), Shop#buy(Object), Cart#add(String), Warehouse#stock(String)]
+  args(String,..)            命中 5 个  [Shop#buy(String), Shop#buy(Object), Shop#buy(String,int), Cart#add(String), Warehouse#stock(String)]
+  @annotation(Traced)        命中 1 个  [Shop#tagged()]
+  调用脚本共 10 次：buy(String) / buy(Object) / buy(String,int) / count() / tagged() / plain() / Cart#add / Cart#size / Warehouse#stock(String) / toString()
+
+== S2 「写窄了」：within 写成接口，命中 0 ==
+  within(Shop)         => 6 个
+  within(Buyer 接口)   => 0 个
+  -> within 问的是「这个方法声明在哪个类里」，不是「这个对象实现了谁」；
+     接口只是对外的写法清单，不是代码定义的位置 —— 写接口名 = 一条都拦不到，而且不报错、不告警
+
+== S3 「写宽了」：within 用包路径，同包的 Cart 一起进来 ==
+  within(shop..*) => 8 个 : [Shop#buy(String), Shop#buy(Object), Shop#buy(String,int), Shop#count(), Shop#tagged(), Shop#plain(), Cart#add(String), Cart#size()]
+  within(Shop)    => 6 个 : [Shop#buy(String), Shop#buy(Object), Shop#buy(String,int), Shop#count(), Shop#tagged(), Shop#plain()]
+  差集（多拦的）   = [Cart#add(String), Cart#size()]
+  -> 你只想给 Shop 开事务，结果 Cart 也进了；一旦切面里有写操作 / 审计日志，这就是脏数据
+
+== S4 args 看运行时实参，execution 看声明类型 ==
+  buy(String)       被 execution buy(String) 拦 = true
+  buy((Object)str)  被 execution buy(Object) 拦 = true
+  buy((Object)str)  被 args(String) 拦          = true
+  buy(Object) 的声明参数类型 = java.lang.Object
+  args(String)    命中 = [Shop#buy(String), Shop#buy(Object), Cart#add(String), Warehouse#stock(String)]
+  args(String,..) 命中 = [Shop#buy(String), Shop#buy(Object), Shop#buy(String,int), Cart#add(String), Warehouse#stock(String)]
+  -> execution 用「方法签名上的类型」，args 用「这一枪打出去的实参类型」；
+     所以 args(String) 会命中声明成 Object 的方法，也会命中别的类 —— 它只认参数，不认方法属于谁；
+     反过来 buy(String,int) 明明是 String 开头，args(String) 却不命中：参数个数也要对上
+
+== S5 切点匹配的是「目标类」不是「代理类」：换回默认 JDK 代理 ==
+  shop = jdk.proxy2.$Proxy19   isJdk=true
+  getBean(Shop.class) -> NoSuchBeanDefinitionException（Day 1 S2b 的同一条）
+  within(Shop) 命中 = [Shop#buy(String)]
+  -> 代理类里根本没有 Shop 这个名字，切点照样命中：
+     匹配是在「目标类的方法」上算的，算完才决定包不包代理 —— 所以表达式与代理方式无关
+
+== S6 但 JDK 代理下「接口里没有的方法」连调用都发不出去 ==
+  强转 (Shop) proxy -> class jdk.proxy2.$Proxy19 cannot be cast to class com.newt.java48.w06.day2.shop.Shop (jdk.proxy2.$Proxy19 is in module jdk.proxy2 of loader 'app'; com.newt.java48.w06.day2.shop.Shop is in unnamed module of loader 'app')
+  从 Advised 里掏出真身 = com.newt.java48.w06.day2.shop.Shop
+  真身调 plain() 返回 = plain
+  within(Shop) 命中 = []（空）
+  -> plain() 不在 Buyer 接口里，JDK 代理生成的类压根没这个方法；
+     要调它只能强转（CCE）或绕过代理拿真身 —— 两条路都不经过切面。
+     物理原因和 this.xxx() 完全一样：代理只活在「别人手里那根接口引用」上。
+     这是「加了 @Transactional 却没事务」的第二条路 —— 方法没写在接口里
+
+一句话：切点由两个轴组成 —— 在哪（within / execution 的类路径）和 什么方法（名字、参数、注解）；写窄了安静地不生效，写宽了安静地多拦一堆，两种都不报错。
+
+（全宽的 execution(* *(..)) 不在这个矩阵里 —— 它会把配置类自己的 @Bean 方法也拦掉，启动就炸，见 WidePointcutTrap）
+exit=0
+
+################################################################
+# [2] WidePointcutTrap · 宽切点把容器自己拦了
+################################################################
+WidePointcutTrap · 切点写宽到把容器自己拦了
+
+== S1 宽切点启动容器 ==
+  抛 org.springframework.beans.factory.BeanCreationException
+    ↳ BeanCreationException: Error creating bean with name 'shop' defined in com.newt.java48.w06.day2.WidePointcutTrap$BrokenCfg: Bean instantiation via factory method failed; nes…
+      ↳ BeanInstantiationException: Failed to instantiate [com.newt.java48.w06.day2.shop.Shop]: Factory method 'shop' threw exception; nested exception is org.springframework.beans.facto…
+        ↳ BeanCreationException: Error creating bean with name 'wideAspect' defined in com.newt.java48.w06.day2.WidePointcutTrap$BrokenCfg: Bean instantiation via factory method faile…
+          ↳ BeanInstantiationException: Failed to instantiate [com.newt.java48.w06.day2.WidePointcutTrap$WideAspect]: Factory method 'wideAspect' threw exception; nested exception is org.spr…
+            ↳ BeanCurrentlyInCreationException: Error creating bean with name 'wideAspect': Requested bean is currently in creation: Is there an unresolvable circular reference?
+
+  栈里那条真正的线索：
+    at com.newt.java48.w06.day2.WidePointcutTrap$BrokenCfg$$EnhancerBySpringCGLIB$$<hash>.shop(<generated>)
+    at com.newt.java48.w06.day2.WidePointcutTrap$BrokenCfg$$EnhancerBySpringCGLIB$$<hash>.wideAspect(<generated>)
+
+  -> 读法：BrokenCfg 自己被 CGLIB 增强了（为了让 @Bean 返回单例），
+     所以 container 调 shop() 走的是代理 → 命中宽切点 → 通知要 wideAspect 这个 Bean
+     → wideAspect 正在创建中 → BeanCurrentlyInCreationException。
+     报错文案说的是 circular reference，但其实依赖关系一点都没绕，绕的是「创建顺序」
+
+== S2 修法：把 execution 的范围收到业务包（day2.shop..*） ==
+  容器起来，切点命中 = [Shop#buy]
+  -> 配置类在 day2 包、业务类在 day2.shop 包，包路径一分，事故就没了
+
+一句话：切点表达式里的 .. 是「零个或多个子包」，不是「只在子包里」；而 @Configuration / @Aspect 自己也是 Bean，会一起被匹配 —— 写宽了不是「多记几条日志」，是容器起不来。
+exit=0
+
+################################################################
+# [3] AdviceTypes · @AfterReturning 改得动吗，@AfterThrowing 吞得掉吗
+################################################################
+AdviceTypes · @AfterReturning 改得动吗，@AfterThrowing 吞得掉吗
+Spring = 5.3.39
+
+== S1 @AfterReturning 能不能改返回值 ==
+  调用方拿到的 = hello-touched
+  切面日志     = [@AfterReturning sb 执行了]
+  -> 「-touched」出现了、「REPLACED」没出现：
+     ret 是个局部参数，重新赋值只改了那个引用，调用方的引用没变；
+     但 ret 指向的**对象**是共用的，改内部就会生效 —— 所以可变对象「看起来能改返回值」，其实只是副作用
+
+== S2 returning 的类型对不上：通知静默不执行 ==
+  pay.total() = 100
+  RetAdvice.LOG = [@AfterReturning sb 执行了]
+  -> LOG 里只有 sb 那条，total 那条**从来没执行**，启动不报错、调用不报错。
+     原因：Advice 的 returning 参数类型要能接住返回值，接不住就跳过；
+     这一条比「切点写错」更难查 —— 切点明明对的，注解明明在，就是不跑
+
+== S3 @AfterThrowing 能不能吞掉异常 ==
+  调用方仍然收到 IllegalArgumentException: boom-arg
+  ThrowAdvice.LOG = [@AfterThrowing boom 收到 IllegalArgumentException:boom-arg]
+  -> 通知收到了异常，异常照样往上跑。@AfterThrowing 没有返回值、也没有「取消」这条路，
+     它和 catch 块**不是**一回事：它是「事后围观」，不是「接住」
+
+== S4 throwing 声明窄了，别的异常接不到 ==
+  boom() 抛 IllegalArgumentException：
+    afterBoom（切点=boom，throwing=Throwable）      被调 = true
+    afterState（切点=Pay.*()，throwing=IllegalState） 被调 = false  ← 切点命中、类型接不住
+  fail() 抛 IllegalStateException：
+    afterBoom（切点=boom，压根不匹配 fail）          被调 = false
+    afterState（切点=Pay.*()，类型对得上）            被调 = true  [@AfterThrowing State 收到 fail fail-state]
+  -> 和 S2 同一个机制：类型接不住就跳过，安静地跳过
+     所以「异常日志有时有有时没有」，先看 throwing 声明的类型够不够宽（写 Throwable 最省事）
+
+== S5 在 @AfterThrowing 里抛新异常 ==
+  crash()  通知 throw new RuntimeException("advice-thrown", ex)：
+    调用方收到 java.lang.RuntimeException: advice-thrown
+    cause = IllegalStateException: crash-state
+  crash2() 通知 throw new RuntimeException("advice-bare")，不传 ex：
+    调用方收到 java.lang.RuntimeException: advice-bare
+    cause = null（原异常已彻底丢失）
+    suppressed 个数 = 0
+  -> 新异常顶掉了原异常，而且框架**不会**帮你把原异常挂到哪儿去：
+     第一组还能看到 cause，是我在代码里自己传的；第二组什么都不传，原异常就彻底没了。
+     对比 W04 的 whenComplete：那里框架至少塞进了 suppressed，这里连 suppressed 都没有
+
+== S6 唯一能吞异常的是 @Around ==
+  crash() 正常返回了，调用方不知道出过事
+  SwallowProbe.LOG = [@Around 抓到了 crash-state，吞掉并正常返回]
+  -> 只有 @Around 能吞，因为它有 proceed()，可以在外面套 try/catch；
+     但吞掉业务异常通常是坏主意：事务、监控、调用方全都看不到失败
+
+== S7 四种通知在同一个方法上的顺序 ==
+  返回 = charged:A-1
+    @Around 进入
+    @Before
+    @AfterReturning 拿到 charged:A-1
+    @After
+    @Around 拿到返回值
+    @Around finally
+  -> @AfterReturning 在 @After 之前、在 @Around 拿到返回值之前；
+     @After 是 proceed() 外面那层 finally 里的，所以它在「返回值已确定、还没交出去」之间执行
+
+一句话：只有 @Around 有 proceed()，所以只有它能改返回值、能吞异常；其余四种通知都是「路过看一眼」，参数类型接不住就静默跳过。
+exit=0
+
+################################################################
+# [4] AspectOrder · 两个切面谁在外层
+################################################################
+AspectOrder · 两个切面谁在外层
+Spring = 5.3.39
+
+== S1 alpha @Order(1) + beta @Order(2)，注册顺序 alpha → beta ==
+    alpha.around-in
+    alpha.before
+    beta.around-in
+    beta.before
+    beta.after
+    beta.around-out
+    alpha.after
+    alpha.around-out
+
+== S2 只把 @Order 数字对调（注册顺序没变，还是 alpha → beta） ==
+    beta.around-in
+    beta.before
+    alpha.around-in
+    alpha.before
+    alpha.after
+    alpha.around-out
+    beta.after
+    beta.around-out
+
+== S3 都不写 @Order，且故意先注册 zzz 再注册 aaa ==
+    zzz.around-in
+    zzz.before
+    aaa.around-in
+    aaa.before
+    aaa.after
+    aaa.around-out
+    zzz.after
+    zzz.around-out
+
+== S3b 换回来：先注册 aaa，再注册 zzz ==
+    aaa.around-in
+    aaa.before
+    zzz.around-in
+    zzz.before
+    zzz.after
+    zzz.around-out
+    aaa.after
+    aaa.around-out
+
+== S4 读顺序：谁先进入、谁先退出 ==
+  S1 的进入顺序 = [alpha, beta]
+  S1 的退出顺序 = [beta, alpha]
+  S2 的进入顺序 = [beta, alpha]
+  S2 的退出顺序 = [alpha, beta]
+  S3 的进入顺序 = [zzz, aaa]   注册顺序 zzz → aaa
+  S3b 的进入顺序 = [aaa, zzz]   注册顺序 aaa → zzz
+  -> 进入按 order 升序、退出按 order 降序：数字小的在洋葱**外层**；
+     对调数字后进出顺序整体翻过来，说明决定权只在 @Order，跟注册顺序无关；
+     都不写时（同为 LOWEST_PRECEDENCE）顺序跟着**注册顺序**走 ——
+     S3 与 S3b 的进出顺序随注册顺序翻转，而字母序 aaa < zzz 只解释了其中一组，所以不是按名字排的；
+     排序是稳定的，并列就保留原序，而原序取决于 Bean 定义的扫描顺序 —— 换个组件扫描方式就可能变
+  -> 记住这一条就够用：@Before 与 @After 的顺序**天生相反**，
+     想让「日志切面」包住「事务切面」，就把日志的 order 写小
+
+一句话：@Order 数字小的在外层（先进后出）；不写就是同一档 LOWEST_PRECEDENCE，顺序退化成「切面 Bean 的注册顺序」—— 能用纯属侥幸，要确定就显式写 @Order。
+exit=0
+
+################################################################
+# [5] CglibProbe · CGLIB 生成的到底是什么
+################################################################
+CglibProbe · CGLIB 生成的到底是什么
+Spring = 5.3.39
+
+== A 手写 Enhancer ==
+  代理类名     = com.newt.java48.w06.day2.CglibProbe$Calc$$EnhancerByCGLIB$$232d9ecd
+  父类         = com.newt.java48.w06.day2.CglibProbe$Calc
+  实现的接口    = [interface org.springframework.cglib.proxy.Factory]
+  proxy instanceof Calc = true
+  创建代理时 Calc 构造器被调次数 = 1
+  -> 没有接口、也没实现 InvocationHandler，就是「继承 + 覆写」；
+     所以它**是** Calc（父类就是 Calc），这和 JDK 代理「是兄弟」正好相反
+
+== A2 方法调用：谁进了拦截器 ==
+  add(1,2)        = 3   calls=1
+  sealedAdd(1,2)  = 3   calls=0
+  callSecret(1,2) = 3   calls=1
+  -> add 进 1 次；sealedAdd（final）进 0 次；callSecret 只进 1 次，里面的 secretAdd 不算
+     final 覆写不了 = 拦截不到；private 看不见 = 拦截不到；
+     「内部调用不经过代理」在 CGLIB 上同样成立 —— 和 Day 1 的 this.xxx() 是同一件事
+
+== B final 类 ==
+  java.lang.IllegalArgumentException
+  Cannot subclass final class java.lang.String
+  -> 没有「办法」绕过：要生成子类，就必须能被继承
+
+== C Spring 里同一件事的表现 ==
+  类名 = com.newt.java48.w06.day2.CglibProbe$Calc$$EnhancerBySpringCGLIB$$28f8fe16
+  isCglibProxy = true
+  add() 之后 before = 1
+  sealedAdd() 之后 before 增量 = 0
+
+== E Spring 用 CGLIB 时，Calc 构造器被调了几次 ==
+  容器里只有一个 Calc Bean，构造器计数 = 1
+  -> 1 次。直接用 Enhancer.create() 时也是 1 次（A 段），
+     因为那个代理实例本身要 new 出来；Spring 有两条路可选：
+     ① 用 Objenesis 直接分配对象、不跑构造器（CglibAopProxy 默认走这条）；
+     ② 退化成跑一次构造器 —— 那样字段会初始化两次、副作用执行两遍
+
+== D 三种调用路径耗时（500 万次，3 轮取最小） ==
+  直接调用             0.3 ns/次
+  Method.invoke       25.5 ns/次  (91.1x)
+  MethodProxy.invoke   4.3 ns/次  (15.4x)
+  MethodProxy.invokeSuper 6.0 ns/次  (21.4x)  ← 拦截器里的那条
+  走一遍代理对象       16.5 ns/次  (59.2x)
+  （sink=187590037200000，用来防止 JIT 把整个循环消掉）
+  -> MethodProxy 生成的是「直接调父类方法的字节码」，绕开反射的类型检查与参数装箱，
+     所以比 Method.invoke 快；但再快也快不过直接调用 —— 这是 CGLIB 的固定开销
+  -> 读数字的规矩：直接调用 0.4 ns 已经贴着 JIT 下限（方法体只有一次加法、循环被展开内联），
+     「倍」是相对这个下限算的；真到业务里方法体一变长，这些倍数会被一起摊薄
+     （W03 Day 4 手写 AQS 时踩过同一条：临界区 1 ns 慢 5.8 倍，拉到 0.5 µs 只慢 1.13 倍）
+
+一句话：CGLIB = 运行时生成子类并覆写方法，所以「能继承」是硬前提；final 类不能代、final 方法拦不到、private 方法它看不见，三种情况都不报错。
+exit=0

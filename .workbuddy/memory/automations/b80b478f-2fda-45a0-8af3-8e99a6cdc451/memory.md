@@ -290,3 +290,30 @@
   无新增 jar；Day 3 手写 mini AOP（`ProxyFactory` + `MethodInterceptor` + `Advisor`）。
 - 口径提醒：`ProxyIdentity` 输出里的 `$Proxy22` / `$$…$$<hash>` 每次运行会变，笔记里已标注「编号可能变」，
   不能再当固定值引用。
+
+## 2026-11-27（第十九次执行 · W06 Day 2 切点与通知全谱，W06 知识点全勾）
+- 开工回归：清空 `out/` 重编 w06（7 文件）+ 跑 day1 三入口，全 exit=0（58/72/47 行），**无中断代码**；
+  `01-notes` 未勾项只剩 W06 第三格 `CGLIB`（Day 1 明确「留 Day 2」）→ 已并入今天的第五段实验补掉；
+  `02-code` 无空目录（`w07-`/`w08-` 只有 `.gitkeep`，属未解锁，不动）。
+- 推进 W06 Day 2：新建 `day2/` 8 个文件 —— `shop/{Traced,Buyer,Shop,Cart}` + `stock/Warehouse`（靶子）+
+  `PointcutMatrix` / `PointcutForms`（八种切点矩阵）/ `WidePointcutTrap`（反面教材）/ `AdviceTypes` /
+  `AspectOrder` / `CglibProbe`。产出 `day2-result.txt`（288 行，5 入口全 exit=0）+ `day2-spring-source.txt`（6 段源码）。
+- 五条新结论：① `within(接口)` 命中 0 且不报错（`within` 问「方法声明在哪个类」）；② `execution(* …pkg..*.*(..))`
+  把 `@Configuration` 的 `@Bean` 方法也拦 → `BeanCurrentlyInCreationException` 容器起不来（`..` = 零个或多个子包）；
+  ③ `@AfterReturning` 换引用无效、改对象有效；`@AfterThrowing` 吞不掉（`AspectJAfterThrowingAdvice:70` 是 `throw ex`）；
+  ④ `returning`/`throwing` 类型接不住就**静默跳过**；通知抛新异常时原异常彻底丢失（cause=null, suppressed=0）；
+  ⑤ `@Order` 数字小的在外层，不写时按**注册顺序**（两组反向注册证伪「按名字排」，`AspectJPrecedenceComparator:84` 相等返回 0）。
+- CGLIB 补课：`Enhancer` 生成的父类就是目标类；final 类 `Cannot subclass final class`；final/private 方法拦不到；
+  MethodProxy 7.5 ns vs 反射 20.6 ns vs 直接 0.4 ns；**Spring CGLIB Bean 构造器只跑 1 次**（Objenesis `:62` 绕过构造器）。
+- 同步：W06 笔记（知识点 4 格全勾 + Day 2 整节 9 小节 + 踩坑 +6 → 13 + 面试 +10 → 19 + 参考要点 Q4/Q5 + 打卡）、
+  README（jar 表加 CGLIB 重打包说明 + 目录树 + Day 2 五节 + 坑 6~11 + 待办）、`Spring.md` 12 → **14 题**、
+  `today.md`（11-27 + 下一时间盒）、`MILESTONES.md`（进展行 + Day 2 段 + 三条核心结论 + 下一时间盒）。
+- `run.sh` 改成按 class 文件是否存在解析短名（day1..day5），以后加新的一天不用再改脚本。
+- 收工回归：清空重编 18 文件 / 56 class，8 个入口全 exit=0（58/72/47/62/24/63/59/52 行）。
+- 下次起点：**W06 Day 3 = 手写 mini AOP**（`ProxyFactory` + `MethodInterceptor` + `Advisor`，不用 `@Aspect`），
+  无新增 jar；Day 4 收尾封板（照 W05 `BoardCheck` 写断言）。
+- 本次自查抓回 3 处「先写后验」（都已进 MEMORY.md）：① 「`execution(* *(..))` 是宽切点的坑」—— 实测先炸的是
+  `execution(* …day2..*.*(..))`（配置类在同一个包，`..` 也覆盖），改口径；② 「通知抛新异常会把原异常塞进 cause」
+  —— 那是我自己传的，加了一组不传的对照才抓到；③ 「不写 `@Order` 按切面名排序」—— 补反向注册才排除字母序。
+- 另两个环境坑：`net.sf.cglib` 不存在（Spring 5 重打包为 `org.springframework.cglib`，`lib/` 无独立 cglib jar）；
+  `Enhancer.create()` 不设 callback 会先抛 `callbacks is null` 的 NPE，把 `Cannot subclass final class` 盖住。

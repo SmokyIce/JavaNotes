@@ -640,3 +640,125 @@ else {
 > 结果主事务回滚时，券也跟着回滚了 —— 因为 `REQUIRES_NEW` 根本没生效，自调用没经过代理。
 > 最后是把发券拆到 `CouponService`。落点：**「传播级别不生效」这种问题，
 > 先看调用是不是经过代理，别先去怀疑数据库。**
+
+---
+
+### 13. 切点写错会怎样？`within` / `execution` / `args` 三者的差别是什么？
+
+**我的回答（自己的话）：**
+
+**写错了不会报错，这才是它难查的原因。** 切点由两个轴组成：在哪（类路径）和什么方法（名字/参数/注解）。
+两个方向各有各的安静法。
+
+**写窄 —— `within` 写成接口，命中 0。** `within` 问的是「这个方法**声明**在哪个类里」，
+不是「这个对象实现了谁」。接口只是对外的写法清单，不是代码定义的位置。
+实测同一批方法，`within(Shop)` 命中 **6** 个，`within(Buyer)`（接口）命中 **0** 个。
+
+**写宽 —— 多拦了不想拦的类。** `within(com…shop..*)` 从 6 个变 **8** 个，
+同包里另一个 `Cart` 也被收进来了。用包路径图省事，代价就是整个包连坐。
+
+**再写宽一点，容器直接起不来。** `execution(* com…day2..*.*(..))` 里的 `..` 是
+「零个或多个子包」，把 `@Configuration` 类的 `@Bean` 工厂方法也匹配了 ——
+配置类为了 `@Bean` 返回单例，本身是 CGLIB 代理。于是：
+
+```text
+造 shop → 命中宽切点 → 通知要 wideAspect → wideAspect 正在造
+→ BeanCurrentlyInCreationException
+```
+
+报错文案写 `Is there an unresolvable circular reference?`，但依赖关系一点都没绕，
+绕的是**创建顺序**。真正的线索只有栈里那行 `BrokenCfg$$EnhancerBySpringCGLIB.shop(<generated>)`。
+（`@Aspect` 自己反而没事，被 `AnnotationAwareAspectJAutoProxyCreator:110` 的 `isAspect` 豁免了。）
+
+**`execution` 和 `args` 的分歧。** 同一个 `Shop#buy(Object)`：
+
+```text
+buy((Object)"x") 命中 execution buy(Object) = true   ← 看声明类型
+buy((Object)"x") 命中 args(String)          = true   ← 看运行时实参
+```
+
+`args(String)` 还会命中 `Warehouse#stock(String)` —— **它只认参数，不认方法属于谁**。
+而 `buy(String,int)` 明明 String 开头却不命中，因为 `args(String)` 要求「恰好一个参数」。
+代价在源码里：带 `args()` 的切点 `isRuntime():353` 返回 true，每次调用重算，没有缓存。
+
+**收尾一句：** 切点是对着**目标类**算的（`AspectJExpressionPointcut:455` 的
+`getMostSpecificMethod(method, targetClass)`），跟用 JDK 还是 CGLIB 无关；
+所以同一个表达式换代理方式结果一样，但 JDK 代理下「接口里没有的方法」连调用都发不出去。
+
+**面试官可能追问：**
+
+- 「`within(接口)` 真的一个都拦不到？」——是。而且不报错、不告警，日志里什么都没有。
+- 「怎么快速判断切点写窄了？」——临时换成 `within(目标类)` 对比命中数。
+- 「切点写宽了有什么代价？」——轻则多写脏数据（审计日志、写操作），重则容器起不来。
+- 「`args()` 有性能问题吗？」——有，它让切点变成运行时切点；能用 `execution` 就别用 `args`。
+
+**项目里的实际案例：**
+
+> 讲稿模板：给「订单相关」加了操作日志切面，切点写的是
+> `within(com.xxx.order..*)`。上线后发现库存服务的日志也混进了订单表 —— 因为库存的
+> `StockService` 被放在 `order` 包下面。落点：**切点用包路径是「省事」，代价是边界不可控；
+> 要么写到类，要么用自定义注解标记目标方法。**
+
+---
+
+### 14. `@AfterReturning` 能改返回值吗？`@AfterThrowing` 能吞异常吗？
+
+**我的回答（自己的话）：**
+
+**都不能。只有 `@Around` 有 `proceed()`。**
+
+不是写法习惯问题，是物理上不可能：这两个通知的方法签名都是 `void`，
+一个 void 方法拿什么去替换 `proceed()` 的返回值，又拿什么去「取消」一个已经抛出的异常。
+
+**`@AfterReturning` 改不动。** 返回值只是被当参数传给通知方法（`AspectJAfterReturningAdvice:64-68`），
+没有回写通道。实测：
+
+```text
+ret.append("-touched")              调用方拿到 hello-touched     ← 生效
+ret = new StringBuilder("REPLACED") 调用方拿到 hello-touched     ← 不生效
+```
+
+所以「`@AfterReturning` 能改返回值」这句话，**只对可变对象成立** ——
+改的是共用对象的内部（副作用），不是返回值本身。对 `String` / `int` 这种换值就等于没改。
+
+**`@AfterThrowing` 吞不掉。** 源码 `AspectJAfterThrowingAdvice:62-72` 就是个 try/catch：
+
+```java
+try { return mi.proceed(); }
+catch (Throwable ex) {
+    if (shouldInvokeOnThrowing(ex)) { invokeAdviceMethod(getJoinPointMatch(), null, ex); }
+    throw ex;                    // :70 —— 异常必须继续抛
+}
+```
+
+实测调用方照样收到 `IllegalArgumentException`，通知只是「看到了」。
+
+**两种「配了不执行」的静默失效**，机制完全一样 —— 类型接不住就跳过：
+
+- `returning` 声明 `String`、方法返回 `int` → `isAssignableValue(String, 100)` 为 false → 不执行；
+- `throwing` 声明 `IllegalStateException`、抛的是 `IllegalArgumentException` → `isAssignableFrom` 为 false → 不执行。
+
+两种都**启动不报错、调用不报错**。所以「异常日志有时有有时没有」，第一件事是看
+`throwing` 写的是不是 `Throwable`。
+
+**一条反直觉的：** 在 `@AfterThrowing` 里抛新异常，会顶掉 `:70` 那行 `throw ex`，
+而且**框架不会帮你保留原异常** —— 实测 `cause = null`、`suppressed = 0`，原异常彻底丢失。
+想留证据必须自己写 `throw new RuntimeException("…", ex)`。
+（对比 `CompletableFuture.whenComplete`，那里框架至少塞进了 suppressed。）
+
+**唯一能改、能吞的是 `@Around`**，因为它拿到 `ProceedingJoinPoint`，可以决定调不调、
+改返回值、catch 掉。但吞掉业务异常通常是坏主意：事务、监控、调用方全都看不到失败。
+
+**面试官可能追问：**
+
+- 「那顺序呢？」——`@Around 进入 → @Before → @AfterReturning → @After → @Around 拿到返回值 → @Around finally`。
+  `@After` 就是 `proceed()` 外面那层 `finally`。
+- 「`@AfterReturning` 想改返回值，正确做法是什么？」——用 `@Around` 改 `proceed()` 的返回值，
+  或者干脆在业务方法里返回一个可变的结果对象。
+- 「`returning` 写 `Object` 有什么好处？」——类注释写明：声明成 `Object` 时**永远**执行，不会因类型被跳过。
+
+**项目里的实际案例：**
+
+> 讲稿模板：做过一个「统一响应包装」的切面，一开始用 `@AfterReturning` 想把返回值塞进
+> `Result<T>`，写完发现一点效果没有、也不报错。落点：**`@AfterReturning` 是「看一眼」，
+> 要改结果就得用 `@Around`；同理，想吞异常也只有 `@Around` 一条路。**
